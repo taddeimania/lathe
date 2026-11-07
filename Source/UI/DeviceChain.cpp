@@ -139,6 +139,12 @@ void DeviceChainView::setTrack (std::shared_ptr<Track> t)
         return;
     track = std::move (t);
     signature = "-";
+    eqDevice.reset();
+    if (track != nullptr)
+    {
+        eqDevice = std::make_unique<EqDevice> (ctx, track);
+        content.addAndMakeVisible (*eqDevice);
+    }
     refresh();
 }
 
@@ -161,6 +167,8 @@ void DeviceChainView::refresh()
 
     for (auto* b : boxes)
         b->update();
+    if (eqDevice != nullptr)
+        eqDevice->update();
 
     addButton.setVisible (track != nullptr);
     browseButton.setVisible (track != nullptr);
@@ -183,16 +191,16 @@ void DeviceChainView::paint (Graphics& g)
     g.fillRect (title.removeFromLeft (4).reduced (0, 6));
     title.removeFromLeft (8);
     g.setColour (theme::text);
-    g.drawText (track->name + "  -  plug-ins in signal order", title, Justification::centredLeft);
+    g.drawText (track->name + "  -  plug-ins and EQ in signal order", title, Justification::centredLeft);
 
     if (track->plugins.empty())
     {
         g.setColour (theme::textDim);
         g.setFont (theme::font (12.5f));
-        g.drawText (track->isMidi() ? "Add an instrument to hear this MIDI track (or send it to hardware from the mixer)."
-                                    : "No plug-ins. The signal goes straight to the fader.",
-                    Rectangle<int> (browseButton.getRight() + 16, 24 + addButton.getY(), getWidth() - browseButton.getRight() - 30, addButton.getHeight()),
-                    Justification::centredLeft);
+        auto hint = Rectangle<int> (addButton.getX(), 24 + browseButton.getBottom() + 6, addButton.getWidth(), 40);
+        g.drawFittedText (track->isMidi() ? "Add an instrument to hear this MIDI track."
+                                          : "No plug-ins yet.",
+                          hint, Justification::topLeft, 3);
     }
 }
 
@@ -207,8 +215,14 @@ void DeviceChainView::resized()
         b->setBounds (x, 2, 190, jmin (h, 120));
         x += 196;
     }
-    addButton.setBounds (x, 2, 130, 28);
-    browseButton.setBounds (x + 136, 2, 84, 28);
-    content.setSize (jmax (r.getWidth(), x + 240), h + 4);
+    addButton.setBounds (x, 2, 120, 26);
+    browseButton.setBounds (x, 32, 120, 26);
+    x += 130;
+    if (eqDevice != nullptr)
+    {
+        eqDevice->setBounds (x, 2, 380, jmin (h, 150));
+        x += 386;
+    }
+    content.setSize (jmax (r.getWidth(), x + 10), h + 4);
 }
 } // namespace lathe

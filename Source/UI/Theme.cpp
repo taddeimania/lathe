@@ -154,9 +154,11 @@ void LatheLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int width, i
         g.fillRoundedRectangle (cx - 2.0f, (float) y, 4.0f, (float) height, 2.0f);
 
         auto cap = Rectangle<float> (0, 0, jmin (26.0f, width - 2.0f), 12.0f).withCentre ({ cx, sliderPos });
-        g.setColour (theme::controlHi);
+        // A fader editing a cue mix carries the cue's colour on its cap.
+        const auto capColour = s.isColourSpecified (Slider::thumbColourId) ? s.findColour (Slider::thumbColourId) : theme::controlHi;
+        g.setColour (s.isEnabled() ? capColour : theme::control.withAlpha (0.6f));
         g.fillRoundedRectangle (cap, 2.0f);
-        g.setColour (theme::text);
+        g.setColour (s.isEnabled() ? theme::text : theme::textDim);
         g.fillRect (cap.withSizeKeepingCentre (cap.getWidth() - 6.0f, 1.5f));
         g.setColour (theme::border);
         g.drawRoundedRectangle (cap, 2.0f, 1.0f);

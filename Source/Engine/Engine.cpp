@@ -110,6 +110,16 @@ struct RenderTrack
     MidiTake* midiTake = nullptr;
 };
 
+/** A cue mix: channels are tapped after their plug-ins, before their main fader. */
+struct RenderCue
+{
+    std::shared_ptr<CueMix> cue;
+    std::vector<std::shared_ptr<CueLevel>> trackLevels;   // parallel to RenderGraph::tracks; null = not heard directly
+    std::vector<std::shared_ptr<CueLevel>> busLevels;     // parallel to RenderGraph::buses
+    AudioBuffer<float> trackSum, sum;
+    DelayLine trackDelay;   // lines tracks up with the returns (return plug-in latency)
+};
+
 struct RenderGraph
 {
     double sampleRate = 0.0;
@@ -125,7 +135,8 @@ struct RenderGraph
     RenderTrack master;
     int trackLatency = 0, busLatency = 0, masterLatency = 0;
 
-    AudioBuffer<float> scratch;
+    std::vector<RenderCue> cues;
+    AudioBuffer<float> scratch, click;
 };
 
 //==============================================================================
@@ -713,6 +724,25 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
     graphLatency = g->trackLatency + g->busLatency + g->masterLatency;
     lastLatencySignature = latencySignature();
 
+    // --- cue mixes
+    g->click.setSize (1, bs);
+    g->cues.resize (edit->cues.size());
+    for (size_t c = 0; c < edit->cues.size(); ++c)
+    {
+        auto& rc = g->cues[c];
+        rc.cue = edit->cues[c];
+        rc.trackSum.setSize (2, bs);
+        rc.sum.setSize (2, bs);
+        rc.trackDelay.prepare (g->busLatency);
+
+        // A track routed into a return is heard through that return, not twice.
+        for (size_t i = 0; i < g->tracks.size(); ++i)
+            rc.trackLevels.push_back (g->tracks[i].outKind == OutputRoute::Kind::bus ? nullptr
+                                                                                       : edit->cueLevel (*rc.cue, *edit->tracks[i]));
+        for (size_t i = 0; i < g->buses.size(); ++i)
+            rc.busLevels.push_back (edit->cueLevel (*rc.cue, *edit->buses[i]));
+    }
+
     // --- plug-in transport info
     playHead.sampleRate = sr;
     playHead.bpm = edit->tempo;
@@ -1169,12 +1199,26 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
             rt.buffer.clear (ch, 0, len);
     for (int ch = 0; ch < g.master.numChannels; ++ch)
         g.master.buffer.clear (ch, 0, len);
+    if (realtime)
+        for (auto& c : g.cues)
+        {
+            c.trackSum.clear (0, len);
+            c.sum.clear (0, len);
+        }
 
     for (auto& rt : g.tracks)
         processTrack (g, rt, pos, len, offset, rolling, inDev, numIn, outDev, numOut, realtime, notesOff, anySoloTrack);
 
+    if (realtime)
+        for (auto& c : g.cues)
+        {
+            c.trackDelay.process (c.trackSum, len);
+            for (int ch = 0; ch < 2; ++ch)
+                c.sum.addFrom (ch, 0, c.trackSum, ch, 0, len);
+        }
+
     for (auto& rt : g.buses)
-        processBus (g, rt, len, offset, outDev, numOut, anySoloBus);
+        processBus (g, rt, len, offset, outDev, numOut, anySoloBus, realtime);
 
     // master
     auto& m = g.master;
@@ -1186,12 +1230,85 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
         AudioBuffer<float> view (m.buffer.getArrayOfWritePointers(), p.numChannels, len);
         p.processor->processBlock (view, m.midi);
     }
+    m.track->rtEq.process (m.track->eq, m.buffer, len, g.sampleRate);
     applyFader (m, len, m.track->mute.load());
     addToOutput (m.buffer, len, offset, m.outChannel, true, outDev, numOut);
 
-    if (realtime && rolling && metronomeOn.load())
-        renderMetronome (g, pos, len, offset, outDev, numOut);
+    if (! realtime)
+        return;
+
+    const bool click = rolling && metronomeOn.load();
+    if (click)
+    {
+        renderMetronome (g, pos, len);
+        if (edit == nullptr || edit->clickInMain.load())
+        {
+            const auto* c = g.click.getReadPointer (0);
+            for (int ch = m.outChannel; ch < m.outChannel + 2; ++ch)
+                if (ch >= 0 && ch < numOut && outDev[ch] != nullptr)
+                    FloatVectorOperations::add (outDev[ch] + offset, c, len);
+        }
+    }
+
+    // cue mixes
+    for (auto& rc : g.cues)
+    {
+        auto& cue = *rc.cue;
+        if (click)
+        {
+            const float clickGain = dbToGain (cue.clickDb.load());
+            if (clickGain > 0.0f)
+                for (int ch = 0; ch < 2; ++ch)
+                    rc.sum.addFrom (ch, 0, g.click, 0, 0, len, clickGain);
+        }
+
+        const float target = cue.mute.load() ? 0.0f : dbToGain (cue.volumeDb.load());
+        if (! cue.rtGainValid)
+        {
+            cue.rtGain = target;
+            cue.rtGainValid = true;
+        }
+        rc.sum.applyGainRamp (0, len, cue.rtGain, target);
+        cue.rtGain = target;
+
+        const float peakL = rc.sum.getMagnitude (0, 0, len);
+        const float peakR = rc.sum.getMagnitude (1, 0, len);
+        if (peakL > cue.meterL.load()) cue.meterL = peakL;
+        if (peakR > cue.meterR.load()) cue.meterR = peakR;
+
+        addToOutput (rc.sum, len, offset, cue.channel.load(), true, outDev, numOut);
+    }
 }
+
+namespace
+{
+void panGains (float gain, float pan, float& l, float& r) noexcept
+{
+    const float theta = (jlimit (-1.0f, 1.0f, pan) + 1.0f) * MathConstants<float>::pi * 0.25f;
+    l = gain * jmin (1.0f, MathConstants<float>::sqrt2 * std::cos (theta));
+    r = gain * jmin (1.0f, MathConstants<float>::sqrt2 * std::sin (theta));
+}
+
+/** Adds a channel to a cue mix at the channel's own cue level and pan. */
+void mixIntoCue (AudioBuffer<float>& dest, const AudioBuffer<float>& src, int len, CueLevel& l) noexcept
+{
+    float targetL, targetR;
+    panGains (l.mute.load() ? 0.0f : dbToGain (l.levelDb.load()), l.pan.load(), targetL, targetR);
+    if (! l.rtGainValid)
+    {
+        l.rtGainL = targetL;
+        l.rtGainR = targetR;
+        l.rtGainValid = true;
+    }
+
+    if (l.rtGainL > 0.0f || targetL > 0.0f)
+        dest.addFromWithRamp (0, 0, src.getReadPointer (0), len, l.rtGainL, targetL);
+    if (l.rtGainR > 0.0f || targetR > 0.0f)
+        dest.addFromWithRamp (1, 0, src.getReadPointer (1), len, l.rtGainR, targetR);
+    l.rtGainL = targetL;
+    l.rtGainR = targetR;
+}
+} // namespace
 
 void Engine::applyFader (RenderTrack& rt, int len, bool silenced)
 {
@@ -1352,7 +1469,16 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
         p.processor->processBlock (view, rt.midi);
     }
 
+    t.rtEq.process (t.eq, buf, len, g.sampleRate);
     rt.align.process (buf, len);
+
+    if (realtime && ! g.cues.empty())
+    {
+        const auto index = (size_t) (&rt - g.tracks.data());
+        for (auto& c : g.cues)
+            if (index < c.trackLevels.size() && c.trackLevels[index] != nullptr)
+                mixIntoCue (c.trackSum, buf, len, *c.trackLevels[index]);
+    }
 
     const bool groupMuted = rt.group != nullptr && rt.group->mute.load();
     const bool soloed = t.solo.load() || (rt.group != nullptr && rt.group->solo.load());
@@ -1401,7 +1527,7 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
     }
 }
 
-void Engine::processBus (RenderGraph& g, RenderTrack& rt, int len, int offset, float* const* outDev, int numOut, bool anySolo)
+void Engine::processBus (RenderGraph& g, RenderTrack& rt, int len, int offset, float* const* outDev, int numOut, bool anySolo, bool realtime)
 {
     auto& t = *rt.track;
     rt.midi.clear();
@@ -1414,7 +1540,17 @@ void Engine::processBus (RenderGraph& g, RenderTrack& rt, int len, int offset, f
         p.processor->processBlock (view, rt.midi);
     }
 
+    t.rtEq.process (t.eq, rt.buffer, len, g.sampleRate);
     rt.align.process (rt.buffer, len);
+
+    if (realtime && ! g.cues.empty())
+    {
+        const auto index = (size_t) (&rt - g.buses.data());
+        for (auto& c : g.cues)
+            if (index < c.busLevels.size() && c.busLevels[index] != nullptr)
+                mixIntoCue (c.sum, rt.buffer, len, *c.busLevels[index]);
+    }
+
     applyFader (rt, len, t.mute.load() || (anySolo && ! t.solo.load()));
 
     if (rt.outKind == OutputRoute::Kind::hardware)
@@ -1470,13 +1606,10 @@ void Engine::renderClips (RenderGraph& g, RenderTrack& rt, int64 pos, int len)
     }
 }
 
-void Engine::renderMetronome (RenderGraph& g, int64 pos, int len, int offset, float* const* outDev, int numOut)
+void Engine::renderMetronome (RenderGraph& g, int64 pos, int len)
 {
-    const int ch = g.master.outChannel;
-    float* left = ch < numOut ? outDev[ch] : nullptr;
-    float* right = ch + 1 < numOut ? outDev[ch + 1] : nullptr;
-    if (left == nullptr && right == nullptr)
-        return;
+    auto* out = g.click.getWritePointer (0);
+    FloatVectorOperations::clear (out, len);
 
     const double interval = g.samplesPerClick;
     int64 k = (int64) std::ceil ((double) pos / interval - 1.0e-9);
@@ -1510,8 +1643,7 @@ void Engine::renderMetronome (RenderGraph& g, int64 pos, int len, int offset, fl
             const float s = env * (float) std::sin (clickPhase);
             clickPhase += MathConstants<double>::twoPi * clickFreq / sr;
             --clickRemaining;
-            if (left != nullptr)  left[offset + i] += s;
-            if (right != nullptr) right[offset + i] += s;
+            out[i] = s;
         }
     }
 }

@@ -1,4 +1,5 @@
 #include "Mixer.h"
+#include "EqEditor.h"
 
 namespace lathe
 {
@@ -54,7 +55,7 @@ class ChannelStrip : public Component
 {
 public:
     ChannelStrip (AppContext& c, std::shared_ptr<Track> t)
-        : track (std::move (t)), ctx (c), meter (track), pan (true)
+        : track (std::move (t)), ctx (c), meter (track), pan (true), eqThumb (c, track)
     {
         name.setFont (theme::font (12.5f, true));
         name.setJustificationType (Justification::centredLeft);
@@ -98,7 +99,17 @@ public:
             addAndMakeVisible (midiOut);
         }
 
-        output.onChange = [this] { applyOutput (output, *track, ctx.edit); ctx.edit.changed(); };
+        output.onChange = [this]
+        {
+            if (cue != nullptr && track->isMaster())
+            {
+                cue->channel = jmax (0, output.getSelectedId() - 1);
+                ctx.edit.touched();
+                return;
+            }
+            applyOutput (output, *track, ctx.edit);
+            ctx.edit.changed();
+        };
         output.setTooltip ("Where this channel's audio goes");
         addAndMakeVisible (output);
 
@@ -114,13 +125,19 @@ public:
             const int p = roundToInt (v * 50.0);
             return p == 0 ? String ("C") : String (std::abs (p)) + (p < 0 ? "L" : "R");
         };
-        pan.onValueChange = [this] { track->pan = (float) pan.getValue(); ctx.edit.markDirty(); };
+        pan.onValueChange = [this]
+        {
+            if (cueLevel != nullptr) cueLevel->pan = (float) pan.getValue();
+            else                     track->pan = (float) pan.getValue();
+            ctx.edit.markDirty();
+        };
         addAndMakeVisible (pan);
 
         fader.onValueChange = [this]
         {
-            track->volumeDb = theme::faderPosToDb ((float) fader.getValue());
-            dbLabel.setText (theme::formatDb (track->volumeDb.load()), dontSendNotification);
+            const float db = theme::faderPosToDb ((float) fader.getValue());
+            levelTarget() = db;
+            dbLabel.setText (theme::formatDb (db), dontSendNotification);
             ctx.edit.markDirty();
         };
         addAndMakeVisible (fader);
@@ -134,24 +151,56 @@ public:
         styleToggle (solo, "S", theme::solo, "Solo");
         styleToggle (mute, "M", theme::mute, "Mute");
         solo.onClick = [this] { toggleSolo (ctx, track.get(), nullptr); };
-        mute.onClick = [this] { track->mute = ! track->mute.load(); ctx.edit.touched(); };
+        mute.onClick = [this]
+        {
+            auto& m = muteTarget();
+            m = ! m.load();
+            ctx.edit.touched();
+        };
+        addChildComponent (mute);
         if (! track->isMaster())
         {
             addAndMakeVisible (solo);
-            addAndMakeVisible (mute);
+            mute.setVisible (true);
         }
+
+        eqThumb.setCompact (true);
+        addAndMakeVisible (eqThumb);
 
         update();
     }
 
     void update()
     {
-        name.setText (track->name, dontSendNotification);
-        fader.setValue (theme::dbToFaderPos (track->volumeDb.load()), dontSendNotification);
-        dbLabel.setText (theme::formatDb (track->volumeDb.load()), dontSendNotification);
-        pan.setValue (track->pan.load(), dontSendNotification);
+        // Which mix the controls edit: the main mix, or a cue (monitor) mix.
+        cue = ctx.edit.findCue (ctx.mixLayer);
+        cueLevel = (cue != nullptr && ! track->isMaster()) ? ctx.edit.cueLevel (*cue, *track) : nullptr;
+        const bool viaReturn = cue != nullptr && track->holdsClips() && track->output.kind == OutputRoute::Kind::bus;
+        const bool cueMaster = cue != nullptr && track->isMaster();
+
+        name.setText (cueMaster ? cue->name : track->name, dontSendNotification);
+        fader.setValue (theme::dbToFaderPos (levelTarget().load()), dontSendNotification);
+        dbLabel.setText (theme::formatDb (levelTarget().load()), dontSendNotification);
+        pan.setValue (cueLevel != nullptr ? cueLevel->pan.load() : track->pan.load(), dontSendNotification);
         solo.setToggleState (track->solo.load(), dontSendNotification);
-        mute.setToggleState (track->mute.load(), dontSendNotification);
+        mute.setToggleState (muteTarget().load(), dontSendNotification);
+
+        fader.setEnabled (! viaReturn);
+        pan.setEnabled (! viaReturn);
+        solo.setEnabled (cue == nullptr);
+        pan.setVisible (! cueMaster);
+        // The master's inserts and EQ only shape the main mix, so they step aside in a cue mix.
+        addInsert.setVisible (! cueMaster);
+        eqThumb.setVisible (! cueMaster);
+        if (track->isMaster())
+            mute.setVisible (cueMaster);
+        if (cue != nullptr) fader.setColour (Slider::thumbColourId, cue->colour.withMultipliedBrightness (0.8f));
+        else                fader.removeColour (Slider::thumbColourId);
+        dbLabel.setColour (Label::textColourId, cue != nullptr ? cue->colour : theme::textDim);
+        fader.setTooltip (viaReturn ? "Heard in " + cue->name + " through the return it's routed to"
+                                    : cue != nullptr ? (cueMaster ? cue->name + " volume" : "Level in " + cue->name) : String());
+        if (cueMaster) meter.setSource (cue, &cue->meterL, &cue->meterR);
+        else           meter.setSource (track, &track->meterL, &track->meterR);
         arm.setToggleState (track->arm.load(), dontSendNotification);
 
         const int mon = track->monitor.load();
@@ -165,6 +214,7 @@ public:
             << ctx.engine.getMidiInputNames().joinIntoString (",") << "|" << ctx.engine.getMidiOutputNames().joinIntoString (",") << "|";
         for (auto& b : ctx.edit.buses)
             key << b->id << b->name << ",";
+        key << (cueMaster ? "cue" + String (cue->channel.load()) : String()) << "|";
         key << track->input.channel << (track->input.stereo ? 1 : 0) << track->midiInput << track->midiOutput
             << (int) track->output.kind << track->output.busId << track->output.channel << (track->output.stereo ? 1 : 0);
 
@@ -180,7 +230,22 @@ public:
             {
                 fillAudioInputs (input, *track, ctx.engine.getInputChannelNames().size());
             }
-            fillOutputs (output, ctx.edit, *track, ctx.engine.getOutputChannelNames().size());
+            if (cueMaster)
+            {
+                output.clear (dontSendNotification);
+                const int numOuts = ctx.engine.getOutputChannelNames().size();
+                for (int ch = 0; ch + 1 < jmax (2, numOuts); ch += 2)
+                    output.addItem ("Out " + String (ch + 1) + "/" + String (ch + 2), ch + 1);
+                output.setSelectedId (cue->channel.load() + 1, dontSendNotification);
+                if (output.getSelectedId() == 0)
+                    output.setText ("Out " + String (cue->channel.load() + 1) + "/" + String (cue->channel.load() + 2) + " (not available)", dontSendNotification);
+            }
+            else
+            {
+                fillOutputs (output, ctx.edit, *track, ctx.engine.getOutputChannelNames().size());
+            }
+            output.setTooltip (cueMaster ? "The outputs " + cue->name + " plays on (your headphone or in-ear feed)"
+                                         : "Where this channel's audio goes");
         }
 
         // Inserts
@@ -245,6 +310,8 @@ public:
 
     void tick()   { meter.tick(); }
 
+    void refreshEq()   { eqThumb.repaint(); }
+
     void paint (Graphics& g) override
     {
         const bool selected = ctx.isSelected (track->id);
@@ -262,6 +329,12 @@ public:
             g.drawText (group->name + (group->mute.load() ? " (muted)" : group->solo.load() ? " (solo)" : ""),
                         getLocalBounds().withTrimmedTop (8).withHeight (12).reduced (5, 0), Justification::centredRight, true);
         }
+        if (cue != nullptr)
+        {
+            g.setColour (cue->colour);
+            g.fillRect (0, getHeight() - 3, getWidth(), 3);
+        }
+
         g.setColour (theme::border);
         g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
 
@@ -321,18 +394,25 @@ public:
         }
         std::swap (r, io);
 
+        const bool cueMaster = cue != nullptr && track->isMaster();
         r.removeFromTop (6);
-        sectionLabels.push_back ({ "Inserts", r.removeFromTop (13) });
+        if (cueMaster) r.removeFromTop (13);
+        else           sectionLabels.push_back ({ "Inserts", r.removeFromTop (13) });
         auto insertArea = r.removeFromTop (kInsertRows * 19 + 20);
         for (int i = 0; i < inserts.size(); ++i)
         {
-            inserts[i]->setVisible (i < kInsertRows);
+            inserts[i]->setVisible (i < kInsertRows && ! cueMaster);
             if (i < kInsertRows)
                 inserts[i]->setBounds (insertArea.removeFromTop (18).withTrimmedBottom (0));
             if (i < kInsertRows)
                 insertArea.removeFromTop (1);
         }
         addInsert.setBounds (insertArea.removeFromTop (18));
+
+        r.removeFromTop (4);
+        if (cueMaster) r.removeFromTop (13);
+        else           sectionLabels.push_back ({ "EQ", r.removeFromTop (13) });
+        eqThumb.setBounds (r.removeFromTop (26));
 
         const int numBuses = track->holdsClips() ? (int) ctx.edit.buses.size() : 0;
         const int sendRows = (numBuses + 2) / 3;
@@ -367,6 +447,10 @@ public:
             solo.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (1, 0));
             mute.setBounds (buttons.reduced (1, 0));
         }
+        else
+        {
+            mute.setBounds (buttons.reduced (1, 0));   // a cue mix's own mute
+        }
 
         r.removeFromBottom (3);
         dbLabel.setBounds (r.removeFromBottom (16));
@@ -377,6 +461,14 @@ public:
 
     void mouseDown (const MouseEvent& e) override
     {
+        if (eqThumb.getBounds().contains (e.getPosition()) && ! e.mods.isPopupMenu())
+        {
+            ctx.selectTrack (track->id);
+            if (ctx.showDevices)
+                ctx.showDevices();
+            return;
+        }
+
         if (e.mods.isPopupMenu())
         {
             if (! ctx.isSelected (track->id))
@@ -400,7 +492,23 @@ public:
     std::shared_ptr<Track> track;
 
 private:
+    /** The level and mute the fader and M button control in the current mix. */
+    std::atomic<float>& levelTarget()
+    {
+        if (cueLevel != nullptr) return cueLevel->levelDb;
+        if (cue != nullptr && track->isMaster()) return cue->volumeDb;
+        return track->volumeDb;
+    }
+    std::atomic<bool>& muteTarget()
+    {
+        if (cueLevel != nullptr) return cueLevel->mute;
+        if (cue != nullptr && track->isMaster()) return cue->mute;
+        return track->mute;
+    }
+
     AppContext& ctx;
+    std::shared_ptr<CueMix> cue;
+    std::shared_ptr<CueLevel> cueLevel;
     Label name;
     ComboBox input, midiOut, output;
     TextButton monAuto { "Auto" }, monIn { "In" }, monOff { "Off" };
@@ -413,10 +521,251 @@ private:
     Fader fader;
     Label dbLabel;
     TextButton arm, solo, mute;
+    EqEditor eqThumb;
     std::vector<std::pair<String, Rectangle<int>>> sectionLabels;
     String routingKey, insertKey, sendsKey;
 };
 
+
+//==============================================================================
+/** Picks which mix the mixer edits: Main, or one of the cue (monitor) mixes.
+    In a cue mix the faders, pans and mutes are that mix's own; the master strip
+    becomes its volume and output pair. */
+class MixBar : public Component
+{
+public:
+    explicit MixBar (AppContext& c) : ctx (c)
+    {
+        addButton.setTooltip ("Add a monitor mix on its own outputs, e.g. for in-ear monitors or a headphone feed");
+        addButton.setWantsKeyboardFocus (false);
+        addButton.onClick = [this] { addCue(); };
+        addAndMakeVisible (addButton);
+
+        clickLabel.setFont (theme::font (11.5f));
+        clickLabel.setColour (Label::textColourId, theme::textDim);
+        clickLabel.setJustificationType (Justification::centredRight);
+        addAndMakeVisible (clickLabel);
+
+        click.setSliderStyle (Slider::LinearBar);
+        click.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+        click.setRange (0.0, 1.0);
+        click.setDoubleClickReturnValue (true, theme::dbToFaderPos (0.0f));
+        click.setPopupDisplayEnabled (true, true, nullptr);
+        click.textFromValueFunction = [] (double v) { return "Click " + theme::formatDb (theme::faderPosToDb ((float) v)) + " dB"; };
+        click.setTooltip ("Metronome level in this mix (when the metronome is on)");
+        click.onValueChange = [this]
+        {
+            if (auto cue = ctx.edit.findCue (ctx.mixLayer))
+            {
+                cue->clickDb = theme::faderPosToDb ((float) click.getValue());
+                ctx.edit.markDirty();
+            }
+        };
+        addAndMakeVisible (click);
+
+        styleToggle (clickInMain, "Click in main", theme::accent, "Play the metronome on the main outputs too. Turn off to hear the click only in your monitor mixes.");
+        clickInMain.onClick = [this] { ctx.edit.clickInMain = ! ctx.edit.clickInMain.load(); ctx.edit.touched(); };
+        addAndMakeVisible (clickInMain);
+    }
+
+    std::function<void()> onLayerChanged;
+
+    void update()
+    {
+        if (ctx.mixLayer != -1 && ctx.edit.findCue (ctx.mixLayer) == nullptr)
+            ctx.mixLayer = -1;
+
+        String sig;
+        for (auto& c : ctx.edit.cues)
+            sig << String::toHexString ((pointer_sized_int) c.get()) << c->name << ",";
+        if (sig != tabSignature)
+        {
+            tabSignature = sig;
+            tabs.clear();
+            tabs.add (new Tab (*this, -1, "Main", theme::accent));
+            for (auto& c : ctx.edit.cues)
+                tabs.add (new Tab (*this, c->id, c->name, c->colour));
+            for (auto* t : tabs)
+                addAndMakeVisible (t);
+            resized();
+        }
+
+        auto cue = ctx.edit.findCue (ctx.mixLayer);
+        click.setVisible (cue != nullptr);
+        clickLabel.setVisible (cue != nullptr);
+        clickInMain.setVisible (! ctx.edit.cues.empty());
+        clickInMain.setToggleState (ctx.edit.clickInMain.load(), dontSendNotification);
+        if (cue != nullptr)
+        {
+            click.setValue (theme::dbToFaderPos (cue->clickDb.load()), dontSendNotification);
+            click.setColour (Slider::trackColourId, cue->colour);
+        }
+        clickLabel.setText (cue != nullptr ? "Click" : String(), dontSendNotification);
+        repaint();
+        for (auto* t : tabs)
+            t->repaint();
+    }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (theme::panel);
+        g.setColour (theme::border);
+        g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+
+        g.setColour (theme::textDim);
+        g.setFont (theme::font (11.5f));
+        g.drawText ("Mix", getLocalBounds().removeFromLeft (40).withTrimmedLeft (10), Justification::centredLeft);
+
+        if (auto cue = ctx.edit.findCue (ctx.mixLayer))
+        {
+            auto hint = getLocalBounds().withLeft (addButton.getRight() + 14).withRight (clickLabel.getX() - 10);
+            g.setColour (cue->colour);
+            g.drawText ("Faders, pans and mutes now set " + cue->name + " (Out " + String (cue->channel.load() + 1) + "/"
+                            + String (cue->channel.load() + 2) + "). The main mix is untouched.",
+                        hint, Justification::centredLeft, true);
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (4, 4);
+        r.removeFromLeft (36);
+        for (auto* t : tabs)
+        {
+            const int w = jmax (56, theme::font (12.0f).getStringWidth (t->label) + 24);
+            t->setBounds (r.removeFromLeft (w));
+            r.removeFromLeft (2);
+        }
+        r.removeFromLeft (4);
+        addButton.setBounds (r.removeFromLeft (92));
+
+        clickInMain.setBounds (r.removeFromRight (96));
+        r.removeFromRight (12);
+        click.setBounds (r.removeFromRight (110).reduced (0, 3));
+        clickLabel.setBounds (r.removeFromRight (40));
+    }
+
+private:
+    class Tab : public Component, public SettableTooltipClient
+    {
+    public:
+        Tab (MixBar& b, int i, String l, Colour c) : bar (b), id (i), label (std::move (l)), colour (c)
+        {
+            setTooltip (id < 0 ? "The main mix" : "Monitor mix. Right-click to rename, copy the main mix or delete.");
+        }
+
+        void paint (Graphics& g) override
+        {
+            const bool on = bar.ctx.mixLayer == id;
+            auto r = getLocalBounds().toFloat().reduced (0.5f);
+            g.setColour (on ? colour : theme::control);
+            g.fillRoundedRectangle (r, 2.0f);
+            g.setColour (on ? theme::textDark : theme::text);
+            g.setFont (theme::font (12.0f, on));
+            g.drawText (label, getLocalBounds().reduced (6, 0), Justification::centred, true);
+            if (! on && id >= 0)
+            {
+                g.setColour (colour);
+                g.fillRect (r.removeFromBottom (2.0f).reduced (4.0f, 0.0f));
+            }
+        }
+
+        void mouseUp (const MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu() && id >= 0)
+                bar.showCueMenu (id, *this);
+            else if (e.mouseWasClicked())
+                bar.select (id);
+        }
+
+        void mouseDoubleClick (const MouseEvent&) override
+        {
+            if (id >= 0)
+                bar.renameCue (id);
+        }
+
+        MixBar& bar;
+        int id;
+        String label;
+        Colour colour;
+    };
+
+    void select (int id)
+    {
+        ctx.mixLayer = id;
+        update();
+        if (onLayerChanged)
+            onLayerChanged();
+    }
+
+    void addCue()
+    {
+        // First stereo pair nobody else is using.
+        std::set<int> used { ctx.edit.master->output.channel };
+        for (auto& c : ctx.edit.cues)
+            used.insert (c->channel.load());
+        const int numOuts = jmax (4, ctx.engine.getOutputChannelNames().size());
+        int channel = 2;
+        for (int ch = 0; ch + 1 < numOuts; ch += 2)
+            if (used.count (ch) == 0) { channel = ch; break; }
+
+        const String name = ctx.edit.cues.empty() ? "In-ears" : "Cue " + String ((int) ctx.edit.cues.size() + 1);
+        askForText ("New monitor mix", "Name (it starts as a copy of the main mix):", name, [this, channel] (const String& n)
+        {
+            auto cue = ctx.edit.addCue (n.trim(), channel);
+            select (cue->id);
+        });
+    }
+
+    void renameCue (int id)
+    {
+        if (auto cue = ctx.edit.findCue (id))
+            askForText ("Rename monitor mix", "Name:", cue->name, [this, id] (const String& n)
+            {
+                if (auto c = ctx.edit.findCue (id); c != nullptr && n.trim().isNotEmpty())
+                {
+                    c->name = n.trim();
+                    ctx.edit.touched();
+                }
+            });
+    }
+
+    void showCueMenu (int id, Component& anchor)
+    {
+        auto cue = ctx.edit.findCue (id);
+        if (cue == nullptr)
+            return;
+
+        PopupMenu m;
+        m.addItem ("Rename...", [this, id] { renameCue (id); });
+        m.addItem ("Copy levels from the main mix", [this, id]
+        {
+            if (auto c = ctx.edit.findCue (id))
+            {
+                ctx.edit.copyMainMixToCue (*c);
+                ctx.edit.touched();
+            }
+        });
+        m.addSeparator();
+        m.addItem ("Delete " + cue->name, [this, id]
+        {
+            if (ctx.mixLayer == id)
+                ctx.mixLayer = -1;
+            ctx.edit.removeCue (id);
+            if (onLayerChanged)
+                onLayerChanged();
+        });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&anchor));
+    }
+
+    AppContext& ctx;
+    OwnedArray<Tab> tabs;
+    TextButton addButton { "+ Monitor mix" };
+    Label clickLabel;
+    Slider click;
+    TextButton clickInMain;
+    String tabSignature;
+};
 //==============================================================================
 MixerView::MixerView (AppContext& c) : ctx (c)
 {
@@ -429,6 +778,10 @@ MixerView::MixerView (AppContext& c) : ctx (c)
     addReturnButton.onClick = [this] { ctx.edit.addTrack (TrackKind::bus); };
     addReturnButton.setWantsKeyboardFocus (false);
     content.addAndMakeVisible (addReturnButton);
+
+    mixBar = std::make_unique<MixBar> (ctx);
+    mixBar->onLayerChanged = [this] { refresh(); };
+    addAndMakeVisible (*mixBar);
 
     refresh();
 }
@@ -462,6 +815,7 @@ void MixerView::refresh()
         resized();
     }
 
+    mixBar->update();
     for (auto* s : strips)
         s->update();
     masterStrip->update();
@@ -484,6 +838,9 @@ void MixerView::paint (Graphics& g)
 void MixerView::resized()
 {
     auto r = getLocalBounds();
+    if (mixBar != nullptr)
+        mixBar->setBounds (r.removeFromTop (30));
+    r.removeFromTop (4);
     if (masterStrip != nullptr)
     {
         auto m = r.removeFromRight (theme::stripWidth + 12);

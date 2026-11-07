@@ -60,6 +60,7 @@ juce_add_gui_app(Lathe
 target_sources(Lathe PRIVATE
     Source/Main.cpp
     Source/Model/Edit.cpp
+    Source/Model/ChannelEq.cpp
     Source/Engine/AudioPool.cpp
     Source/Engine/PluginHost.cpp
     Source/Engine/PluginStore.cpp
@@ -70,6 +71,7 @@ target_sources(Lathe PRIVATE
     Source/UI/Arrangement.cpp
     Source/UI/Mixer.cpp
     Source/UI/DeviceChain.cpp
+    Source/UI/EqEditor.cpp
     Source/UI/PianoRoll.cpp
     Source/UI/Dialogs.cpp
     Source/UI/PluginBrowser.cpp
@@ -140,6 +142,7 @@ if(LATHE_BUILD_TESTS)
     target_sources(LatheTests PRIVATE
         Tests/EngineTests.cpp
         Source/Model/Edit.cpp
+        Source/Model/ChannelEq.cpp
         Source/Engine/AudioPool.cpp
         Source/Engine/PluginHost.cpp
         Source/Engine/PluginStore.cpp

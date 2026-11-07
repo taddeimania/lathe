@@ -60,6 +60,8 @@ void Edit::reset()
     tracks.clear();
     buses.clear();
     groups.clear();
+    cues.clear();
+    clickInMain = true;
     projectFile = File();
     workDir = File();
     undoStack.clear();
@@ -305,6 +307,60 @@ bool Edit::isEffectivelySoloed (const Track& t) const
         return true;
     auto g = findGroup (t.groupId);
     return g != nullptr && g->solo.load();
+}
+
+//==============================================================================
+std::shared_ptr<CueMix> Edit::addCue (const String& name, int firstOutputChannel)
+{
+    auto c = std::make_shared<CueMix>();
+    c->id = newId();
+    c->name = name.isNotEmpty() ? name : "Cue " + String ((int) cues.size() + 1);
+    static const Colour cueColours[] = { Colour (0xff5fb3a8), Colour (0xffb28ad6), Colour (0xffd98c6a), Colour (0xff8cb85f) };
+    c->colour = cueColours[cues.size() % 4];
+    c->channel = jmax (0, firstOutputChannel);
+    copyMainMixToCue (*c);
+    cues.push_back (c);
+    changed();
+    return c;
+}
+
+void Edit::removeCue (int cueId)
+{
+    cues.erase (std::remove_if (cues.begin(), cues.end(), [cueId] (auto& c) { return c->id == cueId; }), cues.end());
+    changed();
+}
+
+std::shared_ptr<CueMix> Edit::findCue (int cueId) const
+{
+    for (auto& c : cues)
+        if (c->id == cueId)
+            return c;
+    return {};
+}
+
+std::shared_ptr<CueLevel> Edit::cueLevel (CueMix& cue, const Track& t)
+{
+    auto& slot = cue.levels[t.id];
+    if (slot == nullptr)
+    {
+        slot = std::make_shared<CueLevel>();
+        slot->levelDb = t.volumeDb.load();
+        slot->pan = t.pan.load();
+        slot->mute = t.mute.load();
+    }
+    return slot;
+}
+
+void Edit::copyMainMixToCue (CueMix& cue)
+{
+    for (auto* list : { &tracks, &buses })
+        for (auto& t : *list)
+        {
+            auto l = cueLevel (cue, *t);
+            l->levelDb = t->volumeDb.load();
+            l->pan = t->pan.load();
+            l->mute = t->mute.load();
+        }
 }
 
 std::shared_ptr<Track> Edit::findTrack (int trackId) const
@@ -712,6 +768,7 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
         plugins.add (var (po.get()));
     }
     o->setProperty ("plugins", plugins);
+    o->setProperty ("eq", t.eq.toVar());
 
     if (! asTemplate && t.holdsClips())
     {
@@ -794,6 +851,8 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
         }
     }
 
+    t->eq.fromVar (v["eq"]);
+
     if (auto* clips = v["clips"].getArray())
         for (auto& c : *clips)
             t->clips.push_back (clipFromVar (c, baseDir));
@@ -841,6 +900,38 @@ var Edit::toVar (bool asTemplate) const
         o->setProperty ("groups", groupList);
     o->setProperty ("returns", busList);
     o->setProperty ("master", trackToVar (*master, asTemplate));
+
+    Array<var> cueList;
+    for (auto& c : cues)
+    {
+        DynamicObject::Ptr co = new DynamicObject();
+        co->setProperty ("id", c->id);
+        co->setProperty ("name", c->name);
+        co->setProperty ("colour", c->colour.toString());
+        co->setProperty ("channel", c->channel.load());
+        co->setProperty ("volume", c->volumeDb.load());
+        co->setProperty ("mute", c->mute.load());
+        co->setProperty ("click", c->clickDb.load());
+
+        Array<var> levelList;
+        for (auto& [id, l] : c->levels)
+        {
+            if (findTrack (id) == nullptr)
+                continue;   // track since deleted
+            DynamicObject::Ptr lo = new DynamicObject();
+            lo->setProperty ("track", id);
+            lo->setProperty ("level", l->levelDb.load());
+            lo->setProperty ("pan", l->pan.load());
+            lo->setProperty ("mute", l->mute.load());
+            levelList.add (var (lo.get()));
+        }
+        co->setProperty ("levels", levelList);
+        cueList.add (var (co.get()));
+    }
+    if (! cueList.isEmpty())
+        o->setProperty ("cues", cueList);
+    if (! clickInMain.load())
+        o->setProperty ("clickInMain", false);
     return var (o.get());
 }
 
@@ -903,6 +994,38 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
             master->output = { OutputRoute::Kind::hardware, -1, 0, true };
     }
 
+    cues.clear();
+    clickInMain = data.hasProperty ("clickInMain") ? (bool) data["clickInMain"] : true;
+    const var cueData = data["cues"];
+    if (auto* list = cueData.getArray())
+    {
+        for (auto& v : *list)
+        {
+            auto c = std::make_shared<CueMix>();
+            c->id = (int) v["id"];
+            c->name = v["name"].toString();
+            c->colour = v["colour"].isString() ? Colour::fromString (v["colour"].toString()) : Colour (0xff5fb3a8);
+            c->channel = jmax (0, (int) v["channel"]);
+            c->volumeDb = (float) (double) v["volume"];
+            c->mute = (bool) v["mute"];
+            c->clickDb = v.hasProperty ("click") ? (float) (double) v["click"] : 0.0f;
+
+            const var levelData = v["levels"];
+            if (auto* levels = levelData.getArray())
+            {
+                for (auto& lv : *levels)
+                {
+                    auto l = std::make_shared<CueLevel>();
+                    l->levelDb = (float) (double) lv["level"];
+                    l->pan = jlimit (-1.0f, 1.0f, (float) (double) lv["pan"]);
+                    l->mute = (bool) lv["mute"];
+                    c->levels[(int) lv["track"]] = l;
+                }
+            }
+            cues.push_back (c);
+        }
+    }
+
     // Keep new ids clear of everything loaded.
     // Tracks pointing at a group that isn't there are ungrouped; empty groups go.
     for (auto& t : tracks)
@@ -913,6 +1036,8 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
     int maxId = master->id;
     for (auto& g : groups)
         maxId = jmax (maxId, g->id);
+    for (auto& c : cues)
+        maxId = jmax (maxId, c->id);
     for (auto* list : { &tracks, &buses })
         for (auto& t : *list)
         {

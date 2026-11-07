@@ -32,15 +32,31 @@ Knob::Knob (bool bipolar) : Slider (Slider::RotaryHorizontalVerticalDrag, Slider
 }
 
 //==============================================================================
-LevelMeter::LevelMeter (std::shared_ptr<Track> t) : track (std::move (t))
+LevelMeter::LevelMeter (std::shared_ptr<Track> t)
 {
     setInterceptsMouseClicks (true, false);
+    if (t != nullptr)
+        setSource (t, &t->meterL, &t->meterR);
+}
+
+void LevelMeter::setSource (std::shared_ptr<void> o, std::atomic<float>* l, std::atomic<float>* r)
+{
+    if (o == owner && l == sourceL)
+        return;
+    owner = std::move (o);
+    sourceL = l;
+    sourceR = r;
+    left = right = 0.0f;
+    clipped = false;
+    repaint();
 }
 
 void LevelMeter::tick()
 {
-    const float l = track->meterL.exchange (0.0f);
-    const float r = track->meterR.exchange (0.0f);
+    if (sourceL == nullptr || sourceR == nullptr)
+        return;
+    const float l = sourceL->exchange (0.0f);
+    const float r = sourceR->exchange (0.0f);
     if (l >= 1.0f || r >= 1.0f)
         clipped = true;
 

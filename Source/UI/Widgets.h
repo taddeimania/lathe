@@ -26,6 +26,10 @@ struct AppContext
     std::function<void (int trackId, int clipId)> openClipEditor;
     std::function<void (const String&)> showStatus;
     std::function<void()> openPluginBrowser;
+    std::function<void()> showDevices;   // opens the device panel (plug-ins and EQ) for the selected track
+
+    /** Which mix the mixer's faders, pans and mutes edit: -1 = the main mix, else a cue mix id. */
+    int mixLayer = -1;
 
     void selectTrack (int id)
     {
@@ -102,12 +106,16 @@ class LevelMeter : public Component
 {
 public:
     explicit LevelMeter (std::shared_ptr<Track>);
+    /** Meter something other than a track (a cue mix). The owner keeps the atomics alive. */
+    void setSource (std::shared_ptr<void> owner, std::atomic<float>* left, std::atomic<float>* right);
     void tick();
     void paint (Graphics&) override;
     void mouseDown (const MouseEvent&) override   { clipped = false; repaint(); }
 
 private:
-    std::shared_ptr<Track> track;
+    std::shared_ptr<void> owner;
+    std::atomic<float>* sourceL = nullptr;
+    std::atomic<float>* sourceR = nullptr;
     float left = 0.0f, right = 0.0f;
     bool clipped = false;
 };

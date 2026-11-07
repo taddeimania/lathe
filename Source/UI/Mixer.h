@@ -5,6 +5,7 @@
 namespace lathe
 {
 class ChannelStrip;
+class MixBar;
 
 class MixerView : public Component
 {
@@ -26,6 +27,7 @@ private:
     OwnedArray<ChannelStrip> strips;
     std::unique_ptr<ChannelStrip> masterStrip;
     TextButton addReturnButton { "+ Return" };
+    std::unique_ptr<MixBar> mixBar;
     String signature;
 };
 } // namespace lathe

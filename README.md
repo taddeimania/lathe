@@ -107,6 +107,33 @@ Double-click any track or group name to rename it in place (Return keeps, Escape
 - **Sends**: every audio and MIDI track has one send knob per return track (A, B, …), post-fader by default.
 - **Plug-in delay compensation** is automatic, including in exports.
 
+## Monitor mixes (in-ears, headphone feeds)
+
+A monitor mix is a second mix of the same channels, on its own pair of outputs. For example, you can have hi-hats on the left in your in-ears while they sit on the right in the main mix.
+
+- In the mixer, click **+ Monitor mix**. It starts as a copy of the main mix and goes to the first free output pair (3/4 on the UMC1820, the line outs your in-ear or headphone amp plugs into).
+- Switch between **Main** and your monitor mixes with the tabs above the strips. In a monitor mix:
+  - The faders, pans and mute buttons set that mix's own levels. The faders and the strip edges turn the mix's colour so you know which mix you're editing.
+  - The master strip becomes the mix's volume, output pair and mute.
+  - The main mix doesn't change.
+- What a monitor mix hears:
+  - Each channel after its plug-ins and EQ, and before its main fader. So the main fader, pan, mute and solo don't affect it.
+  - Returns at their own level in the mix, fed by the main sends. Tracks routed into a return are heard through that return.
+- **Click**: each monitor mix has its own metronome level. Turn off **Click in main** to hear the click only in your monitor mixes.
+- Right-click a mix tab to rename it, copy the main mix's levels into it again, or delete it.
+- Monitor mixes are saved with projects and templates. A tracking template can carry your in-ear mix.
+- Monitor mixes are for listening only. They aren't exported.
+
+## Channel EQ
+
+Every track, return and the master has a built-in EQ after its plug-ins and before its fader. It has six bands: a low cut (24 dB/oct), a low shelf, two bells, a high shelf and a high cut.
+
+- Each mixer strip shows the EQ curve. Click it to open the EQ in the device panel.
+- **Drag** a numbered point to set its frequency and gain.
+- **Scroll** (or Alt-drag) on a bell to set its width.
+- **Double-click** a bell or shelf to set it back to 0 dB, or double-click a cut to turn it on or off.
+- The power button bypasses the whole EQ. **Reset** flattens it.
+
 ## Export
 
 **File > Export Mix / Stems** (Cmd/Ctrl+Shift+E). You can export the whole song or the loop region, as 16-bit, 24-bit, or 32-bit float WAV, with a tail. Stems are post-fader, one per track and return, and they line up sample-for-sample with the mix. Silent stems are skipped. Files go to `<project>/Exports/<name> <date>/` unless you choose another folder.
@@ -142,7 +169,7 @@ Song/
   Exports/
 ```
 
-`.lathe` files are plain JSON. They hold tempo, time signature, loop, tracks (input, output, sends, fader, pan, mute, solo, arm, monitor), plug-ins (VST3 description plus base64 state), and clips. Audio paths are relative to the project folder, so you can move or copy the folder between your Mac and the Windows machine. Plug-ins are matched by identity, not by file path. A plug-in that isn't installed on the current machine keeps its saved settings and comes back when it's installed. Templates use the same format without clips.
+`.lathe` files are plain JSON. They hold tempo, time signature, loop, tracks (input, output, sends, fader, pan, mute, solo, arm, monitor, EQ), monitor mixes, plug-ins (VST3 description plus base64 state), and clips. Audio paths are relative to the project folder, so you can move or copy the folder between your Mac and the Windows machine. Plug-ins are matched by identity, not by file path. A plug-in that isn't installed on the current machine keeps its saved settings and comes back when it's installed. Templates use the same format without clips.
 
 Saves are atomic: the file is written beside the old one, then swapped in. While a saved project has unsaved changes, Lathe also writes `Song.lathe-autosave` every minute. If Lathe quits unexpectedly, it offers to recover those changes the next time you open the project.
 
@@ -161,13 +188,14 @@ These were left out to keep Lathe small and predictable. Some could be added lat
 
 ```
 Source/
-  Model/Edit.*          project model, clip split/trim/clear, undo, JSON
+  Model/Edit.*          project model, clip split/trim/clear, undo, JSON, monitor (cue) mixes
+  Model/ChannelEq.*     the built-in channel EQ: settings, biquads, response curve
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
   Engine/PluginStore.*  GitHub releases: catalog, lookup + cache, download, unpack, install, staged updates
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
-  UI/                   transport, arrangement, mixer, device chain, piano roll, dialogs
+  UI/                   transport, arrangement, mixer (+ mix tabs), device chain, EQ editor, piano roll, dialogs
 Tests/EngineTests.cpp   headless engine checks
 ```
 

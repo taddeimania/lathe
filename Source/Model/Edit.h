@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Common.h"
+#include "ChannelEq.h"
 
 namespace lathe
 {
@@ -103,6 +104,39 @@ struct TrackGroup
     bool collapsed = false;   // arrangement view hides the member rows
 };
 
+/** One track's (or return's) level in a cue mix. */
+struct CueLevel
+{
+    std::atomic<float> levelDb { 0.0f };
+    std::atomic<float> pan { 0.0f };
+    std::atomic<bool> mute { false };
+
+    // Audio-thread smoothing state.
+    float rtGainL = 0.0f, rtGainR = 0.0f;
+    bool rtGainValid = false;
+};
+
+/** A monitor mix ("cue mix") on its own pair of hardware outputs, e.g. in-ear
+    monitors. Every track and return has its own level, pan and mute in it,
+    independent of the main mix. It hears the channels after their plug-ins and
+    EQ and before their main faders, so main fader, pan, mute and solo don't
+    affect it. Returns come in after their plug-ins, fed by the main sends. */
+struct CueMix
+{
+    int id = 0;
+    String name;
+    Colour colour;
+    std::atomic<int> channel { 2 };         // first of the stereo output pair, 0-based
+    std::atomic<float> volumeDb { 0.0f };
+    std::atomic<bool> mute { false };
+    std::atomic<float> clickDb { 0.0f };    // metronome level in this mix (when the metronome is on)
+    std::map<int, std::shared_ptr<CueLevel>> levels;   // by track / return id
+
+    std::atomic<float> meterL { 0.0f }, meterR { 0.0f };
+    float rtGain = 0.0f;
+    bool rtGainValid = false;
+};
+
 struct Track
 {
     int id = 0;
@@ -125,6 +159,7 @@ struct Track
     std::vector<std::shared_ptr<Send>> sends;
     std::vector<std::shared_ptr<PluginSlot>> plugins;
     std::vector<Clip> clips;
+    ChannelEq eq;                 // after the plug-ins, before the fader
 
     // Peak meters: the audio thread raises them, the UI reads and clears them.
     std::atomic<float> meterL { 0.0f }, meterR { 0.0f };
@@ -132,6 +167,7 @@ struct Track
     // Audio-thread-only fader smoothing state.
     float rtGainL = 0.0f, rtGainR = 0.0f;
     bool rtGainValid = false;
+    EqProcessor rtEq;
 
     bool isAudio() const noexcept   { return kind == TrackKind::audio; }
     bool isMidi() const noexcept    { return kind == TrackKind::midi; }
@@ -165,6 +201,8 @@ public:
     std::vector<std::shared_ptr<Track>> buses;    // return tracks
     std::shared_ptr<Track> master;
     std::vector<std::shared_ptr<TrackGroup>> groups;
+    std::vector<std::shared_ptr<CueMix>> cues;      // monitor mixes
+    std::atomic<bool> clickInMain { true };         // metronome in the main outputs
 
     // --- where the project lives
     File projectFile;   // empty until saved
@@ -193,6 +231,16 @@ public:
     bool isEffectivelyMuted (const Track&) const;
     bool isEffectivelySoloed (const Track&) const;
     std::shared_ptr<Track> findTrack (int trackId) const;
+
+    // --- cue (monitor) mixes
+    /** New cue mix starting as a copy of the main mix's levels and pans. */
+    std::shared_ptr<CueMix> addCue (const String& name, int firstOutputChannel);
+    void removeCue (int cueId);
+    std::shared_ptr<CueMix> findCue (int cueId) const;
+    /** A track's (or return's) level in a cue mix. Created on first use from the main fader and pan. */
+    std::shared_ptr<CueLevel> cueLevel (CueMix&, const Track&);
+    /** Sets every level in the cue back to the main mix's fader, pan and mute. */
+    void copyMainMixToCue (CueMix&);
     int newId()     { return ++lastId; }
 
     // --- time

@@ -124,10 +124,10 @@ private:
     void processTrack (RenderGraph&, RenderTrack&, int64 pos, int len, int offset, bool rolling,
                        const float* const* inDev, int numIn, float* const* outDev, int numOut,
                        bool realtime, bool notesOff, bool anySolo);
-    void processBus (RenderGraph&, RenderTrack&, int len, int offset, float* const* outDev, int numOut, bool anySolo);
+    void processBus (RenderGraph&, RenderTrack&, int len, int offset, float* const* outDev, int numOut, bool anySolo, bool realtime);
     void applyFader (RenderTrack&, int len, bool silenced);
     void renderClips (RenderGraph&, RenderTrack&, int64 pos, int len);
-    void renderMetronome (RenderGraph&, int64 pos, int len, int offset, float* const* outDev, int numOut);
+    void renderMetronome (RenderGraph&, int64 pos, int len);   // into RenderGraph::click
     static void addToOutput (const AudioBuffer<float>&, int len, int offset, int channel, bool stereo, float* const* outDev, int numOut);
 
     PluginHost& host;

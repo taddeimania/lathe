@@ -767,6 +767,163 @@ int main()
         std::cout << "  (skipped: set LATHE_TEST_VST3_DIR to a folder of test VST3s)" << std::endl;
     }
 
+    std::cout << "Cue (monitor) mixes" << std::endl;
+    {
+        // A mono "hi-hat" input monitored live: DC at 0.5 on input 1.
+        Edit e;
+        e.sampleRate = 48000.0;
+        auto hat = e.addTrack (TrackKind::audio, "Hats");
+        hat->input = { 0, false };
+        hat->monitor = (int) Monitor::in;
+        hat->pan = 1.0f;   // main mix: hard right
+
+        auto cue = e.addCue ("In-ears", 2);
+        check (cue->channel.load() == 2 && e.cueLevel (*cue, *hat)->pan.load() == 1.0f, "a new cue mix starts as a copy of the main mix");
+        e.cueLevel (*cue, *hat)->pan = -1.0f;   // in-ears: hard left
+
+        Engine eng (host, pool, props);
+        eng.setEdit (&e);
+        FakeDevice dev (2, 4, 0, 0);
+        eng.audioDeviceAboutToStart (&dev);
+        eng.rebuild();
+
+        AudioBuffer<float> ins (2, 256), outs (4, 256);
+        auto run = [&] (int blocks)
+        {
+            for (int b = 0; b < blocks; ++b)
+            {
+                ins.clear();
+                FloatVectorOperations::fill (ins.getWritePointer (0), 0.5f, 256);
+                eng.audioDeviceIOCallbackWithContext (ins.getArrayOfReadPointers(), 2, outs.getArrayOfWritePointers(), 4, 256, {});
+            }
+        };
+        auto level = [&] (int ch) { return outs.getSample (ch, 255); };
+        auto near = [] (float a, float b) { return std::abs (a - b) < 0.01f; };
+
+        run (4);
+        check (near (level (0), 0.0f) && near (level (1), 0.5f), "main mix: hats on the right (L " + String (level (0)) + ", R " + String (level (1)) + ")");
+        check (near (level (2), 0.5f) && near (level (3), 0.0f), "in-ears on outputs 3/4: hats on the left (L " + String (level (2)) + ", R " + String (level (3)) + ")");
+
+        hat->volumeDb = kSilenceDb;
+        run (4);
+        check (near (level (1), 0.0f) && near (level (2), 0.5f), "main fader down doesn't touch the cue mix");
+        hat->volumeDb = 0.0f;
+
+        e.cueLevel (*cue, *hat)->levelDb = -6.0206f;
+        run (4);
+        check (near (level (2), 0.25f) && near (level (1), 0.5f), "cue level -6 dB halves the in-ears only (got " + String (level (2)) + ")");
+
+        e.cueLevel (*cue, *hat)->mute = true;
+        run (4);
+        check (near (level (2), 0.0f) && near (level (1), 0.5f), "cue mute silences the in-ears only");
+        e.cueLevel (*cue, *hat)->mute = false;
+        e.cueLevel (*cue, *hat)->levelDb = 0.0f;
+
+        cue->volumeDb = -6.0206f;
+        run (4);
+        check (near (level (2), 0.25f), "cue master volume (got " + String (level (2)) + ")");
+        cue->volumeDb = 0.0f;
+
+        // A return is heard in the cue at its own cue level, fed by the main send.
+        auto verb = e.addTrack (TrackKind::bus, "Verb");
+        hat->getSend (verb->id, true)->levelDb = 0.0f;   // post-fader: carries the main pan, so centre it
+        hat->pan = 0.0f;
+        eng.rebuild();
+        e.cueLevel (*cue, *hat)->levelDb = kSilenceDb;
+        run (4);
+        check (near (level (2), 0.5f) && near (level (3), 0.5f), "return comes through the cue mix (L " + String (level (2)) + ", R " + String (level (3)) + ")");
+        e.cueLevel (*cue, *verb)->levelDb = kSilenceDb;
+        run (4);
+        check (near (level (2), 0.0f), "and follows its own cue level");
+        e.cueLevel (*cue, *hat)->levelDb = 0.0f;
+
+        // Click only in the in-ears.
+        hat->monitor = (int) Monitor::off;
+        e.clickInMain = false;
+        eng.metronomeOn = true;
+        eng.play();
+        float mainPeak = 0.0f, cuePeak = 0.0f;
+        for (int b = 0; b < 8; ++b)
+        {
+            ins.clear();
+            eng.audioDeviceIOCallbackWithContext (ins.getArrayOfReadPointers(), 2, outs.getArrayOfWritePointers(), 4, 256, {});
+            mainPeak = jmax (mainPeak, outs.getMagnitude (0, 0, 256), outs.getMagnitude (1, 0, 256));
+            cuePeak = jmax (cuePeak, outs.getMagnitude (2, 0, 256));
+        }
+        eng.stop();
+        eng.metronomeOn = false;
+        check (mainPeak == 0.0f && cuePeak > 0.1f, "click in the in-ears but not the main outputs (main " + String (mainPeak) + ", cue " + String (cuePeak) + ")");
+
+        // Save and load.
+        Edit loaded;
+        loaded.loadFrom (JSON::parse (JSON::toString (e.toVar (true))), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        auto lc = loaded.cues.empty() ? nullptr : loaded.cues[0];
+        auto lhat = loaded.tracks.empty() ? nullptr : loaded.tracks[0];
+        check (lc != nullptr && lhat != nullptr && lc->name == "In-ears" && lc->channel.load() == 2
+                 && loaded.cueLevel (*lc, *lhat)->pan.load() == -1.0f && ! loaded.clickInMain.load(),
+               "cue mixes survive a template save and load");
+        eng.setEdit (nullptr);
+    }
+
+    std::cout << "Channel EQ" << std::endl;
+    {
+        ChannelEq eq;
+        check (eq.isFlat() && std::abs (eq.responseDb (1000.0, 48000.0)) < 0.01f, "new EQ is flat");
+
+        eq.bands[2].freq = 1000.0f;
+        eq.bands[2].gainDb = 6.0f;
+        check (std::abs (eq.responseDb (1000.0, 48000.0) - 6.0f) < 0.05f, "bell +6 dB at its centre (got " + String (eq.responseDb (1000.0, 48000.0)) + ")");
+
+        // The processor matches the drawn curve: a 1 kHz sine comes out 6 dB louder.
+        EqProcessor proc;
+        AudioBuffer<float> sine (2, 48000);
+        for (int i = 0; i < 48000; ++i)
+            for (int ch = 0; ch < 2; ++ch)
+                sine.setSample (ch, i, 0.25f * (float) std::sin (MathConstants<double>::twoPi * 1000.0 * i / 48000.0));
+        for (int start = 0; start < 48000; start += 256)
+        {
+            AudioBuffer<float> view (sine.getArrayOfWritePointers(), 2, start, jmin (256, 48000 - start));
+            proc.process (eq, view, view.getNumSamples(), 48000.0);
+        }
+        const float gain = sine.getMagnitude (0, 24000, 24000) / 0.25f;
+        check (std::abs (Decibels::gainToDecibels (gain) - 6.0f) < 0.1f, "processed sine is +6 dB (got " + String (Decibels::gainToDecibels (gain), 2) + ")");
+
+        eq.bands[0].on = true;
+        eq.bands[0].freq = 100.0f;
+        check (eq.responseDb (25.0, 48000.0) < -40.0f && std::abs (eq.responseDb (100.0, 48000.0) + 3.0f) < 0.2f,
+               "low cut: 24 dB/oct, -3 dB at its frequency");
+
+        eq.enabled = false;
+        check (eq.responseDb (25.0, 48000.0) == 0.0f, "switching the EQ off makes it flat");
+        eq.enabled = true;
+
+        ChannelEq copy;
+        copy.fromVar (eq.toVar());
+        check (copy.bands[0].on.load() && copy.bands[2].gainDb.load() == 6.0f && copy.bands[0].freq.load() == 100.0f, "EQ settings save and load");
+
+        // In the engine: a low cut removes DC from a monitored input.
+        Edit e;
+        auto t = e.addTrack (TrackKind::audio, "Bass");
+        t->input = { 0, false };
+        t->monitor = (int) Monitor::in;
+        t->eq.bands[0].on = true;
+        t->eq.bands[0].freq = 100.0f;
+        Engine eng (host, pool, props);
+        eng.setEdit (&e);
+        FakeDevice dev (2, 2, 0, 0);
+        eng.audioDeviceAboutToStart (&dev);
+        eng.rebuild();
+        AudioBuffer<float> ins (2, 256), outs (2, 256);
+        for (int b = 0; b < 200; ++b)
+        {
+            ins.clear();
+            FloatVectorOperations::fill (ins.getWritePointer (0), 0.5f, 256);
+            eng.audioDeviceIOCallbackWithContext (ins.getArrayOfReadPointers(), 2, outs.getArrayOfWritePointers(), 2, 256, {});
+        }
+        check (outs.getMagnitude (0, 0, 256) < 0.001f, "track EQ runs in the engine (DC removed, got " + String (outs.getMagnitude (0, 0, 256)) + ")");
+        eng.setEdit (nullptr);
+    }
+
     engine.setEdit (nullptr);
     std::cout << (failures == 0 ? "\nAll tests passed." : "\n" + String (failures) + " test(s) FAILED.") << std::endl;
     return failures == 0 ? 0 : 1;

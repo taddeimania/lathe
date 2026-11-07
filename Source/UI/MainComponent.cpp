@@ -88,6 +88,7 @@ MainComponent::MainComponent (PropertiesFile& s)
     };
     ctx.showStatus = [this] (const String& m) { setStatus (m); };
     ctx.openPluginBrowser = [this] { openPluginBrowser(); };
+    ctx.showDevices = [this] { if (! detailShown || pianoRollShown) showDetail (false); };
 
     store.onChanged = [this]
     {

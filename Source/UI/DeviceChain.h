@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Widgets.h"
+#include "EqEditor.h"
 
 namespace lathe
 {
-/** The selected track's plug-ins, left to right in signal order. */
+/** The selected track's plug-ins, left to right in signal order, then its channel EQ. */
 class DeviceChainView : public Component
 {
 public:
@@ -23,6 +23,7 @@ private:
     Viewport viewport;
     Component content;
     OwnedArray<DeviceBox> boxes;
+    std::unique_ptr<EqDevice> eqDevice;
     TextButton addButton { "+ Add plug-in" }, browseButton { "Browse..." };
     String signature;
 };
