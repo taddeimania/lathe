@@ -81,5 +81,6 @@ public:
     Font getAlertWindowTitleFont() override    { return theme::font (15.0f, true); }
 
     void drawTooltip (Graphics&, const String& text, int width, int height) override;
+    void drawAlertBox (Graphics&, AlertWindow&, const Rectangle<int>& textArea, TextLayout&) override;
 };
 } // namespace lathe

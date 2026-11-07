@@ -245,4 +245,14 @@ void LatheLookAndFeel::drawTooltip (Graphics& g, const String& text, int width, 
     g.drawFittedText (text, Rectangle<int> (width, height).reduced (6, 2), Justification::centredLeft, 4);
 }
 
+void LatheLookAndFeel::drawAlertBox (Graphics& g, AlertWindow& w, const Rectangle<int>& textArea, TextLayout& text)
+{
+    // Flat panel, no icon: matches the rest of the UI.
+    g.fillAll (w.findColour (AlertWindow::backgroundColourId));
+    g.setColour (theme::border);
+    g.drawRect (w.getLocalBounds());
+    g.setColour (w.findColour (AlertWindow::textColourId));
+    text.draw (g, textArea.toFloat());
+}
+
 } // namespace lathe

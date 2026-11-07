@@ -493,15 +493,104 @@ void askForText (const String& title, const String& prompt, const String& initia
     w->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
     w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
 
-    if (auto* editor = w->getTextEditor ("text"))
-        editor->selectAll();
-
     w->enterModalState (true, ModalCallbackFunction::create ([w, onOk] (int result)
     {
         const auto text = w->getTextEditorContents ("text").trim();
         if (result == 1 && text.isNotEmpty())
             onOk (text);
     }), true);
+
+    // Ready to type straight away, with the old text selected so typing replaces it.
+    auto focusEditor = [safe = Component::SafePointer<AlertWindow> (w)]
+    {
+        if (safe != nullptr)
+            if (auto* editor = safe->getTextEditor ("text"))
+            {
+                editor->grabKeyboardFocus();
+                editor->selectAll();
+            }
+    };
+    focusEditor();
+    MessageManager::callAsync (focusEditor);   // again once the window is actually on screen
+}
+
+void toggleSolo (AppContext& ctx, Track* track, TrackGroup* group)
+{
+    auto& edit = ctx.edit;
+    const bool newState = track != nullptr ? ! track->solo.load() : (group != nullptr && ! group->solo.load());
+
+    if (! ModifierKeys::currentModifiers.isCommandDown())
+    {
+        // Exclusive: clear everything at the same level (tracks + groups, or returns).
+        if (track != nullptr && track->isBus())
+        {
+            for (auto& b : edit.buses) b->solo = false;
+        }
+        else
+        {
+            for (auto& t : edit.tracks) t->solo = false;
+            for (auto& g : edit.groups) g->solo = false;
+        }
+    }
+
+    if (track != nullptr) track->solo = newState;
+    if (group != nullptr) group->solo = newState;
+    edit.touched();
+}
+
+void groupSelectedTracks (AppContext& ctx, int fallbackTrackId)
+{
+    std::vector<int> ids (ctx.selection.trackIds.begin(), ctx.selection.trackIds.end());
+    if (ids.size() < 2)
+        ids = { fallbackTrackId >= 0 ? fallbackTrackId : ctx.selection.trackId };
+
+    if (auto g = ctx.edit.createGroup (ids))
+        ctx.showStatus ("Grouped " + String ((int) ctx.edit.groupMembers (g->id).size()) + " tracks as \"" + g->name
+                        + "\". The group's arm, solo and mute act on all of them.");
+    else
+        ctx.showStatus ("Select audio or MIDI tracks to group (Cmd/Ctrl- or Shift-click the track names).");
+}
+
+void renameGroup (AppContext& ctx, std::shared_ptr<TrackGroup> group)
+{
+    auto* context = &ctx;
+    askForText ("Rename group", {}, group->name, [context, group] (const String& name)
+    {
+        group->name = name;
+        context->edit.changed();
+    });
+}
+
+void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGroup> group)
+{
+    static const char* colourNames[] = { "Clay", "Ochre", "Moss", "Jade", "Steel", "Iris", "Rose", "Stone" };
+    PopupMenu colours;
+    auto& palette = getTrackPalette();
+    for (int i = 0; i < palette.size(); ++i)
+        colours.addColouredItem (100 + i, colourNames[i % 8], palette[i], true, group->colour == palette[i]);
+
+    PopupMenu m;
+    m.addItem (1, "Rename group...");
+    m.addSubMenu ("Colour", colours);
+    m.addSeparator();
+    m.addItem (2, ctx.edit.isGroupArmed (group->id) ? "Disarm all" : "Arm all");
+    m.addItem (3, group->collapsed ? "Expand" : "Collapse");
+    m.addSeparator();
+    m.addItem (4, "Ungroup (keep the tracks)");
+
+    Component::SafePointer<Component> safeAnchor (&anchor);
+    auto* context = &ctx;
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&anchor), [=] (int r)
+    {
+        if (safeAnchor == nullptr || r == 0)
+            return;
+        auto& edit = context->edit;
+        if (r == 1)        renameGroup (*context, group);
+        else if (r == 2)   edit.toggleGroupArm (group->id);
+        else if (r == 3)   { group->collapsed = ! group->collapsed; edit.changed(); }
+        else if (r == 4)   edit.ungroup (group->id);
+        else if (r >= 100) { group->colour = getTrackPalette()[r - 100]; edit.touched(); }
+    });
 }
 
 void renameTrack (AppContext& ctx, std::shared_ptr<Track> track)
@@ -525,9 +614,31 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
     for (int i = 0; i < palette.size(); ++i)
         colours.addColouredItem (100 + i, colourNames[i % 8], palette[i], true, track->colour == palette[i]);
 
+    PopupMenu groupMenu;
+    if (track->holdsClips())
+    {
+        const auto selectedCount = (int) ctx.selection.trackIds.size();
+        if (selectedCount > 1 && ctx.selection.trackIds.count (track->id))
+            groupMenu.addItem (200, "Group the " + String (selectedCount) + " selected tracks");
+        else
+            groupMenu.addItem (200, "New group with this track");
+
+        for (size_t i = 0; i < ctx.edit.groups.size(); ++i)
+            if (ctx.edit.groups[i]->id != track->groupId)
+                groupMenu.addItem (300 + (int) i, "Move to \"" + ctx.edit.groups[i]->name + "\"");
+
+        if (track->groupId >= 0)
+        {
+            groupMenu.addSeparator();
+            groupMenu.addItem (201, "Remove from group");
+        }
+    }
+
     PopupMenu m;
     m.addItem (1, "Rename...");
     m.addSubMenu ("Colour", colours);
+    if (track->holdsClips())
+        m.addSubMenu ("Group", groupMenu);
     m.addSeparator();
     m.addItem (2, "Move up");
     m.addItem (3, "Move down");
@@ -554,6 +665,19 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
         if (r == 1)
         {
             renameTrack (*context, track);
+        }
+        else if (r == 200)
+        {
+            groupSelectedTracks (*context, track->id);
+        }
+        else if (r == 201)
+        {
+            edit.setTrackGroup (track->id, -1);
+        }
+        else if (r >= 300)
+        {
+            if ((size_t) (r - 300) < edit.groups.size())
+                edit.setTrackGroup (track->id, edit.groups[(size_t) (r - 300)]->id);
         }
         else if (r >= 100)
         {

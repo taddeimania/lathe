@@ -302,6 +302,67 @@ int main()
         engine.rebuild();
     }
 
+    std::cout << "Track groups" << std::endl;
+    {
+        // tracks[0] (with the latency plug-in) and tracks[1] both play the impulse at 13300.
+        auto g = edit.createGroup ({ edit.tracks[0]->id });
+        check (g != nullptr && edit.tracks[0]->groupId == g->id, "group created");
+        engine.rebuild();
+
+        g->mute = true;
+        engine.play();
+        auto out = runCallbacks (engine, 100);
+        engine.stop();
+        check (std::abs (out[13300] - 0.5f) < 0.01f, "group mute silences its member (got " + String (out[13300]) + ")");
+        check (! edit.tracks[0]->mute.load() && edit.isEffectivelyMuted (*edit.tracks[0]), "member's own mute is untouched");
+        g->mute = false;
+
+        g->solo = true;
+        engine.play();
+        out = runCallbacks (engine, 100);
+        engine.stop();
+        check (std::abs (out[13300] - 0.5f) < 0.01f, "group solo plays only its members (got " + String (out[13300]) + ")");
+        g->solo = false;
+
+        edit.toggleGroupArm (g->id);
+        check (edit.tracks[0]->arm.load() && edit.isGroupArmed (g->id), "arm all arms the members");
+        edit.toggleGroupArm (g->id);
+        check (! edit.tracks[0]->arm.load(), "and disarms them again");
+
+        edit.ungroup (g->id);
+        check (edit.groups.empty() && edit.tracks[0]->groupId == -1, "ungroup keeps the tracks, removes the group");
+        engine.rebuild();
+    }
+
+    {
+        Edit e;
+        auto a = e.addTrack (TrackKind::audio, "A");
+        auto b = e.addTrack (TrackKind::audio, "B");
+        auto c = e.addTrack (TrackKind::midi, "C");
+        auto d = e.addTrack (TrackKind::audio, "D");
+        auto bus = e.addTrack (TrackKind::bus);
+        auto g = e.createGroup ({ a->id, d->id, bus->id }, "Drums");
+        check (g != nullptr && e.groupMembers (g->id).size() == 2, "returns can't join a group");
+        check (e.tracks[0] == a && e.tracks[1] == d && e.tracks[2] == b, "members are moved next to each other");
+
+        e.setTrackGroup (c->id, g->id);
+        check (e.tracks[2] == c && c->groupId == g->id, "adding a track puts it after the other members");
+
+        g->mute = true;
+        g->collapsed = true;
+        auto json = JSON::toString (e.toVar (false));
+        Edit loaded;
+        loaded.loadFrom (JSON::parse (json), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        auto lg = loaded.groups.empty() ? nullptr : loaded.groups[0];
+        check (lg != nullptr && lg->name == "Drums" && lg->mute.load() && lg->collapsed && loaded.groupMembers (lg->id).size() == 3,
+               "groups survive save and load");
+
+        e.removeTrack (a->id);
+        e.removeTrack (d->id);
+        e.removeTrack (c->id);
+        check (e.groups.empty(), "a group disappears with its last track");
+    }
+
     std::cout << "Loop" << std::endl;
     {
         edit.loopEnabled = true;
@@ -361,6 +422,76 @@ int main()
         rec->arm = false;
         edit.removeTrack (rec->id);
         engine.rebuild();
+    }
+
+    std::cout << "Template -> new project -> record every armed track" << std::endl;
+    {
+        // A template like "Terry Jam Start": Kick on input 1, Snare on input 2, two returns.
+        Edit source;
+        auto kick = source.addTrack (TrackKind::audio, "Kick");
+        kick->input = { 0, false };
+        auto snare = source.addTrack (TrackKind::audio, "Snare");
+        snare->input = { 1, false };
+        snare->arm = true;
+        source.addTrack (TrackKind::bus, "A Reverb");
+        source.addTrack (TrackKind::bus, "B Delay");
+        const auto templateJson = JSON::toString (source.toVar (true));
+
+        // Load it the way File > New from Template does.
+        Edit fresh;
+        fresh.loadFrom (JSON::parse (templateJson), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        fresh.workDir = dir.getChildFile ("template-session");
+        fresh.sampleRate = 48000.0;
+        check (fresh.tracks.size() == 2 && fresh.tracks[0]->input.channel == 0 && fresh.tracks[1]->input.channel == 1,
+               "template keeps both tracks and their inputs");
+
+        Engine eng (host, pool, props);
+        eng.setEdit (&fresh);
+        FakeDevice dev (2, 2, 0, 0);
+        eng.audioDeviceAboutToStart (&dev);
+        eng.rebuild();
+
+        for (auto& t : fresh.tracks)
+            t->arm = true;
+
+        // Different signal on each input: a 0.25 impulse on input 1, a 0.75 one on input 2.
+        AudioBuffer<float> input (2, 256 * 40);
+        input.clear();
+        input.setSample (0, 3000, 0.25f);
+        input.setSample (1, 3000, 0.75f);
+
+        eng.toggleRecord();
+        std::vector<float> meterPeaks;
+        AudioBuffer<float> outs (2, 256), ins (2, 256);
+        float kickMeter = 0.0f, snareMeter = 0.0f;
+        for (int b = 0; b < 40; ++b)
+        {
+            for (int ch = 0; ch < 2; ++ch)
+                ins.copyFrom (ch, 0, input, ch, b * 256, 256);
+            eng.audioDeviceIOCallbackWithContext (ins.getArrayOfReadPointers(), 2, outs.getArrayOfWritePointers(), 2, 256, {});
+            kickMeter = jmax (kickMeter, fresh.tracks[0]->meterL.exchange (0.0f));
+            snareMeter = jmax (snareMeter, fresh.tracks[1]->meterL.exchange (0.0f));
+        }
+        eng.stop();
+
+        check (kickMeter > 0.1f && snareMeter > 0.1f, "both armed tracks show input on their meters while recording ("
+                                                       + String (kickMeter, 2) + ", " + String (snareMeter, 2) + ")");
+
+        auto peakOf = [&] (const Track& t)
+        {
+            if (t.clips.size() != 1) return -1.0f;
+            auto src = pool.get (t.clips[0].file);
+            if (src == nullptr) return -2.0f;
+            AudioBuffer<float> b (1, (int) src->lengthInSamples);
+            float* chans[1] = { b.getWritePointer (0) };
+            src->reader->read (chans, 1, 0, (int) src->lengthInSamples);
+            return b.getMagnitude (0, 0, b.getNumSamples());
+        };
+        const float kickPeak = peakOf (*fresh.tracks[0]);
+        const float snarePeak = peakOf (*fresh.tracks[1]);
+        check (std::abs (kickPeak - 0.25f) < 0.01f, "Kick got one clip with input 1's signal (peak " + String (kickPeak, 3) + ")");
+        check (std::abs (snarePeak - 0.75f) < 0.01f, "Snare got one clip with input 2's signal (peak " + String (snarePeak, 3) + ")");
+        eng.setEdit (nullptr);
     }
 
     std::cout << "Export" << std::endl;

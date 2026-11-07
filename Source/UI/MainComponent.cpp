@@ -8,7 +8,7 @@ namespace menu
     {
         newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit,
         undo = 100, redo, deleteClip, duplicate, split,
-        addAudio = 200, addMidi, addReturn, deleteTrack,
+        addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut,
         settings = 400, scan, metronome, browser,
         templateBase = 1000, recentBase = 2000
@@ -793,6 +793,11 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::addReturn, "Add Return Track", cmd + "Alt+T");
         m.addSeparator();
         auto t = edit.findTrack (ctx.selection.trackId);
+        m.addSeparator();
+        item (menu::groupTracks, ctx.selection.trackIds.size() > 1 ? "Group Selected Tracks" : "Group Track",
+              cmd + "G", t != nullptr && t->holdsClips());
+        item (menu::ungroupTracks, "Ungroup", cmd + "Shift+G", t != nullptr && t->groupId >= 0);
+        m.addSeparator();
         item (menu::deleteTrack, "Delete Selected Track", {}, t != nullptr && ! t->isMaster());
     }
     else if (index == 3)
@@ -871,6 +876,11 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::addAudio:      ctx.selectTrack (edit.addTrack (TrackKind::audio)->id); break;
         case menu::addMidi:       ctx.selectTrack (edit.addTrack (TrackKind::midi)->id); break;
         case menu::addReturn:     ctx.selectTrack (edit.addTrack (TrackKind::bus)->id); break;
+        case menu::groupTracks:   groupSelectedTracks (ctx, ctx.selection.trackId); break;
+        case menu::ungroupTracks:
+            if (auto t = edit.findTrack (ctx.selection.trackId); t != nullptr && t->groupId >= 0)
+                edit.ungroup (t->groupId);
+            break;
         case menu::deleteTrack:
             if (auto t = edit.findTrack (ctx.selection.trackId); t != nullptr && ! t->isMaster())
                 showTrackMenu (ctx, *this, t);
@@ -921,6 +931,7 @@ bool MainComponent::keyPressed (const KeyPress& k)
         if (is ('t')) { menuItemSelected (mods.isAltDown() ? menu::addReturn : shift ? menu::addMidi : menu::addAudio, 0); return true; }
         if (ch == ',') { menuItemSelected (menu::settings, 0); return true; }
         if (is ('b')) { openPluginBrowser(); return true; }
+        if (is ('g')) { menuItemSelected (shift ? menu::ungroupTracks : menu::groupTracks, 0); return true; }
         if (is ('q')) { JUCEApplication::getInstance()->systemRequestedQuit(); return true; }
         return false;
     }

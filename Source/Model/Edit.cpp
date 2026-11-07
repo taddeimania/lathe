@@ -59,6 +59,7 @@ void Edit::reset()
     insertMarker = 0.0;
     tracks.clear();
     buses.clear();
+    groups.clear();
     projectFile = File();
     workDir = File();
     undoStack.clear();
@@ -140,6 +141,7 @@ void Edit::removeTrack (int trackId)
 
     removeFrom (tracks);
     removeFrom (buses);
+    removeEmptyGroups();
 
     // Anything routed to a deleted bus falls back to the master; its sends go away.
     auto fixRouting = [trackId] (Track& t)
@@ -172,6 +174,137 @@ void Edit::moveTrack (int trackId, int newIndex)
             }
         }
     }
+}
+
+//==============================================================================
+std::shared_ptr<TrackGroup> Edit::findGroup (int groupId) const
+{
+    for (auto& g : groups)
+        if (g->id == groupId)
+            return g;
+    return {};
+}
+
+std::vector<std::shared_ptr<Track>> Edit::groupMembers (int groupId) const
+{
+    std::vector<std::shared_ptr<Track>> members;
+    for (auto& t : tracks)
+        if (t->groupId == groupId)
+            members.push_back (t);
+    return members;
+}
+
+void Edit::removeEmptyGroups()
+{
+    groups.erase (std::remove_if (groups.begin(), groups.end(), [this] (auto& g) { return groupMembers (g->id).empty(); }), groups.end());
+}
+
+std::shared_ptr<TrackGroup> Edit::createGroup (const std::vector<int>& trackIds, const String& name)
+{
+    auto g = std::make_shared<TrackGroup>();
+    g->id = newId();
+    g->name = name.isNotEmpty() ? name : "Group " + String ((int) groups.size() + 1);
+    g->colour = nextColour();
+
+    // Members sit together, where the first of them was.
+    std::vector<std::shared_ptr<Track>> members;
+    int firstIndex = -1;
+    for (size_t i = 0; i < tracks.size(); ++i)
+    {
+        if (std::find (trackIds.begin(), trackIds.end(), tracks[i]->id) != trackIds.end() && tracks[i]->holdsClips())
+        {
+            if (firstIndex < 0)
+                firstIndex = (int) i;
+            members.push_back (tracks[i]);
+        }
+    }
+    if (members.empty())
+        return {};
+
+    tracks.erase (std::remove_if (tracks.begin(), tracks.end(), [&] (auto& t)
+    {
+        return std::find (members.begin(), members.end(), t) != members.end();
+    }), tracks.end());
+    tracks.insert (tracks.begin() + jmin (firstIndex, (int) tracks.size()), members.begin(), members.end());
+
+    for (auto& t : members)
+        t->groupId = g->id;
+
+    groups.push_back (g);
+    removeEmptyGroups();
+    changed();
+    return g;
+}
+
+void Edit::setTrackGroup (int trackId, int groupId)
+{
+    auto t = findTrack (trackId);
+    if (t == nullptr || ! t->holdsClips())
+        return;
+
+    if (groupId >= 0 && findGroup (groupId) != nullptr)
+    {
+        // Move it next to the other members.
+        auto members = groupMembers (groupId);
+        t->groupId = groupId;
+        if (! members.empty() && members.back() != t)
+        {
+            tracks.erase (std::find (tracks.begin(), tracks.end(), t));
+            auto after = std::find (tracks.begin(), tracks.end(), members.back());
+            tracks.insert (after + 1, t);
+        }
+    }
+    else
+    {
+        t->groupId = -1;
+    }
+
+    removeEmptyGroups();
+    changed();
+}
+
+void Edit::ungroup (int groupId)
+{
+    for (auto& t : tracks)
+        if (t->groupId == groupId)
+            t->groupId = -1;
+    removeEmptyGroups();
+    changed();
+}
+
+bool Edit::isGroupArmed (int groupId) const
+{
+    auto members = groupMembers (groupId);
+    if (members.empty())
+        return false;
+    for (auto& t : members)
+        if (! t->arm.load())
+            return false;
+    return true;
+}
+
+void Edit::toggleGroupArm (int groupId)
+{
+    const bool arm = ! isGroupArmed (groupId);
+    for (auto& t : groupMembers (groupId))
+        t->arm = arm;
+    touched();
+}
+
+bool Edit::isEffectivelyMuted (const Track& t) const
+{
+    if (t.mute.load())
+        return true;
+    auto g = findGroup (t.groupId);
+    return g != nullptr && g->mute.load();
+}
+
+bool Edit::isEffectivelySoloed (const Track& t) const
+{
+    if (t.solo.load())
+        return true;
+    auto g = findGroup (t.groupId);
+    return g != nullptr && g->solo.load();
 }
 
 std::shared_ptr<Track> Edit::findTrack (int trackId) const
@@ -532,6 +665,9 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
         o->setProperty ("input", var (in.get()));
     }
 
+    if (t.groupId >= 0)
+        o->setProperty ("group", t.groupId);
+
     if (t.isMidi())
     {
         o->setProperty ("midiInput", t.midiInput);
@@ -607,6 +743,8 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
         t->input.channel = (int) in["channel"];
         t->input.stereo = (bool) in["stereo"];
     }
+
+    t->groupId = v.hasProperty ("group") ? (int) v["group"] : -1;
 
     if (v.hasProperty ("midiInput"))
     {
@@ -686,6 +824,21 @@ var Edit::toVar (bool asTemplate) const
     for (auto& t : buses)  busList.add (trackToVar (*t, asTemplate));
 
     o->setProperty ("tracks", trackList);
+
+    Array<var> groupList;
+    for (auto& g : groups)
+    {
+        DynamicObject::Ptr go = new DynamicObject();
+        go->setProperty ("id", g->id);
+        go->setProperty ("name", g->name);
+        go->setProperty ("colour", g->colour.toString());
+        go->setProperty ("mute", g->mute.load());
+        go->setProperty ("solo", g->solo.load());
+        go->setProperty ("collapsed", g->collapsed);
+        groupList.add (var (go.get()));
+    }
+    if (! groupList.isEmpty())
+        o->setProperty ("groups", groupList);
     o->setProperty ("returns", busList);
     o->setProperty ("master", trackToVar (*master, asTemplate));
     return var (o.get());
@@ -717,6 +870,22 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
 
     tracks.clear();
     buses.clear();
+    groups.clear();
+
+    if (auto* list = data["groups"].getArray())
+    {
+        for (auto& v : *list)
+        {
+            auto g = std::make_shared<TrackGroup>();
+            g->id = (int) v["id"];
+            g->name = v["name"].toString();
+            g->colour = Colour::fromString (v["colour"].toString());
+            g->mute = (bool) v["mute"];
+            g->solo = (bool) v["solo"];
+            g->collapsed = (bool) v["collapsed"];
+            groups.push_back (g);
+        }
+    }
 
     if (auto* list = data["tracks"].getArray())
         for (auto& v : *list)
@@ -735,7 +904,15 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
     }
 
     // Keep new ids clear of everything loaded.
+    // Tracks pointing at a group that isn't there are ungrouped; empty groups go.
+    for (auto& t : tracks)
+        if (t->groupId >= 0 && findGroup (t->groupId) == nullptr)
+            t->groupId = -1;
+    removeEmptyGroups();
+
     int maxId = master->id;
+    for (auto& g : groups)
+        maxId = jmax (maxId, g->id);
     for (auto* list : { &tracks, &buses })
         for (auto& t : *list)
         {

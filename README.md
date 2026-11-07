@@ -88,6 +88,18 @@ Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use
 - A new take replaces whatever was underneath it on that track. Undo (Cmd/Ctrl+Z) brings the old material back.
 - MIDI tracks record notes, CC, and pitch bend from any MIDI input (or the one you pick). To play hardware from a MIDI track, set **MIDI to** in the mixer, for example to the UMC's MIDI OUT.
 
+## Track groups
+
+Select tracks (Cmd/Ctrl-click or Shift-click their names), then press **Cmd/Ctrl+G** or right-click → **Group**. A group gets a header row in the arrangement with:
+
+- **Arm** arms every track in the group, or disarms them all if they're all armed.
+- **S / M** solo or mute the whole group, on top of each track's own buttons. The members' own states are kept, so un-muting the group brings back exactly what was there before.
+- **The triangle** collapses the group to its header, to save space on a big session.
+
+Click a group's header to select all its tracks. Double-click its name to rename it, and right-click it for colour, arm all, collapse and **Ungroup** (Cmd/Ctrl+Shift+G), which keeps the tracks. In the mixer, members show the group's name above their own. Groups are saved in projects and templates. They control tracks together but don't change the audio routing; to process a group's audio together, send its tracks to a return.
+
+Double-click any track or group name to rename it in place (Return keeps, Escape cancels). The scroll wheel scrolls the track list wherever the pointer is over the arrangement.
+
 ## Routing
 
 - **Inputs**: any mono input (In 1…18) or stereo pair. On the UMC1820, 1–8 are the preamps, 9–10 are S/PDIF, and 11–18 are ADAT (at 44.1 or 48 kHz).
@@ -109,6 +121,7 @@ Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use
 | L | Loop on/off (drag in the top strip of the ruler to set the loop) |
 | Tab | Arrangement / mixer |
 | Cmd/Ctrl+B | Plug-in browser |
+| Cmd/Ctrl+G, +Shift+G | Group the selected tracks / ungroup |
 | Cmd/Ctrl+T, +Shift+T, +Alt+T | Add audio / MIDI / return track |
 | Cmd/Ctrl+D | Duplicate clip |
 | Cmd/Ctrl+E | Split clip at the start marker |

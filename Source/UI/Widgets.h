@@ -2,6 +2,7 @@
 
 #include "../Engine/Engine.h"
 #include "Theme.h"
+#include <set>
 
 namespace lathe
 {
@@ -16,7 +17,8 @@ struct AppContext
 
     struct Selection
     {
-        int trackId = -1;
+        int trackId = -1;               // the focused track (device panel, record auto-arm)
+        std::set<int> trackIds;         // all selected tracks (Cmd/Ctrl- and Shift-click add more)
         int clipTrackId = -1, clipId = -1;
     } selection;
 
@@ -28,8 +30,40 @@ struct AppContext
     void selectTrack (int id)
     {
         selection.trackId = id;
+        selection.trackIds = { id };
         if (selectionChanged) selectionChanged();
     }
+    /** Cmd/Ctrl-click toggles a track in the selection, Shift-click selects a range. */
+    void extendSelection (int id, bool range)
+    {
+        if (range && selection.trackId >= 0)
+        {
+            int a = -1, b = -1;
+            for (size_t i = 0; i < edit.tracks.size(); ++i)
+            {
+                if (edit.tracks[i]->id == selection.trackId) a = (int) i;
+                if (edit.tracks[i]->id == id) b = (int) i;
+            }
+            if (a >= 0 && b >= 0)
+                for (int i = jmin (a, b); i <= jmax (a, b); ++i)
+                    selection.trackIds.insert (edit.tracks[(size_t) i]->id);
+        }
+        else if (selection.trackIds.count (id) && selection.trackIds.size() > 1)
+        {
+            selection.trackIds.erase (id);
+            if (selection.trackId == id)
+                selection.trackId = *selection.trackIds.begin();
+            if (selectionChanged) selectionChanged();
+            return;
+        }
+        else
+        {
+            selection.trackIds.insert (id);
+        }
+        selection.trackId = id;
+        if (selectionChanged) selectionChanged();
+    }
+    bool isSelected (int id) const   { return selection.trackIds.count (id) > 0 || selection.trackId == id; }
     void selectClip (int trackId, int clipId)
     {
         selection.trackId = trackId;
@@ -107,8 +141,17 @@ void showPluginSlotMenu (AppContext&, Component& anchor, std::shared_ptr<Track>,
 void removePlugin (AppContext&, Track&, const std::shared_ptr<PluginSlot>&);
 void movePlugin (AppContext&, Track&, const std::shared_ptr<PluginSlot>&, int delta);
 
-/** Track context menu (rename, colour, delete, ...). */
+/** Track context menu (rename, colour, group, delete, ...). */
 void showTrackMenu (AppContext&, Component& anchor, std::shared_ptr<Track>);
+/** Group context menu (rename, colour, arm all, collapse, ungroup). */
+void showGroupMenu (AppContext&, Component& anchor, std::shared_ptr<TrackGroup>);
+void renameGroup (AppContext&, std::shared_ptr<TrackGroup>);
+/** Groups the selected tracks (or just `fallback` if one or none is selected). */
+void groupSelectedTracks (AppContext&, int fallbackTrackId);
+
+/** Solo button behaviour: a plain click solos only this (clearing every other track and
+    group solo); Cmd/Ctrl-click adds to or removes from the soloed set. Pass a track or a group. */
+void toggleSolo (AppContext&, Track*, TrackGroup*);
 void renameTrack (AppContext&, std::shared_ptr<Track>);
 
 /** Asks for a line of text; calls back with the result only if confirmed. */

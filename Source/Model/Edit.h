@@ -92,6 +92,17 @@ struct PluginSlot
     bool isInstrument() const       { return description.isInstrument; }
 };
 
+/** A set of audio/MIDI tracks controlled together: the group's mute and solo apply
+    to every member (on top of their own), and arm arms or disarms them all. */
+struct TrackGroup
+{
+    int id = 0;
+    String name;
+    Colour colour;
+    std::atomic<bool> mute { false }, solo { false };
+    bool collapsed = false;   // arrangement view hides the member rows
+};
+
 struct Track
 {
     int id = 0;
@@ -108,6 +119,7 @@ struct Track
     String midiInput { "All" };   // "All", "None" or a device name
     String midiOutput;            // hardware MIDI output device name; empty = none
     int midiChannel = 1;          // 1..16, used for clip playback and hardware out
+    int groupId = -1;             // TrackGroup id, or -1
 
     OutputRoute output;
     std::vector<std::shared_ptr<Send>> sends;
@@ -152,6 +164,7 @@ public:
     std::vector<std::shared_ptr<Track>> tracks;   // audio + MIDI, in display order
     std::vector<std::shared_ptr<Track>> buses;    // return tracks
     std::shared_ptr<Track> master;
+    std::vector<std::shared_ptr<TrackGroup>> groups;
 
     // --- where the project lives
     File projectFile;   // empty until saved
@@ -165,6 +178,20 @@ public:
     std::shared_ptr<Track> addTrack (TrackKind kind, const String& name = {});
     void removeTrack (int trackId);
     void moveTrack (int trackId, int newIndex);
+
+    // --- groups
+    std::shared_ptr<TrackGroup> findGroup (int groupId) const;
+    std::vector<std::shared_ptr<Track>> groupMembers (int groupId) const;
+    /** Groups the given audio/MIDI tracks (taking them out of any other group). */
+    std::shared_ptr<TrackGroup> createGroup (const std::vector<int>& trackIds, const String& name = {});
+    void setTrackGroup (int trackId, int groupId);   // -1 removes it from its group
+    void ungroup (int groupId);                      // keeps the tracks
+    /** Arms every member, or disarms them all if they're all armed already. */
+    void toggleGroupArm (int groupId);
+    bool isGroupArmed (int groupId) const;
+    /** Effective states, combining a track's own with its group's. */
+    bool isEffectivelyMuted (const Track&) const;
+    bool isEffectivelySoloed (const Track&) const;
     std::shared_ptr<Track> findTrack (int trackId) const;
     int newId()     { return ++lastId; }
 
@@ -219,6 +246,7 @@ private:
     var clipsToVar() const;
     void clipsFromVar (const var&);
     var trackToVar (const Track&, bool asTemplate) const;
+    void removeEmptyGroups();
     std::shared_ptr<Track> trackFromVar (const var&, const File& baseDir, const PluginFactory&);
     var clipToVar (const Clip&) const;
     Clip clipFromVar (const var&, const File& baseDir) const;

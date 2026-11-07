@@ -133,18 +133,7 @@ public:
 
         styleToggle (solo, "S", theme::solo, "Solo");
         styleToggle (mute, "M", theme::mute, "Mute");
-        solo.onClick = [this]
-        {
-            const bool newState = ! track->solo.load();
-            if (! ModifierKeys::currentModifiers.isCommandDown())
-            {
-                auto& list = track->isBus() ? ctx.edit.buses : ctx.edit.tracks;
-                for (auto& other : list)
-                    other->solo = false;
-            }
-            track->solo = newState;
-            ctx.edit.touched();
-        };
+        solo.onClick = [this] { toggleSolo (ctx, track.get(), nullptr); };
         mute.onClick = [this] { track->mute = ! track->mute.load(); ctx.edit.touched(); };
         if (! track->isMaster())
         {
@@ -258,10 +247,21 @@ public:
 
     void paint (Graphics& g) override
     {
-        const bool selected = ctx.selection.trackId == track->id;
+        const bool selected = ctx.isSelected (track->id);
         g.fillAll (selected ? theme::headerSel : theme::panel);
         g.setColour (track->colour);
         g.fillRect (0, 0, getWidth(), 4);
+
+        // Group members carry the group's colour and name under the track colour.
+        if (auto group = ctx.edit.findGroup (track->groupId))
+        {
+            g.setColour (group->colour.withAlpha (0.55f));
+            g.fillRect (0, 4, getWidth(), 3);
+            g.setColour (group->mute.load() ? theme::mute : group->solo.load() ? theme::solo : theme::textDim);
+            g.setFont (theme::font (10.0f));
+            g.drawText (group->name + (group->mute.load() ? " (muted)" : group->solo.load() ? " (solo)" : ""),
+                        getLocalBounds().withTrimmedTop (8).withHeight (12).reduced (5, 0), Justification::centredRight, true);
+        }
         g.setColour (theme::border);
         g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
 
@@ -286,6 +286,7 @@ public:
         sectionLabels.clear();
         auto r = getLocalBounds().reduced (5, 0).withTrimmedTop (6).withTrimmedBottom (6);
 
+        r.removeFromTop (10);   // room for a group tag; kept on every strip so rows line up
         name.setBounds (r.removeFromTop (20));
         r.removeFromTop (4);
 
@@ -376,9 +377,18 @@ public:
 
     void mouseDown (const MouseEvent& e) override
     {
-        ctx.selectTrack (track->id);
         if (e.mods.isPopupMenu())
+        {
+            if (! ctx.isSelected (track->id))
+                ctx.selectTrack (track->id);
             showTrackMenu (ctx, *this, track);
+        }
+        else if (track->holdsClips() && e.mods.isShiftDown())
+            ctx.extendSelection (track->id, true);
+        else if (track->holdsClips() && e.mods.isCommandDown())
+            ctx.extendSelection (track->id, false);
+        else
+            ctx.selectTrack (track->id);
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
@@ -428,10 +438,13 @@ MixerView::~MixerView() = default;
 String MixerView::structureSignature() const
 {
     String s;
-    for (auto& t : ctx.edit.tracks) s << t->id << ",";
+    // Object identity, not just ids: ids restart at 2 in every project, so a newly
+    // loaded project or template can have the same ids as the one on screen.
+    auto key = [] (const void* p) { return String::toHexString ((pointer_sized_int) p); };
+    for (auto& t : ctx.edit.tracks) s << key (t.get()) << ":" << t->groupId << ",";
     s << "|";
-    for (auto& t : ctx.edit.buses) s << t->id << ",";
-    s << "|" << ctx.edit.master->id;
+    for (auto& t : ctx.edit.buses) s << key (t.get()) << ",";
+    s << "|" << key (ctx.edit.master.get());
     return s;
 }
 

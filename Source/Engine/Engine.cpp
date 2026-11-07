@@ -81,6 +81,7 @@ struct RenderSend
 struct RenderTrack
 {
     std::shared_ptr<Track> track;
+    std::shared_ptr<TrackGroup> group;   // read live: group mute/solo
     TrackKind kind = TrackKind::audio;
     std::vector<RenderClip> clips;
     std::vector<RenderMidi> midiEvents;
@@ -613,6 +614,7 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
         auto& rt = g->tracks[i];
         setup (rt, t);
 
+        rt.group = edit->findGroup (t->groupId);
         rt.inputChannel = t->input.channel;
         rt.inputStereo = t->input.stereo;
         rt.midiChannel = jlimit (1, 16, t->midiChannel);
@@ -1159,7 +1161,7 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
                           bool realtime, bool notesOff)
 {
     bool anySoloTrack = false, anySoloBus = false;
-    for (auto& rt : g.tracks) anySoloTrack = anySoloTrack || rt.track->solo.load();
+    for (auto& rt : g.tracks) anySoloTrack = anySoloTrack || rt.track->solo.load() || (rt.group != nullptr && rt.group->solo.load());
     for (auto& rt : g.buses)  anySoloBus = anySoloBus || rt.track->solo.load();
 
     for (auto& rt : g.buses)
@@ -1352,7 +1354,9 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
 
     rt.align.process (buf, len);
 
-    const bool silenced = t.mute.load() || (anySolo && ! t.solo.load());
+    const bool groupMuted = rt.group != nullptr && rt.group->mute.load();
+    const bool soloed = t.solo.load() || (rt.group != nullptr && rt.group->solo.load());
+    const bool silenced = t.mute.load() || groupMuted || (anySolo && ! soloed);
 
     if (! silenced)
     {

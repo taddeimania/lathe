@@ -14,32 +14,27 @@ public:
     {
         name.setFont (theme::font (13.0f));
         name.setColour (Label::textColourId, theme::text);
-        name.setEditable (false, true, false);
+        // Double-click the name to rename it in place (Return to keep, Escape to cancel).
+        name.setEditable (false, false, false);
         name.setInterceptsMouseClicks (false, false);
         name.onTextChange = [this]
         {
-            if (name.getText().trim().isNotEmpty())
+            if (name.getText().trim().isNotEmpty() && name.getText().trim() != track->name)
             {
                 track->name = name.getText().trim();
                 ctx.edit.changed();
             }
         };
+        // Don't touch the text here: on Return, JUCE hides the editor before it reports
+        // the new text, so resetting it now would throw the rename away.
+        name.onEditorHide = [this] { name.setInterceptsMouseClicks (false, false); };
         addAndMakeVisible (name);
 
         styleToggle (arm, "", theme::record, "Arm for recording");
         styleToggle (solo, "S", theme::solo, "Solo");
         styleToggle (mute, "M", theme::mute, "Mute");
         arm.onClick = [this] { track->arm = ! track->arm.load(); ctx.edit.touched(); };
-        solo.onClick = [this]
-        {
-            // Plain click solos exclusively; Cmd/Ctrl-click adds to the solo set.
-            const bool newState = ! track->solo.load();
-            if (! ModifierKeys::currentModifiers.isCommandDown())
-                for (auto& other : ctx.edit.tracks)
-                    other->solo = false;
-            track->solo = newState;
-            ctx.edit.touched();
-        };
+        solo.onClick = [this] { toggleSolo (ctx, track.get(), nullptr); };
         mute.onClick = [this] { track->mute = ! track->mute.load(); ctx.edit.touched(); };
         for (auto* b : { &arm, &solo, &mute })
             addAndMakeVisible (b);
@@ -69,6 +64,7 @@ public:
             ctx.edit.markDirty();
         };
         volume.setTooltip ("Volume");
+        volume.setScrollWheelEnabled (false);   // the wheel scrolls the track list
         addAndMakeVisible (volume);
 
         addAndMakeVisible (meter);
@@ -82,6 +78,8 @@ public:
         solo.setToggleState (track->solo.load(), dontSendNotification);
         mute.setToggleState (track->mute.load(), dontSendNotification);
         volume.setValue (theme::dbToFaderPos (track->volumeDb.load()), dontSendNotification);
+        updateMutedLook();
+        resized();
 
         // Refill the input list only when the choices could have changed.
         const auto key = track->isMidi() ? ctx.engine.getMidiInputNames().joinIntoString ("|") + track->midiInput
@@ -99,12 +97,20 @@ public:
 
     void tick()   { meter.tick(); }
 
+    int indent() const   { return ctx.edit.findGroup (track->groupId) != nullptr ? 8 : 0; }
+
     void paint (Graphics& g) override
     {
-        const bool selected = ctx.selection.trackId == track->id;
-        g.fillAll (selected ? theme::headerSel : theme::header);
+        g.fillAll (ctx.isSelected (track->id) ? theme::headerSel : theme::header);
+
+        const int x = indent();
+        if (auto group = ctx.edit.findGroup (track->groupId))
+        {
+            g.setColour (group->colour.withAlpha (0.55f));
+            g.fillRect (0, 0, 4, getHeight());
+        }
         g.setColour (track->colour);
-        g.fillRect (0, 0, 5, getHeight());
+        g.fillRect (x, 0, 5, getHeight());
         g.setColour (theme::border);
         g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
@@ -112,7 +118,7 @@ public:
         // tiny kind tag so audio and MIDI tracks are told apart at a glance
         g.setColour (theme::textDim);
         g.setFont (theme::font (10.5f));
-        g.drawText (track->isMidi() ? "MIDI" : "AUDIO", 12, getHeight() - 17, 40, 12, Justification::centredLeft);
+        g.drawText (track->isMidi() ? "MIDI" : "AUDIO", x + 12, getHeight() - 17, 40, 12, Justification::centredLeft);
     }
 
     void paintOverChildren (Graphics& g) override
@@ -124,7 +130,7 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().withTrimmedLeft (10).withTrimmedRight (12).reduced (0, 5);
+        auto r = getLocalBounds().withTrimmedLeft (10 + indent()).withTrimmedRight (12).reduced (0, 5);
         meter.setBounds (getWidth() - 10, 5, 6, getHeight() - 11);
 
         auto row1 = r.removeFromTop (22);
@@ -145,15 +151,40 @@ public:
 
     void mouseDown (const MouseEvent& e) override
     {
-        ctx.selectTrack (track->id);
         if (e.mods.isPopupMenu())
+        {
+            if (! ctx.isSelected (track->id))
+                ctx.selectTrack (track->id);
             showTrackMenu (ctx, *this, track);
+        }
+        else if (e.mods.isShiftDown())
+            ctx.extendSelection (track->id, true);
+        else if (e.mods.isCommandDown())
+            ctx.extendSelection (track->id, false);
+        else
+            ctx.selectTrack (track->id);
     }
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
-        if (name.getBounds().contains (e.getPosition()))
-            name.showEditor();
+        if (name.getBounds().expanded (4).contains (e.getPosition()))
+            MessageManager::callAsync ([safe = Component::SafePointer<Header> (this)] { if (safe != nullptr) safe->startRename(); });
+    }
+
+    void startRename()
+    {
+        name.setInterceptsMouseClicks (true, true);
+        name.showEditor();
+        if (auto* editor = name.getCurrentTextEditor())
+        {
+            editor->setFont (theme::font (13.0f));
+            editor->selectAll();
+        }
+    }
+
+    void updateMutedLook()
+    {
+        name.setColour (Label::textColourId, ctx.edit.isEffectivelyMuted (*track) ? theme::textDim : theme::text);
     }
 
     std::shared_ptr<Track> track;
@@ -167,6 +198,153 @@ private:
     Slider volume;
     LevelMeter meter;
     String inputKey;
+};
+
+//==============================================================================
+// Group header: collapse, name, and arm / solo / mute for every member
+//==============================================================================
+class ArrangementView::GroupHeader : public Component
+{
+public:
+    GroupHeader (ArrangementView& o, std::shared_ptr<TrackGroup> g)
+        : group (std::move (g)), owner (o), ctx (o.ctx)
+    {
+        name.setFont (theme::font (13.0f, true));
+        name.setEditable (false, false, false);
+        name.setInterceptsMouseClicks (false, false);
+        name.onTextChange = [this]
+        {
+            if (name.getText().trim().isNotEmpty() && name.getText().trim() != group->name)
+            {
+                group->name = name.getText().trim();
+                ctx.edit.changed();
+            }
+        };
+        // Don't touch the text here: on Return, JUCE hides the editor before it reports
+        // the new text, so resetting it now would throw the rename away.
+        name.onEditorHide = [this] { name.setInterceptsMouseClicks (false, false); };
+        addAndMakeVisible (name);
+
+        styleToggle (arm, "", theme::record, "Arm / disarm every track in the group");
+        styleToggle (solo, "S", theme::solo, "Solo the whole group");
+        styleToggle (mute, "M", theme::mute, "Mute the whole group");
+        arm.onClick = [this] { ctx.edit.toggleGroupArm (group->id); };
+        solo.onClick = [this] { toggleSolo (ctx, nullptr, group.get()); };
+        mute.onClick = [this] { group->mute = ! group->mute.load(); ctx.edit.touched(); };
+        for (auto* b : { &arm, &solo, &mute })
+            addAndMakeVisible (b);
+        update();
+    }
+
+    void update()
+    {
+        name.setText (group->name, dontSendNotification);
+        arm.setToggleState (ctx.edit.isGroupArmed (group->id), dontSendNotification);
+        solo.setToggleState (group->solo.load(), dontSendNotification);
+        mute.setToggleState (group->mute.load(), dontSendNotification);
+        repaint();
+    }
+
+    void paint (Graphics& g) override
+    {
+        bool allSelected = true;
+        const auto members = ctx.edit.groupMembers (group->id);
+        for (auto& t : members)
+            allSelected = allSelected && ctx.isSelected (t->id);
+
+        g.fillAll (allSelected && ! members.empty() ? theme::headerSel : theme::panelRaised);
+        g.setColour (group->colour);
+        g.fillRect (0, 0, 4, getHeight());
+        g.setColour (theme::border);
+        g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+        g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
+
+        // disclosure triangle
+        auto t = disclosureArea().toFloat().withSizeKeepingCentre (8.0f, 8.0f);
+        Path p;
+        if (group->collapsed)
+            p.addTriangle (t.getX() + 1.0f, t.getY(), t.getX() + 1.0f, t.getBottom(), t.getRight(), t.getCentreY());
+        else
+            p.addTriangle (t.getX(), t.getY() + 1.0f, t.getRight(), t.getY() + 1.0f, t.getCentreX(), t.getBottom());
+        g.setColour (theme::text);
+        g.fillPath (p);
+
+        // member count, shown in the gap between the name and the buttons
+        g.setColour (theme::textDim);
+        g.setFont (theme::font (11.0f));
+        g.drawText (String ((int) members.size()) + (members.size() == 1 ? " track" : " tracks"),
+                    name.getBounds().withLeft (name.getX() + nameTextWidth() + 8).withRight (arm.getX() - 4),
+                    Justification::centredLeft, true);
+    }
+
+    void paintOverChildren (Graphics& g) override
+    {
+        auto a = arm.getBounds().toFloat().withSizeKeepingCentre (9.0f, 9.0f);
+        g.setColour (arm.getToggleState() ? theme::textDark : theme::record.withSaturation (0.45f));
+        g.fillEllipse (a);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().withTrimmedLeft (8).withTrimmedRight (12).reduced (0, 4);
+        r.removeFromLeft (disclosureArea().getWidth());
+        mute.setBounds (r.removeFromRight (22));
+        r.removeFromRight (2);
+        solo.setBounds (r.removeFromRight (22));
+        r.removeFromRight (2);
+        arm.setBounds (r.removeFromRight (22));
+        r.removeFromRight (6);
+        name.setBounds (r);
+    }
+
+    void mouseDown (const MouseEvent& e) override
+    {
+        if (disclosureArea().contains (e.getPosition()) && ! e.mods.isPopupMenu())
+        {
+            group->collapsed = ! group->collapsed;
+            ctx.edit.changed();
+            return;
+        }
+
+        // Clicking the group selects all of its tracks.
+        const auto members = ctx.edit.groupMembers (group->id);
+        if (! members.empty())
+        {
+            ctx.selectTrack (members.front()->id);
+            for (auto& t : members)
+                ctx.selection.trackIds.insert (t->id);
+            if (ctx.selectionChanged)
+                ctx.selectionChanged();
+        }
+
+        if (e.mods.isPopupMenu())
+            showGroupMenu (ctx, *this, group);
+    }
+
+    void mouseDoubleClick (const MouseEvent& e) override
+    {
+        if (name.getBounds().expanded (4).contains (e.getPosition()))
+            MessageManager::callAsync ([safe = Component::SafePointer<GroupHeader> (this)]
+            {
+                if (safe == nullptr)
+                    return;
+                safe->name.setInterceptsMouseClicks (true, true);
+                safe->name.showEditor();
+                if (auto* editor = safe->name.getCurrentTextEditor())
+                    editor->selectAll();
+            });
+    }
+
+    std::shared_ptr<TrackGroup> group;
+
+private:
+    Rectangle<int> disclosureArea() const   { return { 8, 0, 18, getHeight() }; }
+    int nameTextWidth() const               { return GlyphArrangement::getStringWidthInt (name.getFont(), group->name); }
+
+    ArrangementView& owner;
+    AppContext& ctx;
+    Label name;
+    TextButton arm, solo, mute;
 };
 
 //==============================================================================
@@ -355,21 +533,34 @@ public:
         g.fillAll (theme::lane);
 
         // rows
-        for (int i = 0; i < (int) edit.tracks.size(); ++i)
+        int stripe = 0;
+        for (auto& row : owner.rows)
         {
-            const int y = owner.trackTop (i);
-            if (y > clip.getBottom() || y + theme::trackHeight < clip.getY())
+            const int y = row.y - owner.scrollY;
+            if (y > clip.getBottom() || y + row.height < clip.getY())
+            {
+                ++stripe;
                 continue;
-            g.setColour ((i % 2) ? theme::laneAlt : theme::lane);
-            g.fillRect (clip.getX(), y, clip.getWidth(), theme::trackHeight);
-            if (ctx.selection.trackId == edit.tracks[(size_t) i]->id)
+            }
+
+            if (row.group != nullptr)
+            {
+                // group row: a band in the group's colour
+                g.setColour (theme::panel.interpolatedWith (row.group->colour, 0.10f));
+                g.fillRect (clip.getX(), y, clip.getWidth(), row.height);
+                continue;
+            }
+
+            g.setColour ((stripe++ % 2) ? theme::laneAlt : theme::lane);
+            g.fillRect (clip.getX(), y, clip.getWidth(), row.height);
+            if (ctx.isSelected (edit.tracks[(size_t) row.trackIndex]->id))
             {
                 g.setColour (Colours::white.withAlpha (0.025f));
-                g.fillRect (clip.getX(), y, clip.getWidth(), theme::trackHeight);
+                g.fillRect (clip.getX(), y, clip.getWidth(), row.height);
             }
         }
 
-        const int contentBottom = owner.trackTop ((int) edit.tracks.size());
+        const int contentBottom = owner.contentBottom();
 
         // loop region shading
         if (edit.loopEnabled)
@@ -389,11 +580,9 @@ public:
             g.drawVerticalLine (roundToInt (x), 0.0f, (float) contentBottom);
         }
 
-        for (int i = 0; i <= (int) edit.tracks.size(); ++i)
-        {
-            g.setColour (theme::border);
-            g.drawHorizontalLine (owner.trackTop (i) - 1, 0.0f, (float) getWidth());
-        }
+        g.setColour (theme::border);
+        for (auto& row : owner.rows)
+            g.drawHorizontalLine (row.y + row.height - owner.scrollY - 1, 0.0f, (float) getWidth());
 
         // empty area below the tracks
         if (contentBottom < getHeight())
@@ -412,6 +601,8 @@ public:
         // clips
         for (int i = 0; i < (int) edit.tracks.size(); ++i)
         {
+            if (! owner.isTrackShown (i))
+                continue;
             auto& t = *edit.tracks[(size_t) i];
             const int y = owner.trackTop (i);
             if (y > clip.getBottom() || y + theme::trackHeight < clip.getY())
@@ -854,8 +1045,57 @@ String ArrangementView::structureSignature() const
 {
     String s;
     for (auto& t : ctx.edit.tracks)
-        s << t->id << ",";
+        s << String::toHexString ((pointer_sized_int) t.get()) << ":" << t->groupId << ",";   // identity, not just id
+    s << "|";
+    for (auto& g : ctx.edit.groups)
+        s << String::toHexString ((pointer_sized_int) g.get()) << (g->collapsed ? "c" : "o") << ",";
     return s;
+}
+
+void ArrangementView::layoutRows()
+{
+    auto& edit = ctx.edit;
+    rows.clear();
+    trackTops.assign (edit.tracks.size(), -1);
+    std::set<int> placedGroups;
+    int y = 0;
+
+    // Display order follows edit.tracks; a group's header appears where its first
+    // member is, followed by all its members.
+    for (size_t i = 0; i < edit.tracks.size(); ++i)
+    {
+        auto& t = edit.tracks[i];
+        auto group = edit.findGroup (t->groupId);
+
+        if (group == nullptr)
+        {
+            rows.push_back ({ nullptr, (int) i, y, theme::trackHeight });
+            trackTops[i] = y;
+            y += theme::trackHeight;
+            continue;
+        }
+
+        if (placedGroups.count (group->id))
+            continue;
+        placedGroups.insert (group->id);
+
+        rows.push_back ({ group, -1, y, kGroupHeaderHeight });
+        y += kGroupHeaderHeight;
+
+        if (group->collapsed)
+            continue;
+
+        for (size_t j = i; j < edit.tracks.size(); ++j)
+        {
+            if (edit.tracks[j]->groupId != group->id)
+                continue;
+            rows.push_back ({ nullptr, (int) j, y, theme::trackHeight });
+            trackTops[j] = y;
+            y += theme::trackHeight;
+        }
+    }
+
+    contentHeight = y;
 }
 
 void ArrangementView::refresh()
@@ -865,16 +1105,35 @@ void ArrangementView::refresh()
     {
         signature = sig;
         headers.clear();
+        groupHeaders.clear();
         for (auto& t : ctx.edit.tracks)
-            headerHolder.addAndMakeVisible (headers.add (new Header (*this, t)));
+            headerHolder.addChildComponent (headers.add (new Header (*this, t)));
+        for (auto& g : ctx.edit.groups)
+            headerHolder.addChildComponent (groupHeaders.add (new GroupHeader (*this, g)));
         resized();
     }
 
+    layoutRows();
     for (auto* h : headers)
         h->update();
+    for (auto* h : groupHeaders)
+        h->update();
 
-    updateScrollBars();
+    resized();
     repaint();
+}
+
+void ArrangementView::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w)
+{
+    // Over the track headers (or anywhere that doesn't use the wheel itself): scroll the list.
+    float dx = w.deltaX, dy = w.deltaY;
+    if (e.mods.isShiftDown() && dx == 0.0f)
+        std::swap (dx, dy);
+
+    if (dy != 0.0f)
+        vbar.setCurrentRangeStart (vbar.getCurrentRangeStart() - dy * 300.0);
+    if (dx != 0.0f)
+        hbar.setCurrentRangeStart (hbar.getCurrentRangeStart() - dx * 300.0 / pxPerBeat);
 }
 
 void ArrangementView::tick()
@@ -927,8 +1186,11 @@ double ArrangementView::snap (double beat, bool bypass) const
 
 int ArrangementView::trackIndexAtY (int laneY) const
 {
-    const int index = (laneY + scrollY) / theme::trackHeight;
-    return (laneY + scrollY >= 0 && index < (int) ctx.edit.tracks.size()) ? index : -1;
+    const int y = laneY + scrollY;
+    for (auto& row : rows)
+        if (y >= row.y && y < row.y + row.height)
+            return row.trackIndex;   // -1 for group rows
+    return -1;
 }
 
 void ArrangementView::zoom (double factor, float anchorX)
@@ -947,8 +1209,8 @@ void ArrangementView::updateScrollBars()
     hbar.setRangeLimits (0.0, total, dontSendNotification);
     hbar.setCurrentRange (scrollBeats, visibleBeats, dontSendNotification);
 
-    const int contentHeight = (int) ctx.edit.tracks.size() * theme::trackHeight + 120;
-    vbar.setRangeLimits (0.0, jmax (contentHeight, lanes->getHeight()), dontSendNotification);
+    const int totalHeight = contentHeight + 120;
+    vbar.setRangeLimits (0.0, jmax (totalHeight, lanes->getHeight()), dontSendNotification);
     vbar.setCurrentRange (scrollY, lanes->getHeight(), dontSendNotification);
     scrollY = (int) vbar.getCurrentRangeStart();
 }
@@ -996,7 +1258,21 @@ void ArrangementView::resized()
 
     headerHolder.setBounds (left);
     for (int i = 0; i < headers.size(); ++i)
-        headers[i]->setBounds (0, trackTop (i), left.getWidth(), theme::trackHeight);
+    {
+        headers[i]->setVisible (isTrackShown (i));
+        if (isTrackShown (i))
+            headers[i]->setBounds (0, trackTop (i), left.getWidth(), theme::trackHeight);
+    }
+    for (auto* gh : groupHeaders)
+    {
+        gh->setVisible (false);
+        for (auto& row : rows)
+            if (row.group == gh->group)
+            {
+                gh->setBounds (0, row.y - scrollY, left.getWidth(), row.height);
+                gh->setVisible (true);
+            }
+    }
 
     updateScrollBars();
 }
