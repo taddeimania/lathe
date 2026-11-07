@@ -3,7 +3,23 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
-## What's in 0.1.0
+## New in 0.2.0
+
+- **Monitor mixes** for in-ears and headphone feeds: a second mix of the same
+  channels on its own output pair, with its own level, pan and mute per
+  channel, its own click level, and an option to keep the click out of the
+  main outputs. They're saved in projects and templates.
+- **Channel EQ** on every track, return and the master: a 24 dB/oct low cut,
+  a low shelf, two bells, a high shelf and a high cut, with a curve on each
+  mixer strip.
+- **Track groups** (Cmd/Ctrl+G): arm, solo and mute a group together, and
+  fold it up in the arrangement.
+- Double-click a track name to rename it. The scroll wheel scrolls the track
+  list.
+- Fixed: after File > New from Template, meters stayed empty and only one
+  armed track recorded.
+
+## Also in Lathe
 
 - **Arrangement**: audio and MIDI tracks, clips with waveforms, a snap grid,
   a loop region, split, duplicate and trim, and drag-and-drop audio import.
