@@ -13,6 +13,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <cstdlib>
 
+#if JUCE_WINDOWS
+ #include <windows.h>
+#endif
+
 using namespace juce;
 
 static int scan (const StringArray& args)
@@ -49,6 +53,10 @@ static int scan (const StringArray& args)
 #if JUCE_WINDOWS
 int wmain (int argc, wchar_t* argv[])
 {
+    // A crashing plug-in should just end this process, not pop up an error dialog
+    // (which would also leave the scan waiting until it times out).
+    SetErrorMode (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+
     StringArray args;
     for (int i = 1; i < argc; ++i)
         args.add (String (argv[i]));

@@ -34,15 +34,24 @@ build\Lathe_artefacts\Release\Lathe.exe
 
 ASIO support is built in automatically. Steinberg's ASIO SDK has been GPLv3 since October 2025, and CMake fetches it. To build without it, pass `-DLATHE_ASIO=OFF`. To use your own copy, pass `-DLATHE_ASIO_SDK_DIR=...`.
 
+### Builds on GitHub
+
+`.github/workflows/build.yml` builds and tests Lathe on macOS (universal), Windows and Linux. It works like the plug-in repos' workflow: it runs only when you start it (**Actions > Build > Run workflow**).
+
+- On a branch, it builds, runs the tests, and keeps the three packaged apps as run artifacts for 30 days.
+- On a `v*` tag, it does the same and then creates a **draft release** with the three archives and the text from `.github/release-notes.md`. Review the draft and publish it. The tag must match `project(Lathe VERSION ...)` in `CMakeLists.txt`.
+
+Each archive holds the app, `LatheScanner` (next to `Lathe.exe`, or inside `Lathe.app`), `README.md` and `LICENSE`.
+
 ### Tests
 
 ```sh
 cmake -B build -DLATHE_BUILD_TESTS=ON
-cmake --build build --target LatheTests
-./build/LatheTests_artefacts/Release/LatheTests     # or Debug/
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-These are headless engine checks that run a fake audio device through the real audio callback. They cover clip timing, plug-in delay compensation, mute, solo and faders, sends, looping, record-latency offset, export, project round-trip, and clip splitting and undo. With `LATHE_TEST_VST3_DIR` pointing at a folder of test plug-ins (a working one plus ones that crash on unload and hang), they also check that scanning skips the bad plug-ins without freezing or crashing Lathe. They also test the plug-in store: release parsing against the real release format, picking the right platform archive, zip (with Unix permissions) and tar.gz installs, updates over an existing copy, staged updates, and the full download-and-install flow.
+These are headless engine checks that run a fake audio device through the real audio callback. They cover clip timing, plug-in delay compensation, mute, solo and faders, sends, looping, record-latency offset, export, project round-trip, and clip splitting and undo. The test build also makes three tiny VST3s (one that works, one that crashes while loading, and one that hangs). With those, the tests check that scanning skips the bad plug-ins without freezing or crashing Lathe. They also test the plug-in store: release parsing against the real release format, picking the right platform archive, zip (with Unix permissions) and tar.gz installs, updates over an existing copy, staged updates, and the full download-and-install flow.
 
 ---
 

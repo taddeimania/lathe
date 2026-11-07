@@ -556,8 +556,9 @@ int main()
     std::cout << "Out-of-process plug-in scanning" << std::endl;
     if (auto fixtures = File (SystemStats::getEnvironmentVariable ("LATHE_TEST_VST3_DIR", {})); fixtures.isDirectory())
     {
-        // Needs three VST3s in that folder: GainFixture (works), CrashOnUnload (crashes
-        // after describing itself, like VCV Rack) and Hangs (never returns).
+        // Needs a working "GainFixture", a VST3 whose name starts with "Crash" (crashes
+        // while loading or unloading, like VCV Rack) and one starting "Hang" (never returns).
+        // The build makes these when LATHE_BUILD_TESTS is on (build/test-vst3).
         auto scanDir = dir.getChildFile ("scan");
         scanDir.createDirectory();
         PropertiesFile scanProps (scanDir.getChildFile ("scan.settings"), opts);
@@ -589,8 +590,14 @@ int main()
         check (gainFound, "the working plug-in was found");
 
         const auto skipped = scanHost.getSkippedPlugins().joinIntoString (", ");
-        check (skipped.contains ("CrashOnUnload (crashed while being scanned)"), "the crashing plug-in was skipped: " + skipped);
-        check (skipped.contains ("Hangs (stopped responding"), "the hanging plug-in was skipped");
+        bool crashSkipped = false, hangSkipped = false;
+        for (auto& s2 : scanHost.getSkippedPlugins())
+        {
+            crashSkipped = crashSkipped || (s2.startsWith ("Crash") && s2.contains ("(crashed while being scanned)"));
+            hangSkipped = hangSkipped || (s2.startsWith ("Hang") && s2.contains ("(stopped responding"));
+        }
+        check (crashSkipped, "the crashing plug-in was skipped: " + skipped);
+        check (hangSkipped, "the hanging plug-in was skipped");
 
         // Skipped plug-ins stay skipped next time, and the next scan is quick.
         finished = false;
