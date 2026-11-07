@@ -1,0 +1,939 @@
+#include "MainComponent.h"
+
+namespace lathe
+{
+namespace menu
+{
+    enum
+    {
+        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit,
+        undo = 100, redo, deleteClip, duplicate, split,
+        addAudio = 200, addMidi, addReturn, deleteTrack,
+        toggleView = 300, toggleDetail, zoomIn, zoomOut,
+        settings = 400, scan, metronome, browser,
+        templateBase = 1000, recentBase = 2000
+    };
+}
+
+//==============================================================================
+/** Drag bar between the main view and the bottom panel. */
+class MainComponent::Divider : public Component
+{
+public:
+    explicit Divider (MainComponent& o) : owner (o)   { setMouseCursor (MouseCursor::UpDownResizeCursor); }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (theme::border);
+        g.setColour (theme::control);
+        g.fillRect (getWidth() / 2 - 12, 2, 24, 1);
+    }
+
+    void mouseDown (const MouseEvent&) override   { startHeight = owner.detailHeight; }
+    void mouseDrag (const MouseEvent& e) override
+    {
+        owner.detailHeight = jlimit (90, jmax (120, owner.getHeight() - 260), startHeight - e.getDistanceFromDragStartY());
+        owner.resized();
+    }
+    void mouseDoubleClick (const MouseEvent&) override
+    {
+        owner.detailShown = ! owner.detailShown;
+        owner.resized();
+    }
+
+private:
+    MainComponent& owner;
+    int startHeight = 0;
+};
+
+//==============================================================================
+MainComponent::MainComponent (PropertiesFile& s)
+    : settings (s),
+      host (s),
+      engine (host, pool, s),
+      ctx { edit, engine, host, pool, s, {}, {}, {}, {}, {} },
+      transport (ctx),
+      arrangement (ctx),
+      mixer (ctx),
+      devices (ctx),
+      pianoRoll (ctx),
+      store (host, s.getFile().getParentDirectory())
+{
+    // Plug-in updates that couldn't be swapped in last time (the old one was loaded) go in now,
+    // before anything loads a plug-in.
+    for (auto& bundle : PluginStore::applyPendingInstalls (s.getFile().getParentDirectory()))
+    {
+        OwnedArray<PluginDescription> found;
+        host.scanFile (bundle, found);
+    }
+    store.updateInstalledState();
+
+    setWantsKeyboardFocus (true);
+    divider = std::make_unique<Divider> (*this);
+
+    ctx.selectionChanged = [this]
+    {
+        devices.setTrack (edit.findTrack (ctx.selection.trackId));
+        if (browserWindow != nullptr && browserWindow->isVisible())
+            browserWindow->getBrowser().refreshSoon();
+        arrangement.repaint();
+        mixer.repaint();
+        for (auto* c : mixer.getChildren())
+            c->repaint();
+    };
+    ctx.openClipEditor = [this] (int trackId, int clipId)
+    {
+        pianoRoll.setClip (trackId, clipId);
+        showDetail (true);
+    };
+    ctx.showStatus = [this] (const String& m) { setStatus (m); };
+    ctx.openPluginBrowser = [this] { openPluginBrowser(); };
+
+    store.onChanged = [this]
+    {
+        if (browserWindow != nullptr && browserWindow->isVisible())
+            browserWindow->getBrowser().refreshSoon();
+
+        // Once per session, mention updates for your plug-ins.
+        if (! announcedUpdates && ! store.isRefreshing())
+        {
+            StringArray names;
+            for (auto& e : store.entries)
+                if (e.updateAvailable())
+                    names.add (e.name + " " + e.version);
+            if (! names.isEmpty())
+            {
+                announcedUpdates = true;
+                setStatus ("Plug-in updates on GitHub: " + names.joinIntoString (", ") + ". Open the plug-in browser (Cmd/Ctrl+B) to update.");
+            }
+        }
+    };
+
+    pianoRoll.onClose = [this] { showDetail (false); };
+    transport.onViewChange = [this] (bool m) { setMixerShown (m); };
+    transport.onOpenSettings = [this] { showSettingsDialog (ctx); };
+
+    engine.onStatus = [this] (const String& m) { setStatus (m); };
+    engine.onDeviceChanged = [this] { refreshAll(); };
+    engine.onRecordingFinished = [this] { refreshAll(); };
+
+    host.onScanProgress = [this] { statusRight.setText (host.getScanStatus(), dontSendNotification); };
+    host.onScanFinished = [this]
+    {
+        statusRight.setText ({}, dontSendNotification);
+        const auto skipped = host.getSkippedPlugins();
+        setStatus ("Plug-in scan finished: " + String (host.known.getNumTypes()) + " plug-ins available."
+                   + (skipped.isEmpty() ? String()
+                                        : "  Skipped " + String (skipped.size()) + " that failed to load safely: "
+                                          + skipped.joinIntoString (", ") + ". See Settings."));
+        reloadMissingPlugins();
+        store.updateInstalledState();
+        if (browserWindow != nullptr && browserWindow->isVisible())
+            browserWindow->getBrowser().refreshSoon();
+    };
+
+    addAndMakeVisible (transport);
+    addAndMakeVisible (arrangement);
+    addChildComponent (mixer);
+    addAndMakeVisible (devices);
+    addChildComponent (pianoRoll);
+    addAndMakeVisible (*divider);
+
+    for (auto* l : { &statusLeft, &statusRight })
+    {
+        l->setFont (theme::font (12.0f));
+        l->setColour (Label::textColourId, theme::textDim);
+        addAndMakeVisible (l);
+    }
+    statusRight.setJustificationType (Justification::centredRight);
+
+    recentFiles.setMaxNumberOfItems (10);
+    recentFiles.restoreFromString (settings.getValue ("recentProjects"));
+    detailHeight = settings.getIntValue ("detailHeight", 190);
+    engine.metronomeOn = settings.getBoolValue ("metronome", false);
+
+    edit.addChangeListener (this);
+    engine.setEdit (&edit);
+    engine.openDevice();
+
+    ensureBuiltInTemplates();
+
+    if (host.known.getNumTypes() == 0)
+    {
+        setStatus ("First run: scanning your VST3 plug-ins in the background...");
+        host.startScan (false);
+    }
+
+    setSize (1360, 860);
+    startTimerHz (30);
+
+    // Quietly check GitHub for new versions of your plug-ins (cached for an hour).
+    store.refresh (false);
+}
+
+MainComponent::~MainComponent()
+{
+    stopTimer();
+    browserWindow.reset();
+    store.onChanged = nullptr;
+    settings.setValue ("detailHeight", detailHeight);
+    settings.setValue ("recentProjects", recentFiles.toString());
+    engine.saveDeviceSettings();
+    edit.removeChangeListener (this);
+
+#if JUCE_MAC
+    MenuBarModel::setMacMainMenu (nullptr);
+#endif
+}
+
+//==============================================================================
+void MainComponent::startup (const String& commandLine)
+{
+    const auto arg = commandLine.unquoted().trim();
+    if (arg.isNotEmpty() && File::isAbsolutePath (arg) && File (arg).existsAsFile())
+    {
+        openProject (File (arg));
+        return;
+    }
+
+    const auto last = File (settings.getValue ("lastProject"));
+    if (settings.getValue ("startup", "last") == "last" && last.existsAsFile())
+    {
+        openProject (last);
+        return;
+    }
+
+    newProject (getTemplatesDir().getChildFile (settings.getValue ("defaultTemplate", "Basic") + kProjectExtension));
+}
+
+void MainComponent::ensureBuiltInTemplates()
+{
+    getTemplatesDir().createDirectory();
+
+    auto writeTemplate = [] (const String& name, std::function<void (Edit&)> build)
+    {
+        auto f = getTemplatesDir().getChildFile (name + kProjectExtension);
+        if (f.existsAsFile())
+            return;
+        Edit e;
+        build (e);
+        f.replaceWithText (JSON::toString (e.toVar (true)));
+    };
+
+    writeTemplate ("Basic", [] (Edit& e)
+    {
+        auto a1 = e.addTrack (TrackKind::audio, "Audio 1");
+        a1->input = { 0, false };
+        auto a2 = e.addTrack (TrackKind::audio, "Audio 2");
+        a2->input = { 1, false };
+        e.addTrack (TrackKind::midi, "MIDI 1");
+        e.addTrack (TrackKind::bus, "A Reverb");
+        e.addTrack (TrackKind::bus, "B Delay");
+    });
+
+    // All eight UMC1820 preamps on their own tracks, monitored through the
+    // interface's MONITORING knob (zero latency) rather than through Lathe.
+    writeTemplate ("UMC1820 Tracking", [] (Edit& e)
+    {
+        for (int i = 0; i < 8; ++i)
+        {
+            auto t = e.addTrack (TrackKind::audio, "Input " + String (i + 1));
+            t->input = { i, false };
+            t->monitor = (int) Monitor::off;
+        }
+        e.addTrack (TrackKind::midi, "MIDI 1");
+        e.addTrack (TrackKind::bus, "A Reverb");
+        e.addTrack (TrackKind::bus, "B Delay");
+    });
+}
+
+Edit::PluginFactory MainComponent::makePluginFactory (StringArray& missing)
+{
+    return [this, &missing] (const PluginDescription& desc, const MemoryBlock& state)
+    {
+        String error;
+        auto slot = engine.makeSlot (desc, state, error);
+        if (slot->instance == nullptr)
+            missing.addIfNotAlreadyThere (desc.name);
+        return slot;
+    };
+}
+
+void MainComponent::newProject (const File& templateFile)
+{
+    if (engine.isPlaying())
+        engine.stop();
+
+    edit.reset();
+    StringArray missing;
+
+    if (templateFile.existsAsFile())
+    {
+        const auto data = JSON::parse (templateFile);
+        const auto result = edit.loadFrom (data, File(), makePluginFactory (missing));
+        if (result.failed())
+            setStatus ("Couldn't read template " + templateFile.getFileName() + ": " + result.getErrorMessage());
+        edit.projectFile = File();
+        edit.workDir = File();
+        for (auto& t : edit.tracks)
+            t->clips.clear();
+    }
+    else
+    {
+        edit.addTrack (TrackKind::audio)->input = { 0, false };
+        edit.addTrack (TrackKind::midi);
+    }
+
+    edit.sampleRate = engine.getSampleRate() > 0 ? engine.getSampleRate() : 48000.0;
+    ctx.selection = {};
+    if (! edit.tracks.empty())
+        ctx.selection.trackId = edit.tracks.front()->id;
+    showDetail (false);
+
+    engine.rebuild();
+    edit.needsRebuild = false;
+    edit.dirty = false;
+    refreshAll();
+
+    setStatus (missing.isEmpty() ? (templateFile.existsAsFile() ? "New project from template \"" + templateFile.getFileNameWithoutExtension() + "\"" : String ("New project"))
+                                 : "Missing plug-ins: " + missing.joinIntoString (", "));
+}
+
+void MainComponent::openProject (const File& file)
+{
+    if (! file.existsAsFile())
+    {
+        setStatus ("Can't find " + file.getFullPathName());
+        return;
+    }
+
+    const auto autosave = autosaveFileFor (file);
+    if (autosave.existsAsFile() && autosave.getLastModificationTime() > file.getLastModificationTime())
+    {
+        auto options = MessageBoxOptions()
+                           .withIconType (MessageBoxIconType::QuestionIcon)
+                           .withTitle ("Recover unsaved changes?")
+                           .withMessage ("Lathe found autosaved changes to \"" + file.getFileNameWithoutExtension()
+                                         + "\" that are newer than the saved project (it may have closed unexpectedly).")
+                           .withButton ("Recover")
+                           .withButton ("Open saved version");
+        AlertWindow::showAsync (options, [this, file, autosave] (int button)
+        {
+            loadProjectFile (file, button == 1 ? autosave : file);
+            if (button == 1)
+                edit.dirty = true;
+            else
+                autosave.deleteFile();
+            updateTitle();
+        });
+        return;
+    }
+
+    loadProjectFile (file, file);
+}
+
+void MainComponent::loadProjectFile (const File& file, const File& readFrom)
+{
+    const auto data = JSON::parse (readFrom);
+    if (! data.isObject())
+    {
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Can't open project",
+                                          readFrom.getFileName() + " isn't a readable Lathe project.");
+        return;
+    }
+
+    if (engine.isPlaying())
+        engine.stop();
+
+    // Match the device to the project's sample rate, if the interface can do it.
+    const double projectRate = data.hasProperty ("sampleRate") ? (double) data["sampleRate"] : 0.0;
+    if (auto* device = engine.deviceManager.getCurrentAudioDevice(); device != nullptr && projectRate > 0
+        && std::abs (device->getCurrentSampleRate() - projectRate) > 0.5)
+    {
+        if (device->getAvailableSampleRates().contains (projectRate))
+        {
+            auto setup = engine.deviceManager.getAudioDeviceSetup();
+            setup.sampleRate = projectRate;
+            engine.deviceManager.setAudioDeviceSetup (setup, true);
+        }
+    }
+
+    edit.reset();
+    edit.projectFile = file;
+    edit.workDir = file.getParentDirectory();
+
+    StringArray missing;
+    const auto result = edit.loadFrom (data, edit.workDir, makePluginFactory (missing));
+    if (result.failed())
+    {
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Can't open project", result.getErrorMessage());
+        newProject ({});
+        return;
+    }
+
+    ctx.selection = {};
+    if (! edit.tracks.empty())
+        ctx.selection.trackId = edit.tracks.front()->id;
+    showDetail (false);
+    engine.seekTo (edit.insertMarker);
+
+    engine.rebuild();
+    edit.needsRebuild = false;
+    edit.dirty = false;
+    refreshAll();
+
+    settings.setValue ("lastProject", file.getFullPathName());
+    recentFiles.addFile (file);
+    settings.setValue ("recentProjects", recentFiles.toString());
+
+    int missingAudio = 0;
+    for (auto& t : edit.tracks)
+        for (auto& c : t->clips)
+            if (c.kind == ClipKind::audio && ! c.file.existsAsFile())
+                ++missingAudio;
+
+    StringArray problems;
+    if (! missing.isEmpty())
+        problems.add ("missing plug-ins: " + missing.joinIntoString (", "));
+    if (missingAudio > 0)
+        problems.add (String (missingAudio) + " audio file(s) not found");
+    if (engine.getSampleRate() > 0 && std::abs (engine.getSampleRate() - edit.sampleRate) > 0.5)
+        problems.add ("project is " + String (edit.sampleRate / 1000.0, 1) + " kHz but the device runs at "
+                      + String (engine.getSampleRate() / 1000.0, 1) + " kHz");
+
+    setStatus (problems.isEmpty() ? "Opened " + file.getFileNameWithoutExtension()
+                                  : "Opened with problems: " + problems.joinIntoString ("; "));
+}
+
+void MainComponent::save (std::function<void (bool)> done)
+{
+    if (edit.projectFile == File())
+    {
+        saveAs (done);
+        return;
+    }
+
+    const auto file = edit.projectFile;
+    const auto text = JSON::toString (edit.toVar (false));
+
+    // Keep the previous version as a .bak, then replace atomically.
+    if (file.existsAsFile())
+        file.copyFileTo (file.getSiblingFile (file.getFileName() + ".bak"));
+
+    TemporaryFile temp (file);
+    const bool ok = temp.getFile().replaceWithText (text) && temp.overwriteTargetFileWithTemporary();
+
+    if (ok)
+    {
+        edit.dirty = false;
+        autosaveFileFor (file).deleteFile();
+        settings.setValue ("lastProject", file.getFullPathName());
+        recentFiles.addFile (file);
+        settings.setValue ("recentProjects", recentFiles.toString());
+        setStatus ("Saved " + file.getFullPathName());
+    }
+    else
+    {
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Save failed",
+                                          "Couldn't write " + file.getFullPathName());
+    }
+
+    updateTitle();
+    if (done)
+        done (ok);
+}
+
+void MainComponent::saveAs (std::function<void (bool)> done)
+{
+    getProjectsDir().createDirectory();
+    chooser = std::make_unique<FileChooser> ("Save project as", getProjectsDir().getChildFile (edit.getName()), "*.lathe");
+    chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles,
+                          [this, done] (const FileChooser& fc)
+    {
+        const auto chosen = fc.getResult();
+        if (chosen == File())
+        {
+            if (done) done (false);
+            return;
+        }
+
+        // Every project gets its own folder: Name/Name.lathe, Name/Audio, Name/Exports.
+        const auto name = chosen.getFileNameWithoutExtension();
+        auto folder = chosen.getParentDirectory();
+        if (folder.getFileName() != name)
+            folder = folder.getChildFile (name);
+        folder.createDirectory();
+        const auto newFile = folder.getChildFile (name + kProjectExtension);
+        const auto audioDir = folder.getChildFile ("Audio");
+
+        // Bring all audio into the new folder so the project is self-contained.
+        std::map<String, File> copied;
+        int failures = 0;
+        for (auto& t : edit.tracks)
+        {
+            for (auto& c : t->clips)
+            {
+                if (c.kind != ClipKind::audio || ! c.file.existsAsFile() || c.file.isAChildOf (folder))
+                    continue;
+
+                const auto key = c.file.getFullPathName();
+                if (copied.find (key) == copied.end())
+                {
+                    audioDir.createDirectory();
+                    auto dest = audioDir.getChildFile (c.file.getFileName());
+                    if (dest.existsAsFile())
+                        dest = audioDir.getNonexistentChildFile (c.file.getFileNameWithoutExtension(), c.file.getFileExtension(), false);
+                    if (c.file.copyFileTo (dest))
+                        copied[key] = dest;
+                    else
+                    {
+                        ++failures;
+                        copied[key] = c.file;
+                    }
+                }
+                c.file = copied[key];
+            }
+        }
+
+        edit.projectFile = newFile;
+        edit.workDir = folder;
+        if (failures > 0)
+            setStatus (String (failures) + " audio file(s) couldn't be copied into the project folder.");
+
+        engine.rebuild();
+        save (done);
+    });
+}
+
+void MainComponent::saveAsTemplate()
+{
+    askForText ("Save as template", "Name for the template (tracks, routing and plug-ins are saved; clips are not):",
+                edit.getName(), [this] (const String& name)
+    {
+        getTemplatesDir().createDirectory();
+        const auto f = getTemplatesDir().getChildFile (File::createLegalFileName (name) + kProjectExtension);
+        if (f.replaceWithText (JSON::toString (edit.toVar (true))))
+            setStatus ("Saved template \"" + name + "\". Choose it in File > New from Template, or make it the default in Settings.");
+        else
+            setStatus ("Couldn't write " + f.getFullPathName());
+    });
+}
+
+void MainComponent::confirmDiscard (std::function<void()> proceed)
+{
+    if (! edit.dirty)
+    {
+        proceed();
+        return;
+    }
+
+    AlertWindow::showYesNoCancelBox (MessageBoxIconType::QuestionIcon, "Save changes?",
+                                     "Save the changes to \"" + edit.getName() + "\" first?",
+                                     "Save", "Don't save", "Cancel", nullptr,
+                                     ModalCallbackFunction::create ([this, proceed] (int result)
+    {
+        if (result == 1)
+            save ([proceed] (bool ok) { if (ok) proceed(); });
+        else if (result == 2)
+            proceed();
+    }));
+}
+
+void MainComponent::writeAutosave()
+{
+    if (! edit.dirty || ! edit.projectFile.existsAsFile() || engine.isRecording())
+        return;
+    autosaveFileFor (edit.projectFile).replaceWithText (JSON::toString (edit.toVar (false)));
+}
+
+void MainComponent::reloadMissingPlugins()
+{
+    int reloaded = 0;
+    for (auto* list : { &edit.tracks, &edit.buses })
+    {
+        for (auto& t : *list)
+        {
+            for (auto& slot : t->plugins)
+            {
+                if (slot->instance != nullptr)
+                    continue;
+                String error;
+                auto fresh = engine.makeSlot (slot->description, slot->savedState, error);
+                if (fresh->instance != nullptr)
+                {
+                    fresh->bypassed = slot->bypassed.load();
+                    slot = fresh;
+                    ++reloaded;
+                }
+            }
+        }
+    }
+    if (reloaded > 0)
+    {
+        edit.changed();
+        setStatus ("Loaded " + String (reloaded) + " plug-in(s) that were missing before the scan.");
+    }
+}
+
+void MainComponent::openPluginBrowser()
+{
+    if (browserWindow == nullptr)
+        browserWindow = std::make_unique<PluginBrowserWindow> (ctx, store);
+    browserWindow->show();
+    store.refresh (false);
+}
+
+void MainComponent::importAudio()
+{
+    chooser = std::make_unique<FileChooser> ("Import audio", File::getSpecialLocation (File::userMusicDirectory),
+                                             "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectMultipleItems,
+                          [this] (const FileChooser& fc)
+    {
+        int trackIndex = -1;
+        for (size_t i = 0; i < edit.tracks.size(); ++i)
+            if (edit.tracks[i]->id == ctx.selection.trackId)
+                trackIndex = (int) i;
+        arrangement.importFiles (fc.getResults(), trackIndex, edit.insertMarker);
+    });
+}
+
+//==============================================================================
+void MainComponent::changeListenerCallback (ChangeBroadcaster*)
+{
+    if (edit.needsRebuild)
+    {
+        edit.needsRebuild = false;
+        engine.rebuild();
+    }
+    refreshAll();
+}
+
+void MainComponent::refreshAll()
+{
+    transport.refresh();
+    arrangement.refresh();
+    mixer.refresh();
+    devices.setTrack (edit.findTrack (ctx.selection.trackId));
+    devices.refresh();
+    if (pianoRollShown)
+    {
+        if (pianoRoll.hasClip())
+            pianoRoll.refresh();
+        else
+            showDetail (false);
+    }
+    updateTitle();
+}
+
+void MainComponent::updateTitle()
+{
+    if (auto* w = findParentComponentOfClass<DocumentWindow>())
+        w->setName (edit.getName() + (edit.dirty ? "*" : "") + "  -  Lathe");
+}
+
+void MainComponent::setStatus (const String& message)
+{
+    statusLeft.setText (message, dontSendNotification);
+    statusTime = Time::getMillisecondCounter();
+}
+
+void MainComponent::timerCallback()
+{
+    transport.refresh();
+    if (mixerShown) mixer.tick();
+    else            arrangement.tick();
+    if (pianoRollShown)
+        pianoRoll.tick();
+
+    if (++ticks % 30 == 0)
+    {
+        if (statusTime != 0 && Time::getMillisecondCounter() - statusTime > 12000)
+        {
+            statusLeft.setText ({}, dontSendNotification);
+            statusTime = 0;
+        }
+        updateTitle();
+
+        if (++lastAutosave >= 60)
+        {
+            lastAutosave = 0;
+            writeAutosave();
+        }
+    }
+}
+
+void MainComponent::setMixerShown (bool m)
+{
+    mixerShown = m;
+    transport.setMixerShown (m);
+    arrangement.setVisible (! m);
+    mixer.setVisible (m);
+    if (m)
+        mixer.refresh();
+    else
+        arrangement.refresh();
+}
+
+void MainComponent::showDetail (bool roll)
+{
+    pianoRollShown = roll;
+    detailShown = true;
+    pianoRoll.setVisible (roll);
+    devices.setVisible (! roll);
+    if (roll && detailHeight < 240)
+        detailHeight = 280;
+    resized();
+    if (roll)
+        pianoRoll.grabKeyboardFocus();
+}
+
+//==============================================================================
+void MainComponent::paint (Graphics& g)
+{
+    g.fillAll (theme::window);
+    g.setColour (theme::panel);
+    g.fillRect (getLocalBounds().removeFromBottom (theme::statusHeight));
+}
+
+void MainComponent::resized()
+{
+    auto r = getLocalBounds();
+    transport.setBounds (r.removeFromTop (theme::transportHeight));
+
+    auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
+    statusRight.setBounds (status.removeFromRight (420));
+    statusLeft.setBounds (status);
+
+    if (detailShown)
+    {
+        auto detail = r.removeFromBottom (jmin (detailHeight, jmax (90, r.getHeight() - 200)));
+        devices.setBounds (detail);
+        pianoRoll.setBounds (detail);
+        divider->setBounds (r.removeFromBottom (5));
+    }
+    else
+    {
+        devices.setBounds ({});
+        pianoRoll.setBounds ({});
+        divider->setBounds (r.removeFromBottom (5));
+    }
+
+    arrangement.setBounds (r);
+    mixer.setBounds (r);
+}
+
+//==============================================================================
+StringArray MainComponent::getMenuBarNames()
+{
+    return { "File", "Edit", "Track", "View", "Options" };
+}
+
+PopupMenu MainComponent::getMenuForIndex (int index, const String&)
+{
+    PopupMenu m;
+   #if JUCE_MAC
+    const String cmd = "Cmd+";
+   #else
+    const String cmd = "Ctrl+";
+   #endif
+
+    auto item = [&] (int id, const String& text, const String& shortcut = {}, bool enabled = true, bool ticked = false)
+    {
+        PopupMenu::Item i (text);
+        i.itemID = id;
+        i.isEnabled = enabled;
+        i.isTicked = ticked;
+        i.shortcutKeyDescription = shortcut;
+        m.addItem (i);
+    };
+
+    if (index == 0)
+    {
+        item (menu::newProject, "New Project", cmd + "N");
+
+        PopupMenu templates;
+        int i = 0;
+        for (auto& f : getTemplatesDir().findChildFiles (File::findFiles, false, "*.lathe"))
+            templates.addItem (menu::templateBase + i++, f.getFileNameWithoutExtension());
+        m.addSubMenu ("New from Template", templates, i > 0);
+
+        item (menu::open, "Open...", cmd + "O");
+        PopupMenu recent;
+        recentFiles.createPopupMenuItems (recent, menu::recentBase, true, true);
+        m.addSubMenu ("Open Recent", recent, recent.getNumItems() > 0);
+        m.addSeparator();
+        item (menu::save, "Save", cmd + "S");
+        item (menu::saveAs, "Save As...", cmd + "Shift+S");
+        item (menu::saveTemplate, "Save as Template...");
+        m.addSeparator();
+        item (menu::importAudio, "Import Audio...", cmd + "I");
+        item (menu::exportAudio, "Export Mix / Stems...", cmd + "Shift+E");
+        m.addSeparator();
+        item (menu::showFolder, "Show Project Folder", {}, edit.workDir.isDirectory());
+       #if ! JUCE_MAC
+        m.addSeparator();
+        item (menu::quit, "Quit", cmd + "Q");
+       #endif
+    }
+    else if (index == 1)
+    {
+        item (menu::undo, "Undo (clips and notes)", cmd + "Z", edit.canUndo());
+        item (menu::redo, "Redo", cmd + "Shift+Z", edit.canRedo());
+        m.addSeparator();
+        const bool hasClip = ctx.selection.clipId >= 0;
+        item (menu::duplicate, "Duplicate Clip", cmd + "D", hasClip);
+        item (menu::split, "Split Clip at Start Marker", cmd + "E", hasClip);
+        item (menu::deleteClip, "Delete Clip", "Delete", hasClip);
+    }
+    else if (index == 2)
+    {
+        item (menu::addAudio, "Add Audio Track", cmd + "T");
+        item (menu::addMidi, "Add MIDI Track", cmd + "Shift+T");
+        item (menu::addReturn, "Add Return Track", cmd + "Alt+T");
+        m.addSeparator();
+        auto t = edit.findTrack (ctx.selection.trackId);
+        item (menu::deleteTrack, "Delete Selected Track", {}, t != nullptr && ! t->isMaster());
+    }
+    else if (index == 3)
+    {
+        item (menu::toggleView, mixerShown ? "Show Arrangement" : "Show Mixer", "Tab");
+        item (menu::toggleDetail, "Show Bottom Panel", {}, true, detailShown);
+        m.addSeparator();
+        item (menu::zoomIn, "Zoom In", "+");
+        item (menu::zoomOut, "Zoom Out", "-");
+    }
+    else if (index == 4)
+    {
+        item (menu::browser, "Plug-in Browser...", cmd + "B");
+        item (menu::settings, "Audio / MIDI Settings...", cmd + ",");
+        item (menu::scan, host.isScanning() ? "Scanning Plug-ins..." : "Scan for New Plug-ins", {}, ! host.isScanning());
+        item (menu::metronome, "Metronome", "C", true, engine.metronomeOn.load());
+    }
+    return m;
+}
+
+void MainComponent::menuItemSelected (int id, int)
+{
+    if (id >= menu::recentBase)
+    {
+        const auto f = recentFiles.getFile (id - menu::recentBase);
+        confirmDiscard ([this, f] { openProject (f); });
+        return;
+    }
+
+    if (id >= menu::templateBase)
+    {
+        auto files = getTemplatesDir().findChildFiles (File::findFiles, false, "*.lathe");
+        const int index = id - menu::templateBase;
+        if (index < files.size())
+        {
+            const auto f = files[index];
+            confirmDiscard ([this, f] { newProject (f); });
+        }
+        return;
+    }
+
+    switch (id)
+    {
+        case menu::newProject:
+            confirmDiscard ([this]
+            {
+                newProject (getTemplatesDir().getChildFile (settings.getValue ("defaultTemplate", "Basic") + kProjectExtension));
+            });
+            break;
+        case menu::open:
+            confirmDiscard ([this]
+            {
+                chooser = std::make_unique<FileChooser> ("Open project", getProjectsDir(), "*.lathe");
+                chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                                      [this] (const FileChooser& fc)
+                {
+                    if (fc.getResult().existsAsFile())
+                        openProject (fc.getResult());
+                });
+            });
+            break;
+        case menu::save:          save(); break;
+        case menu::saveAs:        saveAs(); break;
+        case menu::saveTemplate:  saveAsTemplate(); break;
+        case menu::importAudio:   importAudio(); break;
+        case menu::exportAudio:   showExportDialog (ctx); break;
+        case menu::showFolder:    edit.workDir.revealToUser(); break;
+        case menu::quit:          JUCEApplication::getInstance()->systemRequestedQuit(); break;
+
+        case menu::undo:          if (! edit.undo()) setStatus ("Nothing to undo."); break;
+        case menu::redo:          edit.redo(); break;
+        case menu::deleteClip:    arrangement.deleteSelectedClip(); break;
+        case menu::duplicate:     arrangement.duplicateSelectedClip(); break;
+        case menu::split:         arrangement.splitSelectedClip(); break;
+
+        case menu::addAudio:      ctx.selectTrack (edit.addTrack (TrackKind::audio)->id); break;
+        case menu::addMidi:       ctx.selectTrack (edit.addTrack (TrackKind::midi)->id); break;
+        case menu::addReturn:     ctx.selectTrack (edit.addTrack (TrackKind::bus)->id); break;
+        case menu::deleteTrack:
+            if (auto t = edit.findTrack (ctx.selection.trackId); t != nullptr && ! t->isMaster())
+                showTrackMenu (ctx, *this, t);
+            break;
+
+        case menu::toggleView:    setMixerShown (! mixerShown); break;
+        case menu::toggleDetail:  detailShown = ! detailShown; resized(); break;
+        case menu::zoomIn:        arrangement.zoom (1.25, 0.0f); break;
+        case menu::zoomOut:       arrangement.zoom (0.8, 0.0f); break;
+
+        case menu::settings:      showSettingsDialog (ctx); break;
+        case menu::scan:          host.startScan (false); break;
+        case menu::browser:       openPluginBrowser(); break;
+        case menu::metronome:     engine.metronomeOn = ! engine.metronomeOn.load(); break;
+        default: break;
+    }
+}
+
+bool MainComponent::keyPressed (const KeyPress& k)
+{
+    const auto mods = k.getModifiers();
+    const bool cmd = mods.isCommandDown();
+    const bool shift = mods.isShiftDown();
+    const int code = k.getKeyCode();
+    const auto ch = CharacterFunctions::toLowerCase (k.getTextCharacter());
+
+    // Letter key codes arrive upper- or lower-case depending on the platform, and
+    // with Ctrl held the text character can be a control code, so check both.
+    auto is = [&] (juce_wchar c)
+    {
+        return ch == c || (code > 0 && code < 256 && CharacterFunctions::toLowerCase ((juce_wchar) code) == c);
+    };
+
+    if (code == KeyPress::spaceKey && ! cmd)   { engine.togglePlay(); return true; }
+    if (code == KeyPress::homeKey)             { edit.insertMarker = 0.0; engine.seekTo (0.0); edit.sendChangeMessage(); return true; }
+    if (code == KeyPress::tabKey && ! cmd)     { setMixerShown (! mixerShown); return true; }
+
+    if (cmd)
+    {
+        if (is ('z')) { menuItemSelected (shift ? menu::redo : menu::undo, 0); return true; }
+        if (is ('y')) { menuItemSelected (menu::redo, 0); return true; }
+        if (is ('s')) { menuItemSelected (shift ? menu::saveAs : menu::save, 0); return true; }
+        if (is ('o')) { menuItemSelected (menu::open, 0); return true; }
+        if (is ('n')) { menuItemSelected (menu::newProject, 0); return true; }
+        if (is ('i')) { menuItemSelected (menu::importAudio, 0); return true; }
+        if (is ('e')) { menuItemSelected (shift ? menu::exportAudio : menu::split, 0); return true; }
+        if (is ('d')) { menuItemSelected (menu::duplicate, 0); return true; }
+        if (is ('t')) { menuItemSelected (mods.isAltDown() ? menu::addReturn : shift ? menu::addMidi : menu::addAudio, 0); return true; }
+        if (ch == ',') { menuItemSelected (menu::settings, 0); return true; }
+        if (is ('b')) { openPluginBrowser(); return true; }
+        if (is ('q')) { JUCEApplication::getInstance()->systemRequestedQuit(); return true; }
+        return false;
+    }
+
+    if (code == KeyPress::deleteKey || code == KeyPress::backspaceKey)
+        return arrangement.deleteSelectedClip();
+
+    if (is ('r')) { transport.record(); return true; }
+    if (is ('c')) { engine.metronomeOn = ! engine.metronomeOn.load(); settings.setValue ("metronome", engine.metronomeOn.load()); return true; }
+    if (is ('l')) { edit.loopEnabled = ! edit.loopEnabled; edit.changed(); return true; }
+    if (ch == '+' || ch == '=') { arrangement.zoom (1.25, 0.0f); return true; }
+    if (ch == '-') { arrangement.zoom (0.8, 0.0f); return true; }
+
+    return false;
+}
+} // namespace lathe
