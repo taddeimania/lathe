@@ -4,6 +4,8 @@
 #include "Engine/Engine.h"
 #include "Engine/PluginStore.h"
 #include "Patcher/Updater.h"
+#include "Cloud/ProjectDiff.h"
+#include "Cloud/Revisions.h"
 #if ! JUCE_WINDOWS
  #include <unistd.h>
 #endif
@@ -1018,6 +1020,226 @@ int main()
                  && ! app.getChildFile ("Contents/Helpers").exists()
                  && ! apps.getChildFile (".Lathe.app.old").exists(),
                "replaces Lathe.app as a whole");
+    }
+
+    std::cout << "Cloud: change summaries" << std::endl;
+    {
+        Edit a;
+        auto drums = a.addTrack (TrackKind::audio, "Drums");
+        auto verb = a.addTrack (TrackKind::bus, "Verb");
+        drums->volumeDb = -2.0f;
+        const auto before = a.toVar (false);
+
+        drums->volumeDb = -4.0f;
+        drums->pan = -0.6f;
+        drums->getSend (verb->id, true)->levelDb = -12.0f;
+        drums->eq.bands[2].gainDb = 3.0f;
+        drums->eq.bands[2].freq = 400.0f;
+        a.addTrack (TrackKind::midi, "Keys");
+        a.setTempo (124.0);
+        const auto lines = cloud::describeChanges (before, a.toVar (false));
+        const auto text = lines.joinIntoString ("\n");
+        std::cout << "    " << text.replace ("\n", "\n    ") << std::endl;
+        check (text.contains ("\"Drums\": fader -2.0 dB -> -4.0 dB") && text.contains ("pan C -> 30L"), "names fader and pan moves");
+        check (text.contains ("send to Verb -inf dB -> -12.0 dB"), "names send changes by return");
+        check (text.contains ("EQ Bell 1 400 Hz +3.0 dB (was 0.0 dB)"), "names EQ band changes");
+        check (text.contains ("+ \"Keys\" (new midi track)") && text.contains ("Tempo 120.0 -> 124.0 BPM"), "new tracks and tempo");
+        check (cloud::describeChanges (a.toVar (false), a.toVar (false)).isEmpty(), "no changes says nothing");
+
+        // A kept snapshot (clips carry hashes, shared Audio/ paths) vs. the same project live.
+        {
+            const auto liveDir = dir.getChildFile ("cloud-diff");
+            liveDir.getChildFile ("Audio").createDirectory();
+            Edit live;
+            live.projectFile = liveDir.getChildFile ("Song.lathe");
+            live.workDir = liveDir;
+            Clip take;
+            take.id = live.newId();
+            take.kind = ClipKind::audio;
+            take.file = writeImpulseWav (liveDir.getChildFile ("Audio/Take.wav"), 4800, 5);
+            live.addTrack (TrackKind::audio, "Gtr")->clips.push_back (take);
+            cloud::LocalStore liveStore (live.projectFile);
+            auto kept = cloud::Snapshot::capture (live);
+            kept.finish (liveStore);
+            check (cloud::describeChanges (cloud::Snapshot::capture (live).project, kept.project).isEmpty(),
+                   "a kept snapshot of the same project shows no changes");
+        }
+
+        // Plug-in knobs, from the readable values a snapshot records.
+        auto plug = [] (const String& decay)
+        {
+            DynamicObject::Ptr params = new DynamicObject();
+            params->setProperty ("Decay", decay);
+            params->setProperty ("Mix", "30 %");
+            DynamicObject::Ptr p = new DynamicObject();
+            p->setProperty ("description", "<PLUGIN name=\"Nave\"/>");
+            p->setProperty ("state", "state-" + decay);
+            p->setProperty ("params", var (params.get()));
+            DynamicObject::Ptr t = new DynamicObject();
+            t->setProperty ("id", 7);
+            t->setProperty ("name", "Vox");
+            t->setProperty ("plugins", Array<var> { var (p.get()) });
+            DynamicObject::Ptr proj = new DynamicObject();
+            proj->setProperty ("tracks", Array<var> { var (t.get()) });
+            return var (proj.get());
+        };
+        const auto knob = cloud::summariseChanges (plug ("2.1 s"), plug ("3.4 s"));
+        check (knob == "\"Vox\": Nave: Decay 2.1 s -> 3.4 s", "names the plug-in knob that moved (got " + knob + ")");
+    }
+
+    std::cout << "Cloud: snapshots and local history" << std::endl;
+    {
+        const auto projDir = dir.getChildFile ("cloud-local/Song");
+        projDir.getChildFile ("Audio").createDirectory();
+        Edit e;
+        e.projectFile = projDir.getChildFile ("Song.lathe");
+        e.workDir = projDir;
+        auto t = e.addTrack (TrackKind::audio, "Kick");
+        Clip c;
+        c.id = e.newId();
+        c.kind = ClipKind::audio;
+        c.file = writeImpulseWav (projDir.getChildFile ("Audio/Kick 1.wav"), 4800, 10);
+        t->clips.push_back (c);
+        // A take that lives outside the project folder is shared too.
+        Clip outside = c;
+        outside.id = e.newId();
+        dir.getChildFile ("cloud-local/elsewhere").createDirectory();
+        outside.file = writeImpulseWav (dir.getChildFile ("cloud-local/elsewhere/Loop.wav"), 4800, 20);
+        t->clips.push_back (outside);
+
+        cloud::LocalStore store (e.projectFile);
+        auto snap = cloud::Snapshot::capture (e);
+        check (snap.finish (store).wasOk() && snap.hash.length() == 64, "snapshot hashes");
+        const auto& clips = *snap.project["tracks"][0]["clips"].getArray();
+        check (clips[0]["file"].toString() == "Audio/Kick 1.wav" && clips[1]["file"].toString() == "Audio/Loop.wav"
+                 && clips[0]["hash"].toString() == cloud::sha256OfFile (c.file), "clips carry their hash and a shared Audio/ path");
+        check (! snap.project.hasProperty ("insertMarker"), "where Play starts isn't part of a revision");
+
+        auto again = cloud::Snapshot::capture (e);
+        again.finish (store);
+        check (again.hash == snap.hash, "the same project always hashes the same");
+
+        const auto local = cloud::keepWorkingCopy (store, snap, "me", "before switching");
+        check (local.local && store.hasObject (local.snapshot) && store.getRevisions().size() == 1, "keeps the working copy as a local revision");
+        check (cloud::keepWorkingCopy (store, again, "me", "again").id == local.id, "doesn't keep the same content twice");
+
+        var opened;
+        check (cloud::prepareRevision (nullptr, store, local, opened, {}).wasOk(), "opens a local revision offline");
+        const auto& oc = *opened["tracks"][0]["clips"].getArray();
+        check (oc[0]["file"].toString() == "Audio/Kick 1.wav" && File (oc[1]["file"].toString()) == outside.file,
+               "finds the outside take where it really is");
+    }
+
+    if (SystemStats::getEnvironmentVariable ("LATHE_API_URL", {}).isNotEmpty())
+    {
+        std::cout << "Cloud: two people sharing a project (local backend)" << std::endl;
+        PropertiesFile::Options o;
+        o.applicationName = "LatheCloudTests";
+        o.filenameSuffix = ".settings";
+        o.folderName = dir.getFullPathName();
+        PropertiesFile cloudSettings (dir.getChildFile ("cloud.settings"), o);
+        const auto config = cloud::Config::load (cloudSettings);
+        auto user = [] (const char* env)
+        {
+            const auto spec = SystemStats::getEnvironmentVariable (env, {});
+            return std::make_pair (spec.upToFirstOccurrenceOf (":", false, false), spec.fromFirstOccurrenceOf (":", false, false));
+        };
+        const auto [joelEmail, joelPass] = user ("LATHE_TEST_USER1");
+        const auto [terryEmail, terryPass] = user ("LATHE_TEST_USER2");
+        auto factory = [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); };
+
+        cloud::Client joel (config), terry (config);
+        check (joel.signIn (joelEmail, joelPass, {}).wasOk() && terry.signIn (terryEmail, terryPass, {}).wasOk(), "both sign in");
+        check (joel.signIn (joelEmail, "wrong-password", {}).failed(), "a wrong password is refused");
+        joel.signIn (joelEmail, joelPass, {});
+
+        // Joel's project, with a recorded take.
+        const auto joelDir = dir.getChildFile ("cloud-joel/Jam");
+        Edit je;
+        je.projectFile = joelDir.getChildFile ("Jam.lathe");
+        je.workDir = joelDir;
+        auto hats = je.addTrack (TrackKind::audio, "Hats");
+        Clip take;
+        take.id = je.newId();
+        take.kind = ClipKind::audio;
+        joelDir.getChildFile ("Audio").createDirectory();
+        take.file = writeImpulseWav (joelDir.getChildFile ("Audio/Hats 1.wav"), 48000, 100);
+        hats->clips.push_back (take);
+        joelDir.createDirectory();
+        je.projectFile.replaceWithText (JSON::toString (je.toVar (false)));
+
+        cloud::LocalStore joelStore (je.projectFile);
+        check (cloud::createCloudProject (joel, joelStore, "Jam").wasOk() && joelStore.isLinked(), "shares the project");
+        auto s1 = cloud::Snapshot::capture (je);
+        auto p1 = cloud::push (joel, joelStore, s1, {}, "First take", {});
+        check (p1.result.wasOk() && p1.revision.seq == 1 && joelStore.getBase() == p1.revision.id, "pushes r1");
+        cloud::ApiError err;
+        DynamicObject::Ptr share = new DynamicObject();
+        share->setProperty ("email", terryEmail);
+        joel.call ("POST", "/projects/" + joelStore.getProjectId() + "/members", var (share.get()), err);
+        check (err.status == 0, "shares it with Terry");
+
+        // Terry gets it.
+        const auto terryDir = dir.getChildFile ("cloud-terry/Jam");
+        terryDir.createDirectory();
+        cloud::LocalStore terryStore (terryDir.getChildFile ("Jam.lathe"));
+        terryStore.link (joelStore.getProjectId(), "Jam");
+        auto pulled = cloud::pull (terry, terryStore, {});
+        check (pulled.result.wasOk() && pulled.newRevisions.size() == 1 && pulled.head == p1.revision.id, "Terry pulls r1");
+        var terryProject;
+        check (cloud::prepareRevision (&terry, terryStore, pulled.newRevisions[0], terryProject, {}).wasOk(), "r1 is ready to open");
+        Edit te;
+        te.projectFile = terryStore.getProjectFile();
+        te.workDir = terryDir;
+        te.loadFrom (terryProject, terryDir, factory);
+        terryStore.setBase (p1.revision.id);
+        check (te.tracks.size() == 1 && te.tracks[0]->clips.size() == 1
+                 && te.tracks[0]->clips[0].file == terryDir.getChildFile ("Audio/Hats 1.wav")
+                 && cloud::sha256OfFile (te.tracks[0]->clips[0].file) == cloud::sha256OfFile (take.file),
+               "Terry has the take, byte for byte, in his Audio folder");
+
+        // Terry turns the hats down and pushes r2.
+        te.tracks[0]->volumeDb = -6.0f;
+        auto ts = cloud::Snapshot::capture (te);
+        auto p2 = cloud::push (terry, terryStore, ts, terryStore.getBase(), "Hats down", {});
+        check (p2.result.wasOk() && p2.revision.seq == 2 && p2.revision.summary.contains ("fader 0.0 dB -> -6.0 dB"),
+               "Terry pushes r2 with a summary: " + p2.revision.summary);
+
+        // Joel pans them meanwhile: his push is refused, not merged over Terry's.
+        je.tracks[0]->pan = -1.0f;
+        auto s3 = cloud::Snapshot::capture (je);
+        auto p3 = cloud::push (joel, joelStore, s3, joelStore.getBase(), "Hats left", {});
+        check (p3.conflict && p3.theirHead == p2.revision.id, "Joel's push is refused: Terry pushed first");
+
+        // Joel keeps his version, pulls Terry's, looks at it, then goes back to his own.
+        const auto mine = cloud::keepWorkingCopy (joelStore, s3, joelEmail, "My work before opening r2");
+        auto jp = cloud::pull (joel, joelStore, {});
+        check (jp.result.wasOk() && jp.newRevisions.size() == 1, "Joel pulls r2");
+        var theirs;
+        cloud::prepareRevision (&joel, joelStore, jp.newRevisions[0], theirs, {});
+        check (std::abs ((double) theirs["tracks"][0]["volume"] + 6.0) < 0.01 && std::abs ((double) theirs["tracks"][0]["pan"]) < 0.01,
+               "r2 has Terry's fader and not Joel's pan");
+        var back;
+        cloud::prepareRevision (nullptr, joelStore, mine, back, {});
+        check (std::abs ((double) back["tracks"][0]["pan"] + 1.0) < 0.01, "Joel's own version is still there, offline");
+
+        // Joel decides his pan goes on top of Terry's revision: r3.
+        auto p4 = cloud::push (joel, joelStore, s3, p2.revision.id, "Hats left, on top of Terry's", {});
+        check (p4.result.wasOk() && p4.revision.seq == 3 && p4.revision.parent == p2.revision.id
+                 && p4.revision.summary.contains ("fader -6.0 dB -> 0.0 dB") && p4.revision.summary.contains ("pan C -> 50L"),
+               "pushes r3 on top, and the summary is against Terry's r2");
+        int uploads = -1;
+        joel.upload (joelStore.getProjectId(), { { cloud::sha256OfFile (take.file), take.file, {} } }, {}, uploads);
+        check (uploads == 0, "the take was only ever uploaded once");
+
+        // Signed-out access is refused by the API.
+        cloud::Client nobody (config);
+        nobody.call ("GET", "/projects", {}, err);
+        check (err.status == 401, "the API refuses anyone not signed in");
+    }
+    else
+    {
+        std::cout << "  (cloud end-to-end skipped: run lathe-backend/scripts/local_stack.py and set LATHE_API_URL etc.)" << std::endl;
     }
 
     engine.setEdit (nullptr);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Arrangement.h"
+#include "CloudUI.h"
 #include "DeviceChain.h"
 #include "Dialogs.h"
 #include "Mixer.h"
@@ -74,6 +75,7 @@ private:
     PianoRoll pianoRoll;
     PluginStore store;
     std::unique_ptr<PluginBrowserWindow> browserWindow;
+    std::unique_ptr<CloudController> cloud;
     bool announcedUpdates = false;
     std::unique_ptr<Divider> divider;
     Label statusLeft, statusRight;

@@ -165,6 +165,19 @@ MainComponent::MainComponent (PropertiesFile& s)
         host.startScan (false);
     }
 
+    CloudController::Hooks hooks;
+    hooks.saveProject = [this] (std::function<void (bool)> done) { save (std::move (done)); };
+    hooks.openProject = [this] (const File& f)
+    {
+        autosaveFileFor (f).deleteFile();
+        loadProjectFile (f, f);
+    };
+    hooks.confirmDiscard = [this] (std::function<void()> proceed) { confirmDiscard (std::move (proceed)); };
+    hooks.setStatus = [this] (const String& m) { setStatus (m); };
+    hooks.projectsDir = [] { return getProjectsDir(); };
+    cloud = std::make_unique<CloudController> (ctx, settings, hooks);
+    addAndMakeVisible (cloud->getStatusComponent());
+
     setSize (1360, 860);
     startTimerHz (30);
 
@@ -175,6 +188,7 @@ MainComponent::MainComponent (PropertiesFile& s)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    cloud.reset();
     browserWindow.reset();
     store.onChanged = nullptr;
     settings.setValue ("detailHeight", detailHeight);
@@ -296,6 +310,9 @@ void MainComponent::newProject (const File& templateFile)
     edit.dirty = false;
     refreshAll();
 
+    if (cloud != nullptr)
+        cloud->projectChanged();
+
     setStatus (missing.isEmpty() ? (templateFile.existsAsFile() ? "New project from template \"" + templateFile.getFileNameWithoutExtension() + "\"" : String ("New project"))
                                  : "Missing plug-ins: " + missing.joinIntoString (", "));
 }
@@ -386,6 +403,8 @@ void MainComponent::loadProjectFile (const File& file, const File& readFrom)
     settings.setValue ("lastProject", file.getFullPathName());
     recentFiles.addFile (file);
     settings.setValue ("recentProjects", recentFiles.toString());
+    if (cloud != nullptr)
+        cloud->projectChanged();
 
     int missingAudio = 0;
     for (auto& t : edit.tracks)
@@ -432,6 +451,8 @@ void MainComponent::save (std::function<void (bool)> done)
         recentFiles.addFile (file);
         settings.setValue ("recentProjects", recentFiles.toString());
         setStatus ("Saved " + file.getFullPathName());
+        if (cloud != nullptr)
+            cloud->projectChanged (false);
     }
     else
     {
@@ -703,7 +724,9 @@ void MainComponent::resized()
     transport.setBounds (r.removeFromTop (theme::transportHeight));
 
     auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
-    statusRight.setBounds (status.removeFromRight (420));
+    if (cloud != nullptr)
+        cloud->getStatusComponent().setBounds (status.removeFromRight (300));
+    statusRight.setBounds (status.removeFromRight (360));
     statusLeft.setBounds (status);
 
     if (detailShown)
@@ -727,7 +750,7 @@ void MainComponent::resized()
 //==============================================================================
 StringArray MainComponent::getMenuBarNames()
 {
-    return { "File", "Edit", "Track", "View", "Options" };
+    return { "File", "Edit", "Track", "View", "Options", "Cloud" };
 }
 
 PopupMenu MainComponent::getMenuForIndex (int index, const String&)
@@ -818,11 +841,21 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         m.addSeparator();
         item (menu::checkUpdates, "Check for Updates...", {});
     }
+    else if (index == 5 && cloud != nullptr)
+    {
+        cloud->addMenuItems (m);
+    }
     return m;
 }
 
 void MainComponent::menuItemSelected (int id, int)
 {
+    if (cloud != nullptr && id >= CloudController::menuBase && id < CloudController::menuEnd)
+    {
+        cloud->handleMenuItem (id);
+        return;
+    }
+
     if (id >= menu::recentBase)
     {
         const auto f = recentFiles.getFile (id - menu::recentBase);

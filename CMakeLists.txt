@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.3.0 LANGUAGES C CXX)
+project(Lathe VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +61,9 @@ target_sources(Lathe PRIVATE
     Source/Main.cpp
     Source/Model/Edit.cpp
     Source/Model/ChannelEq.cpp
+    Source/Cloud/CloudClient.cpp
+    Source/Cloud/ProjectDiff.cpp
+    Source/Cloud/Revisions.cpp
     Source/Engine/AudioPool.cpp
     Source/Engine/PluginHost.cpp
     Source/Engine/PluginStore.cpp
@@ -72,6 +75,7 @@ target_sources(Lathe PRIVATE
     Source/UI/Mixer.cpp
     Source/UI/DeviceChain.cpp
     Source/UI/EqEditor.cpp
+    Source/UI/CloudUI.cpp
     Source/UI/PianoRoll.cpp
     Source/UI/Dialogs.cpp
     Source/UI/PluginBrowser.cpp
@@ -94,6 +98,16 @@ target_compile_definitions(Lathe PRIVATE
     JUCE_USE_OGGVORBIS=1
     JUCE_MODAL_LOOPS_PERMITTED=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
+
+# Cloud defaults baked into the build (CI fills these from repository variables), so
+# collaborators don't have to paste settings. Empty = configure in Cloud > Cloud Settings.
+set(LATHE_CLOUD_API_URL "" CACHE STRING "Default Lathe cloud API URL")
+set(LATHE_CLOUD_REGION "" CACHE STRING "Default Lathe cloud AWS region")
+set(LATHE_CLOUD_CLIENT_ID "" CACHE STRING "Default Lathe cloud Cognito app client id")
+target_compile_definitions(Lathe PRIVATE
+    LATHE_CLOUD_API_URL="${LATHE_CLOUD_API_URL}"
+    LATHE_CLOUD_REGION="${LATHE_CLOUD_REGION}"
+    LATHE_CLOUD_CLIENT_ID="${LATHE_CLOUD_CLIENT_ID}")
 
 if(WIN32 AND LATHE_ASIO AND LATHE_ASIO_SDK_DIR)
     target_compile_definitions(Lathe PRIVATE JUCE_ASIO=1)
@@ -183,6 +197,9 @@ if(LATHE_BUILD_TESTS)
         Tests/EngineTests.cpp
         Source/Model/Edit.cpp
         Source/Model/ChannelEq.cpp
+        Source/Cloud/CloudClient.cpp
+        Source/Cloud/ProjectDiff.cpp
+        Source/Cloud/Revisions.cpp
         Source/Engine/AudioPool.cpp
         Source/Engine/PluginHost.cpp
         Source/Engine/PluginStore.cpp
@@ -190,7 +207,7 @@ if(LATHE_BUILD_TESTS)
         Source/Patcher/Updater.cpp)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=1 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
         JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(LatheTests PRIVATE
         juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra juce::juce_cryptography
@@ -240,6 +257,7 @@ target_link_libraries(Lathe
         juce::juce_audio_devices
         juce::juce_audio_formats
         juce::juce_gui_extra
+        juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

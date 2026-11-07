@@ -3,6 +3,23 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.4.0
+
+- **Share projects through the cloud** (the new Cloud menu). Works like git, not
+  like a shared document: everyone works offline, then pushes and pulls revisions.
+  - **Share This Project** puts it online as r1; **Invite Someone** by email.
+  - **Open Shared Project** downloads a project someone shared with you, audio included.
+  - **Push** uploads a new revision with an automatic summary of what changed
+    (faders, pans, sends, EQ bands, plug-in knobs, clips, tracks). Audio is only
+    ever uploaded once.
+  - **Pull** downloads collaborators' revisions without touching what you have open.
+  - **History** lists every revision. Open any of them; what you had open is kept
+    first as "Local", so nothing is ever lost.
+  - If someone pushed before you, Lathe asks: pull theirs first, or push yours on
+    top (theirs stays in History).
+- The status bar shows which revision you're on, and tells you when a
+  collaborator pushes a new one.
+
 ## New in 0.3.0
 
 - **Lathe Patcher** (Options > Check for Updates): checks GitHub for a newer

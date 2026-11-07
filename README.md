@@ -65,6 +65,44 @@ These are headless engine checks that run a fake audio device through the real a
 
 Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use **File > Save as Template**. In Settings you can choose to open the last project or start from your default template on launch.
 
+## Sharing projects (Cloud menu)
+
+Lathe can share a project with collaborators through your own small cloud backend ([lathe-backend](../lathe-backend), deployed with Terraform). It works like git, not like a shared document:
+- Everyone works offline on their own copy.
+- **Push** sends a revision up. **Pull** brings collaborators' revisions down.
+
+**Getting set up**
+- Release builds come with the cloud settings built in (from the repository variables `LATHE_CLOUD_API_URL`, `LATHE_CLOUD_REGION` and `LATHE_CLOUD_CLIENT_ID`). Otherwise, paste the output of `terraform -chdir=infra output -raw lathe_cloud_json` into **Cloud > Cloud Settings**.
+- **Cloud > Sign In** with the account that `scripts/add-user.sh` made. The first time, Lathe asks you to choose your own password.
+
+**Sharing and joining**
+- **Share This Project** uploads the open project as revision r1.
+- **Invite Someone** adds people by email.
+- Collaborators use **Open Shared Project**. It downloads the project, audio included, into `Documents/Lathe/Projects/<name>`.
+
+**Push**
+- Uploads what you have open as a new revision, with your description and an automatic summary of what changed (faders, pans, mutes, sends, EQ bands, plug-in knobs, clips, new or removed tracks, tempo, monitor mixes).
+- Audio files are stored once under their content hash, so a take is never uploaded twice.
+
+**Pull**
+- Downloads new revisions and the latest one's audio.
+- Doesn't change what you have open. Lathe offers to open the newest revision.
+
+**History** (or click the cloud label in the status bar)
+- Lists every revision: pushed, pulled, and **Local** ones (kept on this computer, not pushed).
+- Select one to see what it changed and what opening it would change.
+- **Open This Revision** first keeps what you have open as a Local revision, so switching never loses work.
+
+**If someone pushed first**
+- Lathe refuses to overwrite their revision and asks you to choose:
+  - **Pull theirs first**, to look at it.
+  - **Push mine on top**: yours becomes the latest, and theirs stays in History.
+- There's no automatic merging of changes yet. The change summaries show what each side did.
+
+**Other things to know**
+- While a shared project is open, Lathe checks every two minutes for new revisions, and the status bar tells you when one is waiting.
+- The history lives in a hidden `.lathe` folder inside the project folder, next to `Audio/`. Copying the folder copies the history.
+
 ## Updating (Lathe Patcher)
 
 Lathe comes with a small updater, **Lathe Patcher**. Open it from **Options > Check for Updates…** in Lathe. On Windows and Linux you can also double-click `LathePatcher` in the Lathe folder.
@@ -212,6 +250,8 @@ Source/
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
+  Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,
+                        snapshots, push / pull), ProjectDiff (change summaries)
   Patcher/              Lathe Patcher: Updater.* (GitHub lookup, download, verify, swap in place) + its window
   Engine/PluginStore.*  GitHub releases: catalog, lookup + cache, download, unpack, install, staged updates
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
