@@ -125,6 +125,46 @@ add_dependencies(Lathe LatheScanner)
 add_custom_command(TARGET Lathe POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheScanner> $<TARGET_FILE_DIR:Lathe>/
     COMMENT "Copying LatheScanner next to Lathe")
+
+# --- Lathe Patcher -----------------------------------------------------------------
+# Checks GitHub for a newer Lathe and installs it in place. Ships inside
+# Lathe.app/Contents/Helpers on the Mac and next to Lathe(.exe) elsewhere;
+# Options > Check for Updates opens it.
+juce_add_gui_app(LathePatcher
+    PRODUCT_NAME    "LathePatcher"
+    COMPANY_NAME    "Taddei"
+    BUNDLE_ID       com.taddei.lathe.patcher
+    VERSION         ${PROJECT_VERSION})
+target_sources(LathePatcher PRIVATE
+    Source/Patcher/PatcherMain.cpp
+    Source/Patcher/Updater.cpp)
+target_include_directories(LathePatcher PRIVATE Source)
+target_compile_definitions(LathePatcher PRIVATE
+    LATHE_PATCHER_VERSION="${PROJECT_VERSION}"
+    JUCE_APPLICATION_NAME_STRING="Lathe Patcher"
+    JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=1
+    JUCE_LOAD_CURL_SYMBOLS_LAZILY=1
+    JUCE_MODAL_LOOPS_PERMITTED=0)
+target_link_libraries(LathePatcher PRIVATE
+    juce::juce_gui_extra juce::juce_cryptography
+    juce::juce_recommended_config_flags)
+if(MSVC)
+    target_compile_options(LathePatcher PRIVATE /utf-8)
+endif()
+
+add_dependencies(Lathe LathePatcher)
+if(APPLE)
+    add_custom_command(TARGET Lathe POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove_directory $<TARGET_BUNDLE_DIR:Lathe>/Contents/Helpers/LathePatcher.app
+        COMMAND ${CMAKE_COMMAND} -E copy_directory $<TARGET_BUNDLE_DIR:LathePatcher> $<TARGET_BUNDLE_DIR:Lathe>/Contents/Helpers/LathePatcher.app
+        COMMENT "Copying LathePatcher.app into Lathe.app/Contents/Helpers")
+else()
+    add_custom_command(TARGET Lathe POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LathePatcher> $<TARGET_FILE_DIR:Lathe>/
+        COMMENT "Copying LathePatcher next to Lathe")
+endif()
 if(APPLE)
     # Re-sign (ad-hoc) now that the bundle holds a second executable.
     add_custom_command(TARGET Lathe POST_BUILD
@@ -146,13 +186,14 @@ if(LATHE_BUILD_TESTS)
         Source/Engine/AudioPool.cpp
         Source/Engine/PluginHost.cpp
         Source/Engine/PluginStore.cpp
-        Source/Engine/Engine.cpp)
+        Source/Engine/Engine.cpp
+        Source/Patcher/Updater.cpp)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
         JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(LatheTests PRIVATE
-        juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra
+        juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra juce::juce_cryptography
         juce::juce_recommended_config_flags)
     if(MSVC)
         target_compile_options(LatheTests PRIVATE /utf-8)

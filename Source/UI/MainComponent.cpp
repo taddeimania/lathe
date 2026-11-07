@@ -10,7 +10,7 @@ namespace menu
         undo = 100, redo, deleteClip, duplicate, split,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut,
-        settings = 400, scan, metronome, browser,
+        settings = 400, scan, metronome, browser, checkUpdates,
         templateBase = 1000, recentBase = 2000
     };
 }
@@ -815,6 +815,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::settings, "Audio / MIDI Settings...", cmd + ",");
         item (menu::scan, host.isScanning() ? "Scanning Plug-ins..." : "Scan for New Plug-ins", {}, ! host.isScanning());
         item (menu::metronome, "Metronome", "C", true, engine.metronomeOn.load());
+        m.addSeparator();
+        item (menu::checkUpdates, "Check for Updates...", {});
     }
     return m;
 }
@@ -895,6 +897,7 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::settings:      showSettingsDialog (ctx); break;
         case menu::scan:          host.startScan (false); break;
         case menu::browser:       openPluginBrowser(); break;
+        case menu::checkUpdates:  openPatcher(); break;
         case menu::metronome:     engine.metronomeOn = ! engine.metronomeOn.load(); break;
         default: break;
     }
@@ -947,5 +950,37 @@ bool MainComponent::keyPressed (const KeyPress& k)
     if (ch == '-') { arrangement.zoom (0.8, 0.0f); return true; }
 
     return false;
+}
+} // namespace lathe
+
+namespace lathe
+{
+void MainComponent::openPatcher()
+{
+    // Lathe Patcher ships with Lathe: inside the app bundle on the Mac, beside the executable elsewhere.
+    const auto exe = File::getSpecialLocation (File::currentExecutableFile);
+   #if JUCE_MAC
+    const auto patcher = exe.getParentDirectory().getSiblingFile ("Helpers").getChildFile ("LathePatcher.app");
+   #elif JUCE_WINDOWS
+    const auto patcher = exe.getSiblingFile ("LathePatcher.exe");
+   #else
+    const auto patcher = exe.getSiblingFile ("LathePatcher");
+   #endif
+
+    if (patcher.exists() && patcher.startAsProcess ("--from-lathe"))
+        return;
+
+    AlertWindow::showAsync (MessageBoxOptions()
+                                .withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Check for Updates")
+                                .withMessage ("Lathe Patcher isn't installed with this copy of Lathe. "
+                                              "Download the latest release from github.com/taddeimania/lathe/releases.")
+                                .withButton ("Open Releases Page")
+                                .withButton ("Cancel"),
+                            [] (int result)
+                            {
+                                if (result == 1)
+                                    URL ("https://github.com/taddeimania/lathe/releases").launchInDefaultBrowser();
+                            });
 }
 } // namespace lathe

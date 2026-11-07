@@ -3,6 +3,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/PluginStore.h"
+#include "Patcher/Updater.h"
 #if ! JUCE_WINDOWS
  #include <unistd.h>
 #endif
@@ -922,6 +923,101 @@ int main()
         }
         check (outs.getMagnitude (0, 0, 256) < 0.001f, "track EQ runs in the engine (DC removed, got " + String (outs.getMagnitude (0, 0, 256)) + ")");
         eng.setEdit (nullptr);
+    }
+
+    std::cout << "Lathe Patcher" << std::endl;
+    {
+        namespace up = lathe::updater;
+        check (up::compareVersions ("v0.10.0", "0.9.2") > 0 && up::compareVersions ("0.2.0", "v0.2.0") == 0
+                 && up::compareVersions ("0.2.0", "0.2.1") < 0, "version comparison");
+
+        const auto json = JSON::parse (R"({"tag_name":"v0.3.0","body":"What's new","html_url":"https://example/release",
+            "assets":[{"name":"Lathe-0.3.0-Windows.zip","browser_download_url":"https://example/w","size":10,"digest":"sha256:ABCD"},
+                      {"name":"Lathe-0.3.0-macOS.zip","browser_download_url":"https://example/m","size":11},
+                      {"name":"Lathe-0.3.0-Linux.tar.gz","browser_download_url":"https://example/l","size":12}]})");
+        up::Release r;
+        check (up::parseRelease (json, "macOS", r).wasOk() && r.assetUrl == "https://example/m" && r.version == "0.3.0" && r.notes == "What's new",
+               "picks the macOS build from a release");
+        check (up::parseRelease (json, "Windows", r).wasOk() && r.assetSize == 10 && r.sha256 == "abcd", "picks the Windows build, with its checksum");
+        check (up::parseRelease (json, "Linux", r).wasOk() && r.assetName == "Lathe-0.3.0-Linux.tar.gz", "picks the Linux build");
+        check (up::parseRelease (JSON::parse (R"({"tag_name":"v0.3.0","assets":[]})"), "Linux", r).failed(), "a release without a build for this platform is refused");
+
+       #if JUCE_WINDOWS
+        const String exeName = "Lathe.exe", scannerName = "LatheScanner.exe";
+       #else
+        const String exeName = "Lathe", scannerName = "LatheScanner";
+       #endif
+
+        // An installed copy, with a file of the user's that must survive.
+        const auto root = dir.getChildFile ("patcher");
+        const auto installDir = root.getChildFile ("Lathe");
+        installDir.createDirectory();
+        installDir.getChildFile (exeName).replaceWithText ("old");
+        installDir.getChildFile (scannerName).replaceWithText ("old");
+        installDir.getChildFile ("README.md").replaceWithText ("old");
+        installDir.getChildFile ("my notes.txt").replaceWithText ("mine");
+        check (up::isInstall (installDir, up::Layout::folder), "recognises a Lathe folder");
+
+        // The release archive, packed like CI does.
+        const auto build = root.getChildFile ("build").getChildFile ("Lathe-0.3.0-" + up::platformTag());
+        build.createDirectory();
+        for (auto name : { exeName, scannerName, String ("README.md"), String ("LICENSE") })
+            build.getChildFile (name).replaceWithText ("new");
+        build.getChildFile (exeName).setExecutePermission (true);
+        const auto archive = root.getChildFile ("Lathe-0.3.0.tar.gz");
+        {
+            ChildProcess tar;
+            tar.start (StringArray { "tar", "-czf", archive.getFullPathName(), "-C", build.getParentDirectory().getFullPathName(), build.getFileName() });
+            tar.waitForProcessToFinish (30000);
+        }
+
+        up::Release fake;
+        fake.assetSize = archive.getSize();
+        fake.sha256 = SHA256 (archive).toHexString();
+        check (archive.existsAsFile() && up::verify (fake, archive).wasOk(), "a good download passes size and checksum");
+        auto corrupt = fake;
+        corrupt.sha256 = String::repeatedString ("0", 64);
+        check (up::verify (corrupt, archive).failed(), "a corrupted download is refused");
+
+        const auto staging = up::stagingDirFor (installDir, up::Layout::folder);
+        const auto unpacked = staging.getChildFile ("unpacked");
+        check (up::unpack (archive, unpacked).wasOk(), "unpacks the release");
+
+        // A download without Lathe in it changes nothing.
+        const auto empty = staging.getChildFile ("empty");
+        empty.getChildFile ("Lathe-0.3.0").createDirectory();
+        check (up::install (empty, installDir, up::Layout::folder).failed()
+                 && installDir.getChildFile (exeName).loadFileAsString() == "old", "a broken download leaves the install alone");
+
+        check (up::install (unpacked, installDir, up::Layout::folder).wasOk(), "installs into the folder");
+        check (installDir.getChildFile (exeName).loadFileAsString() == "new" && installDir.getChildFile (scannerName).loadFileAsString() == "new"
+                 && installDir.getChildFile ("LICENSE").existsAsFile(), "every file in the release is replaced or added");
+        check (installDir.getChildFile ("my notes.txt").loadFileAsString() == "mine", "files that aren't in the release are left alone");
+       #if ! JUCE_WINDOWS
+        check (access (installDir.getChildFile (exeName).getFullPathName().toRawUTF8(), X_OK) == 0, "the new Lathe keeps its execute permission");
+       #endif
+        check (installDir.findChildFiles (File::findFiles, false, "*.old").isEmpty(), "replaced files are cleaned up");
+
+        // A file still "in use" from last time is cleaned up on the next run.
+        installDir.getChildFile (exeName + ".old").replaceWithText ("stale");
+        up::cleanUpOldFiles (installDir, up::Layout::folder);
+        check (! installDir.getChildFile (exeName + ".old").exists(), "leftover .old files are removed later");
+        staging.deleteRecursively();
+
+        // macOS layout: Lathe.app replaced whole, wherever it lives.
+        const auto apps = root.getChildFile ("Applications");
+        const auto app = apps.getChildFile ("Lathe.app");
+        app.getChildFile ("Contents/MacOS").createDirectory();
+        app.getChildFile ("Contents/MacOS/Lathe").replaceWithText ("old");
+        app.getChildFile ("Contents/Helpers/LathePatcher.app").createDirectory();
+        const auto newApp = root.getChildFile ("mac-unpacked/Lathe-0.3.0-macOS/Lathe.app");
+        newApp.getChildFile ("Contents/MacOS").createDirectory();
+        newApp.getChildFile ("Contents/MacOS/Lathe").replaceWithText ("new");
+        check (up::install (root.getChildFile ("mac-unpacked"), app, up::Layout::bundle).wasOk()
+                 && app.getChildFile ("Contents/MacOS/Lathe").loadFileAsString() == "new"
+                 && ! app.getChildFile ("Contents/Helpers").exists()
+                 && ! apps.getChildFile (".Lathe.app.old").exists(),
+               "replaces Lathe.app as a whole");
     }
 
     engine.setEdit (nullptr);

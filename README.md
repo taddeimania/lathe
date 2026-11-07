@@ -65,6 +65,25 @@ These are headless engine checks that run a fake audio device through the real a
 
 Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use **File > Save as Template**. In Settings you can choose to open the last project or start from your default template on launch.
 
+## Updating (Lathe Patcher)
+
+Lathe comes with a small updater, **Lathe Patcher**. Open it from **Options > Check for Updates…** in Lathe. On Windows and Linux you can also double-click `LathePatcher` in the Lathe folder.
+
+- It asks GitHub for the latest **published** release of `taddeimania/lathe` and compares it with the installed version.
+- If there's a newer one, it shows the release notes. **Update** then:
+  - downloads that release's build for your platform,
+  - checks the download's size and the SHA-256 checksum GitHub publishes,
+  - replaces Lathe in place.
+- Your projects, templates, settings and plug-ins aren't touched.
+- On the Mac it replaces `Lathe.app` wherever you keep it (the patcher lives inside it, in `Contents/Helpers`).
+- On Windows and Linux it replaces the files in Lathe's folder. Files that are in use, such as a running `Lathe.exe`, are renamed to `*.old` and removed the next time Lathe starts. Quit Lathe and reopen it to use the new version.
+- If anything fails partway, the old files are put back.
+
+Notes:
+- The repository must be public, and the release must be published (not a draft) for the patcher to see it.
+- The first release that includes the patcher has to be downloaded by hand once. After that, use the patcher.
+- `LATHE_UPDATE_URL=<url of a release JSON>` points the patcher at another feed, for testing.
+
 ## Plug-in browser (your GitHub plug-ins)
 
 **Options > Plug-in Browser** (Cmd/Ctrl+B), or **Browse...** next to "+ Add plug-in". It lists your 14 plug-ins from `github.com/taddeimania`, grouped as effects, instruments and MIDI tools, with the latest published version of each. Below them are the other installed plug-ins.
@@ -193,6 +212,7 @@ Source/
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
+  Patcher/              Lathe Patcher: Updater.* (GitHub lookup, download, verify, swap in place) + its window
   Engine/PluginStore.*  GitHub releases: catalog, lookup + cache, download, unpack, install, staged updates
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
   UI/                   transport, arrangement, mixer (+ mix tabs), device chain, EQ editor, piano roll, dialogs

@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.3.0
+
+- **Lathe Patcher** (Options > Check for Updates): checks GitHub for a newer
+  Lathe and installs it in place, so later updates don't need a manual
+  download. This release has to be downloaded by hand one last time.
+
 ## New in 0.2.0
 
 - **Monitor mixes** for in-ears and headphone feeds: a second mix of the same

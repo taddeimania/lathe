@@ -67,6 +67,13 @@ public:
         options.osxLibrarySubFolder = "Application Support";
         properties.setStorageParameters (options);
 
+       #if ! JUCE_MAC
+        // Lathe Patcher renames files that were in use during an update to *.old.
+        for (auto& f : File::getSpecialLocation (File::currentExecutableFile).getParentDirectory()
+                           .findChildFiles (File::findFiles, false, "*.old"))
+            f.deleteFile();
+       #endif
+
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
         window = std::make_unique<MainWindow> (*properties.getUserSettings());
         window->main->startup (commandLine);

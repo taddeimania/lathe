@@ -98,8 +98,8 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure
 
       # Package the app ourselves so file permissions and the macOS signature
-      # survive the download. LatheScanner (the plug-in scan helper) must ship
-      # next to Lathe, so check it's there.
+      # survive the download. LatheScanner (the plug-in scan helper) and
+      # LathePatcher (the updater) must ship with Lathe, so check they're there.
       - name: Package
         run: |
           version=$(sed -n 's/^project(Lathe VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
@@ -112,11 +112,12 @@ jobs:
             macOS)
               cp -R "$art/Lathe.app" "$stage/"
               test -x "$stage/Lathe.app/Contents/MacOS/LatheScanner"
+              test -x "$stage/Lathe.app/Contents/Helpers/LathePatcher.app/Contents/MacOS/LathePatcher"
               codesign --verify --deep --strict "$stage/Lathe.app" ;;
             Windows)
-              cp "$art/Lathe.exe" "$art/LatheScanner.exe" "$stage/" ;;
+              cp "$art/Lathe.exe" "$art/LatheScanner.exe" "$art/LathePatcher.exe" "$stage/" ;;
             Linux)
-              cp "$art/Lathe" "$art/LatheScanner" "$stage/" ;;
+              cp "$art/Lathe" "$art/LatheScanner" "$art/LathePatcher" "$stage/" ;;
           esac
           cp README.md LICENSE "$stage/"
           case "$RUNNER_OS" in

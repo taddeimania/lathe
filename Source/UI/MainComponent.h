@@ -56,6 +56,7 @@ private:
     void ensureBuiltInTemplates();
     void importAudio();
     void openPluginBrowser();
+    void openPatcher();
     void writeAutosave();
     File autosaveFileFor (const File& project) const   { return project.getSiblingFile (project.getFileName() + "-autosave"); }
 
