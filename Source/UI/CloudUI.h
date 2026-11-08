@@ -48,8 +48,13 @@ public:
     void openRevision (const cloud::Revision&);
 
     bool isLinked() const;
+    bool isUnfinishedShare() const;
     bool isSignedIn() const        { return client != nullptr && client->isSignedIn(); }
     bool isBusy() const noexcept   { return busy; }
+    /** What's running ("Uploading  45%"), for the quit warning. */
+    String getActivity() const     { return activity; }
+    /** Stops what's running at the next safe point (between files or upload parts). */
+    void cancel()                  { *cancelFlag = true; }
     cloud::LocalStore* getStore()  { return store.get(); }
     AppContext& getContext()       { return ctx; }
 
@@ -75,10 +80,13 @@ private:
     AppContext& ctx;
     PropertiesFile& settings;
     Hooks hooks;
-    std::unique_ptr<cloud::Client> client;
-    std::unique_ptr<cloud::LocalStore> store;
+    // Shared with background jobs, so a job finishing after the window closes is safe.
+    std::shared_ptr<cloud::Client> client;
+    std::shared_ptr<cloud::LocalStore> store;
     ThreadPool worker { 1 };
-    std::atomic<bool> busy { false }, cancelled { false };
+    std::atomic<bool> busy { false };
+    std::shared_ptr<std::atomic<bool>> cancelFlag = std::make_shared<std::atomic<bool>> (false);
+    String activity;                     // what the cloud is doing right now, for the status label
     String waitingHead, waitingText;     // a newer revision on the server, if any
     std::unique_ptr<StatusLabel> status;
     Component::SafePointer<DocumentWindow> history;

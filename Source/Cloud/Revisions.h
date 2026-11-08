@@ -68,7 +68,8 @@ public:
     bool hasRevision (const String& id) const;
 
     // --- audio hashes
-    String hashOf (const File&);                  // cached by path, size and date
+    /** Cached by path, size and date. progress (0..1) can cancel: then returns "". */
+    String hashOf (const File&, const std::function<bool (double)>& progress = {});
     void rememberHash (const File&, const String& hash);
     File findLocalFile (const String& hash);      // a file we know has that hash
     void saveHashCache();
@@ -97,7 +98,8 @@ struct Snapshot
     MemoryBlock bytes;      // the JSON that hash is of
 
     static Snapshot capture (const Edit&);
-    Result finish (LocalStore&);
+    /** Hashes the audio (cached, so slow only the first time). progress may cancel. */
+    Result finish (LocalStore&, const std::function<bool (const String&, double)>& progress = {});
 };
 
 /** Progress callback: what's happening, 0..1. Return false to cancel. */

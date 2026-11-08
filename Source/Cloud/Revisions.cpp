@@ -195,19 +195,21 @@ void LocalStore::loadHashCache()
         hashCache = var (new DynamicObject());
 }
 
-String LocalStore::hashOf (const File& f)
+String LocalStore::hashOf (const File& f, const std::function<bool (double)>& progress)
 {
-    const ScopedLock sl (lock);
-    loadHashCache();
-    const auto key = f.getFullPathName();
-    const auto size = f.getSize();
-    const auto mtime = f.getLastModificationTime().toMilliseconds();
-    const auto entry = hashCache[Identifier (key)];
-    if (entry.isObject() && (int64) entry["size"] == size && (int64) entry["mtime"] == mtime)
-        return entry["hash"].toString();
+    {
+        const ScopedLock sl (lock);
+        loadHashCache();
+        const auto entry = hashCache[Identifier (f.getFullPathName())];
+        if (entry.isObject() && (int64) entry["size"] == f.getSize()
+            && (int64) entry["mtime"] == f.getLastModificationTime().toMilliseconds())
+            return entry["hash"].toString();
+    }
 
-    const auto hash = sha256OfFile (f);
-    rememberHash (f, hash);
+    // Hash without holding the lock: a big file takes a while.
+    const auto hash = sha256OfFile (f, progress);
+    if (hash.isNotEmpty())
+        rememberHash (f, hash);
     return hash;
 }
 
@@ -308,11 +310,19 @@ Snapshot Snapshot::capture (const Edit& edit)
     return s;
 }
 
-Result Snapshot::finish (LocalStore& store)
+Result Snapshot::finish (LocalStore& store, const Progress& progress)
 {
     StringArray missing;
+    const int total = (int) audio.size();
+    int index = 0;
     for (auto& a : audio)
     {
+        if (! report (progress, "Checking audio files (" + String (++index) + " of " + String (total) + ")",
+                      total > 0 ? (double) (index - 1) / (double) total : 0.0))
+        {
+            store.saveHashCache();   // keep what's done: next time is quicker
+            return Result::fail ("Cancelled.");
+        }
         if (! a.file.existsAsFile())
         {
             missing.addIfNotAlreadyThere (a.file.getFileName());
@@ -320,7 +330,17 @@ Result Snapshot::finish (LocalStore& store)
         }
         if (auto* o = a.clip.getDynamicObject())
         {
-            o->setProperty ("hash", store.hashOf (a.file));
+            const auto label = "Checking audio files (" + String (index) + " of " + String (total) + ")";
+            const auto hash = store.hashOf (a.file, [&] (double p)
+            {
+                return report (progress, label, ((double) (index - 1) + p) / (double) jmax (1, total));
+            });
+            if (hash.isEmpty())
+            {
+                store.saveHashCache();
+                return Result::fail ("Cancelled.");
+            }
+            o->setProperty ("hash", hash);
             // Everyone keeps shared audio in Audio/, whatever it's called on this machine.
             o->setProperty ("file", "Audio/" + a.file.getFileName());
         }
@@ -362,8 +382,8 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
         return out;
     }
 
-    report (progress, "Checking audio files...", 0.0);
-    if (auto r = snap.finish (store); r.failed())
+    if (auto r = snap.finish (store, [&] (const String& what, double p) { return report (progress, what, 0.3 * p); });
+        r.failed())
     {
         out.result = r;
         return out;
@@ -389,7 +409,7 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
     }
 
     int uploaded = 0;
-    auto r = client.upload (projectId, items, [&] (double p) { return report (progress, "Uploading...", 0.05 + 0.85 * p); }, uploaded);
+    auto r = client.upload (projectId, items, [&] (double p) { return report (progress, "Uploading", 0.3 + 0.65 * p); }, uploaded);
     if (r.failed())
     {
         out.result = r;
@@ -424,6 +444,11 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
     }
 
     out.revision = Revision::fromVar (resp);
+    if (out.revision.id.isEmpty())
+    {
+        out.result = Result::fail ("The server didn't confirm the revision. Nothing was lost: push again.");
+        return out;
+    }
     out.revision.blobs = blobs;
     store.putRevision (out.revision);
     store.setBase (out.revision.id);

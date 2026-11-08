@@ -1017,3 +1017,33 @@ void MainComponent::openPatcher()
                             });
 }
 } // namespace lathe
+
+namespace lathe
+{
+void MainComponent::confirmQuit (std::function<void()> proceed)
+{
+    if (cloud == nullptr || ! cloud->isBusy())
+    {
+        confirmDiscard (std::move (proceed));
+        return;
+    }
+
+    AlertWindow::showAsync (MessageBoxOptions()
+                                .withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Still working on the cloud")
+                                .withMessage ("Lathe is still busy: " + cloud->getActivity() + ".\n\n"
+                                              "If you quit now it stops. Nothing is lost: files already uploaded stay "
+                                              "uploaded, and Cloud > Push finishes the job later.")
+                                .withButton ("Stop and Quit")
+                                .withButton ("Keep Working"),
+                            [this, proceed] (int button)
+    {
+        // JUCE numbers buttons 1, 2, ... and the last one 0 (so Escape picks it).
+        if (button != 1)
+            return;
+        if (cloud != nullptr)
+            cloud->cancel();
+        confirmDiscard (proceed);
+    });
+}
+} // namespace lathe

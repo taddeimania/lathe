@@ -279,7 +279,13 @@ StringArray describeChanges (const var& before, const var& after)
     if (! near ((double) before["tempo"], (double) after["tempo"]))
         lines.add ("Tempo " + String ((double) before["tempo"], 1) + " -> " + String ((double) after["tempo"], 1) + " BPM");
     if (! same (before["timeSignature"], after["timeSignature"]))
-        lines.add ("Time signature -> " + String ((int) after["timeSignature"][0]) + "/" + String ((int) after["timeSignature"][1]));
+    {
+        const auto& sig = arrayOf (after["timeSignature"]);
+        if (sig.size() >= 2)
+            lines.add ("Time signature -> " + String ((int) sig[0]) + "/" + String ((int) sig[1]));
+        else
+            lines.add ("Time signature changed");
+    }
     if (! same (before["loop"], after["loop"]))
         lines.add ((bool) after["loop"]["enabled"] != (bool) before["loop"]["enabled"]
                        ? String ("Loop ") + ((bool) after["loop"]["enabled"] ? "on" : "off")

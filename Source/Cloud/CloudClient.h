@@ -84,8 +84,9 @@ public:
     std::function<void (const Session&)> onSessionChanged;
 
     // --- API ------------------------------------------------------------------------------
-    /** JSON call to the API. On failure returns an undefined var and fills error. */
-    var call (const String& method, const String& path, const var& body, ApiError& error);
+    /** JSON call to the API. On failure returns an undefined var and fills error
+        (error.status is never 0 on failure: a dropped connection or timeout is 599). */
+    var call (const String& method, const String& path, const var& body, ApiError& error, int timeoutMs = 30000);
 
     // --- blobs ------------------------------------------------------------------------------
     struct UploadItem
@@ -112,7 +113,8 @@ private:
     Session session;
 };
 
-/** SHA-256 of a file, as lowercase hex (streams; works on large files). */
-String sha256OfFile (const File&);
+/** SHA-256 of a file, as lowercase hex. Streams in pieces; progress (0..1) can cancel,
+    in which case it returns an empty string. */
+String sha256OfFile (const File&, const std::function<bool (double)>& progress = {});
 String sha256OfData (const MemoryBlock&);
 } // namespace lathe::cloud

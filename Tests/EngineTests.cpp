@@ -1087,6 +1087,33 @@ int main()
         check (knob == "\"Vox\": Nave: Decay 2.1 s -> 3.4 s", "names the plug-in knob that moved (got " + knob + ")");
     }
 
+    std::cout << "Cloud: hashing" << std::endl;
+    {
+        Random rng (42);
+        bool allMatch = true;
+        for (int size : { 0, 1, 55, 56, 63, 64, 65, 119, 128, 1000, (1 << 20) + 3, 3 * (1 << 20) })
+        {
+            MemoryBlock data ((size_t) size);
+            for (int i = 0; i < size; ++i)
+                static_cast<uint8*> (data.getData())[i] = (uint8) rng.nextInt (256);
+            const auto f = dir.getChildFile ("hash-" + String (size) + ".bin");
+            f.deleteFile();
+            f.create();   // replaceWithData deletes the file when there's no data
+            if (size > 0)
+                f.replaceWithData (data.getData(), data.getSize());
+            if (cloud::sha256OfFile (f) != SHA256 (data).toHexString().toLowerCase())
+            {
+                allMatch = false;
+                std::cout << "    mismatch at " << size << " bytes" << std::endl;
+            }
+        }
+        check (allMatch, "streaming SHA-256 matches JUCE's for every size, block edges included");
+        check (cloud::sha256OfFile (dir.getChildFile ("hash-0.bin")) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+               "and the empty file has the standard SHA-256");
+        check (cloud::sha256OfFile (dir.getChildFile ("hash-3145728.bin"), [] (double p) { return p < 0.5; }).isEmpty(),
+               "hashing a big file can be cancelled partway");
+    }
+
     std::cout << "Cloud: snapshots and local history" << std::endl;
     {
         const auto projDir = dir.getChildFile ("cloud-local/Song");

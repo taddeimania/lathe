@@ -3,6 +3,19 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.4.1
+
+- **Fixed: Lathe crashed a few seconds after opening a project whose sharing
+  hadn't finished** (for example after quitting during a big upload), every time.
+  If that happened to you, update and open it again: the status bar says "not
+  uploaded yet", and Cloud > Push (finish sharing) uploads the rest without
+  re-sending files that already went up.
+- Cloud work now shows what it's doing and how far along it is in the status bar
+  (checking audio files, uploading, downloading), and quitting in the middle asks
+  first and stops cleanly.
+- A dropped connection or timeout is now reported as an error instead of looking
+  like a successful push.
+
 ## New in 0.4.0
 
 - **Share projects through the cloud** (the new Cloud menu). Works like git, not

@@ -200,7 +200,7 @@ private:
         auto result = std::make_shared<Result> (Result::ok());
         auto needsNew = std::make_shared<bool> (false);
         Component::SafePointer<SignInDialog> safe (this);
-        auto* client = owner.client.get();
+        auto client = owner.client;
 
         owner.run ("Signing in", [client, mail, pass, chosen, result, needsNew]
         {
@@ -546,15 +546,15 @@ CloudController::CloudController (AppContext& c, PropertiesFile& s, Hooks h)
 CloudController::~CloudController()
 {
     stopTimer();
-    cancelled = true;
-    worker.removeAllJobs (true, 20000);
+    *cancelFlag = true;
+    worker.removeAllJobs (true, 10000);
     if (history != nullptr)
         delete history.getComponent();
 }
 
 void CloudController::makeClient()
 {
-    client = std::make_unique<cloud::Client> (cloud::Config::load (settings));
+    client = std::make_shared<cloud::Client> (cloud::Config::load (settings));
     WeakReference<CloudController> weak (this);
     client->onSessionChanged = [weak] (const cloud::Session& s)
     {
@@ -595,6 +595,12 @@ bool CloudController::isLinked() const
     return store != nullptr && store->isLinked();
 }
 
+bool CloudController::isUnfinishedShare() const
+{
+    // Linked to a cloud project but never pushed: sharing was interrupted.
+    return store != nullptr && store->getBase().isEmpty() && store->getRevisions().empty();
+}
+
 void CloudController::projectChanged (bool force)
 {
     const auto file = ctx.edit.projectFile;
@@ -602,7 +608,7 @@ void CloudController::projectChanged (bool force)
     if (! force && ! moved)
         return;
     if (moved)
-        store = file != File() ? std::make_unique<cloud::LocalStore> (file) : nullptr;
+        store = file != File() ? std::make_shared<cloud::LocalStore> (file) : nullptr;
     waitingHead = waitingText = {};
     pollCountdown = 2;   // check for news shortly after opening
     updateStatus();
@@ -616,6 +622,8 @@ void CloudController::updateStatus()
     String text;
     if (! client->getConfig().isValid())
         text = {};
+    else if (busy && activity.isNotEmpty())
+        text = "Cloud: " + activity;
     else if (! isLinked())
         text = isSignedIn() ? "Cloud: not shared" : "Cloud: sign in";
     else
@@ -623,14 +631,19 @@ void CloudController::updateStatus()
         text = "Cloud: " + store->getCloudName();
         if (auto base = store->getRevision (store->getBase()))
             text << "  " << base->label();
+        else if (isUnfinishedShare())
+            text << "  ·  not uploaded yet";
         if (! isSignedIn())
             text << "  (sign in)";
         else if (waitingHead.isNotEmpty())
             text << "  ·  new revision waiting";
     }
+    const bool attention = busy || waitingHead.isNotEmpty() || (isLinked() && isUnfinishedShare());
     status->setText (text, dontSendNotification);
-    status->setColour (Label::textColourId, waitingHead.isNotEmpty() ? theme::accent : theme::textDim);
-    status->setTooltip (waitingText.isNotEmpty() ? waitingText : String ("Click for the project's history"));
+    status->setColour (Label::textColourId, attention ? theme::accent : theme::textDim);
+    status->setTooltip (busy ? String ("Working... Keep Lathe open until this finishes.")
+                             : isLinked() && isUnfinishedShare() ? String ("Sharing didn't finish. Cloud > Push uploads the rest; files already sent aren't sent again.")
+                             : waitingText.isNotEmpty() ? waitingText : String ("Click for the project's history"));
 }
 
 void CloudController::addMenuItems (PopupMenu& m)
@@ -656,7 +669,7 @@ void CloudController::addMenuItems (PopupMenu& m)
     else
         m.addItem (shareId, "Share This Project...", configured && idle);
     m.addSeparator();
-    m.addItem (pushId, "Push...", linked && signedIn && idle);
+    m.addItem (pushId, linked && isUnfinishedShare() ? "Push (finish sharing)..." : "Push...", linked && signedIn && idle);
     m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle);
     m.addItem (historyId, "History...", linked);
     m.addSeparator();
@@ -684,9 +697,11 @@ bool CloudController::handleMenuItem (int id)
 void CloudController::run (const String& what, std::function<void()> work, std::function<void()> done)
 {
     busy = true;
-    cancelled = false;
+    *cancelFlag = false;
+    activity = what;
     if (what.isNotEmpty())
         hooks.setStatus (what + "...");
+    updateStatus();
     WeakReference<CloudController> weak (this);
     worker.addJob ([weak, work = std::move (work), done = std::move (done)]() mutable
     {
@@ -696,6 +711,7 @@ void CloudController::run (const String& what, std::function<void()> work, std::
             if (auto* self = weak.get())
             {
                 self->busy = false;
+                self->activity = {};
                 self->updateStatus();
                 if (done)
                     done();
@@ -707,21 +723,26 @@ void CloudController::run (const String& what, std::function<void()> work, std::
 cloud::Progress CloudController::progressReporter()
 {
     WeakReference<CloudController> weak (this);
+    auto flag = cancelFlag;
     auto last = std::make_shared<std::atomic<uint32>> (0);
-    return [weak, last] (const String& what, double p)
+    return [weak, flag, last] (const String& what, double p)
     {
         const auto now = Time::getMillisecondCounter();
         if (now - last->load() > 150 || p >= 1.0)
         {
             last->store (now);
-            MessageManager::callAsync ([weak, what, p]
+            const auto text = what + (p > 0.0 && p < 1.0 ? "  " + String (roundToInt (p * 100.0)) + "%" : String());
+            MessageManager::callAsync ([weak, text]
             {
                 if (auto* self = weak.get())
-                    self->hooks.setStatus (what + (p > 0.0 && p < 1.0 ? "  " + String (roundToInt (p * 100.0)) + "%" : String()));
+                {
+                    self->activity = text;
+                    self->hooks.setStatus (text);
+                    self->updateStatus();
+                }
             });
         }
-        auto* self = weak.get();
-        return self != nullptr && ! self->cancelled.load();
+        return ! flag->load();
     };
 }
 
@@ -823,10 +844,11 @@ void CloudController::shareProject()
             auto snapshot = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (ctx.edit));
             auto result = std::make_shared<Result> (Result::ok());
             auto outcome = std::make_shared<cloud::PushOutcome>();
-            auto* c = client.get();
-            auto* s = store.get();
+            auto c = client;
+            auto s = store;
             auto progress = progressReporter();
 
+            hooks.setStatus ("Sharing \"" + name + "\". Keep Lathe open until it finishes; large projects take a while.");
             run ("Sharing", [c, s, name, snapshot, result, outcome, progress]
             {
                 *result = cloud::createCloudProject (*c, *s, name);
@@ -860,7 +882,7 @@ void CloudController::invite()
             return;
         auto err = std::make_shared<cloud::ApiError>();
         auto resp = std::make_shared<var>();
-        auto* c = client.get();
+        auto c = client;
         const auto path = "/projects/" + store->getProjectId() + "/members";
         const auto address = email.trim();
         run ("Inviting " + address, [c, path, address, err, resp]
@@ -890,7 +912,12 @@ void CloudController::push()
     }
     ensureReady ([this]
     {
-        askForText ("Push", "Describe what you changed (your collaborators see this in History):", {},
+        const bool finishing = isUnfinishedShare();
+        askForText (finishing ? "Finish sharing" : "Push",
+                    finishing ? "Sharing \"" + store->getCloudName() + "\" didn't finish. This uploads the rest (files already "
+                                "sent aren't sent again). Keep Lathe open until it's done.\n\nDescription:"
+                              : "Describe what you changed (your collaborators see this in History):",
+                    finishing ? String ("First version") : String(),
                     [this] (const String& message)
         {
             doPush (store->getBase(), message.trim());
@@ -902,8 +929,8 @@ void CloudController::doPush (const String& parent, const String& message)
 {
     auto snapshot = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (ctx.edit));
     auto outcome = std::make_shared<cloud::PushOutcome>();
-    auto* c = client.get();
-    auto* s = store.get();
+    auto c = client;
+    auto s = store;
     auto progress = progressReporter();
 
     run ("Pushing", [c, s, snapshot, parent, message, outcome, progress]
@@ -949,8 +976,8 @@ void CloudController::doPush (const String& parent, const String& message)
 void CloudController::pushOnTop (const String& theirHead, const String& message)
 {
     // Get their revision first (so the summary compares against it), then push on top.
-    auto* c = client.get();
-    auto* s = store.get();
+    auto c = client;
+    auto s = store;
     auto pulled = std::make_shared<cloud::PullOutcome>();
     auto progress = progressReporter();
     run ("Getting their revision", [c, s, pulled, progress] { *pulled = cloud::pull (*c, *s, progress); },
@@ -971,8 +998,8 @@ void CloudController::pull()
         return;
     ensureReady ([this]
     {
-        auto* c = client.get();
-        auto* s = store.get();
+        auto c = client;
+        auto s = store;
         auto outcome = std::make_shared<cloud::PullOutcome>();
         auto progress = progressReporter();
         run ("Pulling", [c, s, outcome, progress] { *outcome = cloud::pull (*c, *s, progress); },
@@ -1028,8 +1055,8 @@ void CloudController::openRevision (const cloud::Revision& rev)
     auto project = std::make_shared<var>();
     auto result = std::make_shared<Result> (Result::ok());
     auto kept = std::make_shared<cloud::Revision>();
-    auto* c = isSignedIn() ? client.get() : nullptr;
-    auto* s = store.get();
+    auto c = isSignedIn() ? client : std::shared_ptr<cloud::Client>();
+    auto s = store;
     const auto author = isSignedIn() ? client->getSession().email : settings.getValue ("cloudEmail");
     auto progress = progressReporter();
 
@@ -1037,7 +1064,7 @@ void CloudController::openRevision (const cloud::Revision& rev)
     {
         // Keep what's open first (unless a revision already has exactly this content).
         *kept = cloud::keepWorkingCopy (*s, *snapshot, author, "Your work before opening " + rev.label());
-        *result = cloud::prepareRevision (c, *s, rev, *project, progress);
+        *result = cloud::prepareRevision (c.get(), *s, rev, *project, progress);
     },
     [this, rev, project, result, kept]
     {
@@ -1092,7 +1119,7 @@ void CloudController::openSharedProject()
 
     auto err = std::make_shared<cloud::ApiError>();
     auto resp = std::make_shared<var>();
-    auto* c = client.get();
+    auto c = client;
     run ("Looking up your shared projects", [c, err, resp] { *resp = c->call ("GET", "/projects", {}, *err); },
          [this, err, resp]
     {
@@ -1141,7 +1168,7 @@ void CloudController::openSharedProject()
             auto outcome = std::make_shared<cloud::PullOutcome>();
             auto project = std::make_shared<var>();
             auto result = std::make_shared<Result> (Result::ok());
-            auto* c = self->client.get();
+            auto c = self->client;
             auto progress = self->progressReporter();
 
             self->run ("Downloading \"" + name + "\"", [c, store, dest, id, name, outcome, project, result, progress]
@@ -1155,7 +1182,7 @@ void CloudController::openSharedProject()
                     return;
                 }
                 if (auto head = store->getRevision (outcome->head))
-                    *result = cloud::prepareRevision (c, *store, *head, *project, progress);
+                    *result = cloud::prepareRevision (c.get(), *store, *head, *project, progress);
                 else
                     *result = Result::fail ("\"" + name + "\" has no revisions yet. Ask its owner to push one.");
             },
@@ -1201,7 +1228,7 @@ void CloudController::timerCallback()
 
 void CloudController::poll()
 {
-    auto* c = client.get();
+    auto c = client;
     const auto id = store->getProjectId();
     auto latest = std::make_shared<var>();
     auto err = std::make_shared<cloud::ApiError>();
@@ -1222,7 +1249,14 @@ void CloudController::poll()
                 self->updateStatus();
                 return;
             }
-            const auto newest = (*latest)["revisions"][0];
+            // An empty list is normal (a project nobody has pushed to yet).
+            const auto* revisions = (*latest)["revisions"].getArray();
+            if (revisions == nullptr || revisions->isEmpty())
+            {
+                self->updateStatus();
+                return;
+            }
+            const auto newest = revisions->getFirst();
             const auto headId = newest["id"].toString();
             if (headId.isNotEmpty() && ! self->store->hasRevision (headId))
             {

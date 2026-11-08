@@ -30,6 +30,8 @@ public:
     void saveAsTemplate();
     /** Runs `proceed` once unsaved changes are saved or discarded (not if the user cancels). */
     void confirmDiscard (std::function<void()> proceed);
+    /** Quitting: warns if the cloud is still uploading or downloading, then confirmDiscard. */
+    void confirmQuit (std::function<void()> proceed);
 
     // MenuBarModel
     StringArray getMenuBarNames() override;

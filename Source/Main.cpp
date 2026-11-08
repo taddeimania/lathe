@@ -94,7 +94,7 @@ public:
             return;
         }
 
-        window->main->confirmDiscard ([] { JUCEApplication::getInstance()->quit(); });
+        window->main->confirmQuit ([] { JUCEApplication::getInstance()->quit(); });
     }
 
     void anotherInstanceStarted (const String& commandLine) override
