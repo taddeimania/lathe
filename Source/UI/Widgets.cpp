@@ -572,9 +572,20 @@ void renameGroup (AppContext& ctx, std::shared_ptr<TrackGroup> group)
     auto* context = &ctx;
     askForText ("Rename group", {}, group->name, [context, group] (const String& name)
     {
-        group->name = name;
-        context->edit.changed();
+        context->edit.renameGroup (group->id, name);
     });
+}
+
+void showGroupBus (AppContext& ctx, std::shared_ptr<TrackGroup> group)
+{
+    auto bus = ctx.edit.makeGroupBus (group->id);
+    if (bus == nullptr)
+        return;
+    ctx.selectTrack (bus->id);
+    if (ctx.showDevices)
+        ctx.showDevices();
+    ctx.showStatus ("\"" + bus->name + "\": every track in " + group->name
+                    + " plays through it. Add plug-ins here to process the whole group.");
 }
 
 void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGroup> group)
@@ -592,6 +603,17 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
     m.addItem (2, ctx.edit.isGroupArmed (group->id) ? "Disarm all" : "Arm all");
     m.addItem (3, group->collapsed ? "Expand" : "Collapse");
     m.addSeparator();
+    const auto bus = ctx.edit.findGroupBus (group->id);
+    if (bus == nullptr)
+    {
+        m.addItem (5, "Add Plug-ins to the Whole Group (make a group bus)");
+    }
+    else
+    {
+        m.addItem (6, "Show \"" + bus->name + "\" (plug-ins, EQ, fader)");
+        m.addItem (7, "Remove Group Bus (tracks go straight to the master)");
+    }
+    m.addSeparator();
     m.addItem (4, "Ungroup (keep the tracks)");
 
     Component::SafePointer<Component> safeAnchor (&anchor);
@@ -605,6 +627,8 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
         else if (r == 2)   edit.toggleGroupArm (group->id);
         else if (r == 3)   { group->collapsed = ! group->collapsed; edit.changed(); }
         else if (r == 4)   edit.ungroup (group->id);
+        else if (r == 5 || r == 6)  showGroupBus (*context, group);
+        else if (r == 7)   edit.removeGroupBus (group->id);
         else if (r >= 100) { group->colour = getTrackPalette()[r - 100]; edit.touched(); }
     });
 }

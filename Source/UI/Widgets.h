@@ -153,6 +153,8 @@ void movePlugin (AppContext&, Track&, const std::shared_ptr<PluginSlot>&, int de
 void showTrackMenu (AppContext&, Component& anchor, std::shared_ptr<Track>);
 /** Group context menu (rename, colour, arm all, collapse, ungroup). */
 void showGroupMenu (AppContext&, Component& anchor, std::shared_ptr<TrackGroup>);
+/** Opens the group's bus in the device panel, making it first if need be. */
+void showGroupBus (AppContext&, std::shared_ptr<TrackGroup>);
 void renameGroup (AppContext&, std::shared_ptr<TrackGroup>);
 /** Groups the selected tracks (or just `fallback` if one or none is selected). */
 void groupSelectedTracks (AppContext&, int fallbackTrackId);

@@ -102,6 +102,7 @@ struct TrackGroup
     Colour colour;
     std::atomic<bool> mute { false }, solo { false };
     bool collapsed = false;   // arrangement view hides the member rows
+    int busId = -1;           // the group's bus (a return the members play through), if it has one
 };
 
 /** One track's (or return's) level in a cue mix. */
@@ -223,7 +224,17 @@ public:
     /** Groups the given audio/MIDI tracks (taking them out of any other group). */
     std::shared_ptr<TrackGroup> createGroup (const std::vector<int>& trackIds, const String& name = {});
     void setTrackGroup (int trackId, int groupId);   // -1 removes it from its group
-    void ungroup (int groupId);                      // keeps the tracks
+    void ungroup (int groupId);                      // keeps the tracks (and any group bus, as a plain return)
+
+    /** Gives a group its own bus: a return named "<group> Bus" that every member plays
+        through, so plug-ins, EQ and a fader on it apply to the whole group. Tracks that
+        join the group later go through it too. Returns the bus (the existing one if any). */
+    std::shared_ptr<Track> makeGroupBus (int groupId);
+    /** Removes the group's bus; its members go straight to the master again. */
+    void removeGroupBus (int groupId);
+    std::shared_ptr<Track> findGroupBus (int groupId) const;
+    /** Renames a group, and its bus if the bus still has the group's name. */
+    void renameGroup (int groupId, const String& name);
     /** Arms every member, or disarms them all if they're all armed already. */
     void toggleGroupArm (int groupId);
     bool isGroupArmed (int groupId) const;

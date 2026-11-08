@@ -8,8 +8,11 @@ namespace
 enum MenuIds
 {
     signInId = CloudController::menuBase, signOutId, openSharedId, shareId, inviteId,
-    pushId, pullId, historyId, settingsId
+    pushId, pullId, historyId, settingsId,
+    parallelBase = CloudController::menuBase + 20   // + 1, 2, 4, 6, 8
 };
+
+constexpr int parallelChoices[] = { 1, 2, 4, 6, 8 };
 
 String timeAgo (int64 ms)
 {
@@ -569,6 +572,7 @@ void CloudController::makeClient()
             }
         });
     };
+    client->setParallelTransfers (settings.getIntValue ("cloudParallel", 4));
     restoreSession();
     updateStatus();
 }
@@ -673,6 +677,11 @@ void CloudController::addMenuItems (PopupMenu& m)
     m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle);
     m.addItem (historyId, "History...", linked);
     m.addSeparator();
+    PopupMenu parallel;
+    for (int n : parallelChoices)
+        parallel.addItem (parallelBase + n, n == 1 ? String ("1 (one file at a time)") : String (n),
+                          true, client->getParallelTransfers() == n);
+    m.addSubMenu ("Transfers at Once", parallel);
     m.addItem (settingsId, configured ? "Cloud Settings..." : "Cloud Settings (set up first)...", idle);
 }
 
@@ -689,7 +698,17 @@ bool CloudController::handleMenuItem (int id)
         case pullId:        pull(); return true;
         case historyId:     showHistory(); return true;
         case settingsId:    showSettings(); return true;
-        default:            return false;
+        default:
+            if (id > parallelBase && id <= parallelBase + 8)
+            {
+                const int n = id - parallelBase;
+                settings.setValue ("cloudParallel", n);
+                client->setParallelTransfers (n);
+                hooks.setStatus (n == 1 ? String ("Cloud transfers: one at a time.")
+                                        : "Cloud transfers: up to " + String (n) + " at once.");
+                return true;
+            }
+            return false;
     }
 }
 

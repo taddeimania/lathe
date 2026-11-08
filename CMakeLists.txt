@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.4.1 LANGUAGES C CXX)
+project(Lathe VERSION 0.4.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,7 +55,10 @@ juce_add_gui_app(Lathe
     VERSION                      ${PROJECT_VERSION}
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT   "Lathe records audio from your audio interface."
-    DOCUMENT_EXTENSIONS          lathe)
+    DOCUMENT_EXTENSIONS          lathe
+    # Made from Resources/icon.svg (rsvg-convert -w 1024 icon.svg -o icon.png; -w 256 for icon-small.png)
+    ICON_BIG                     "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
+    ICON_SMALL                   "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-small.png")
 
 target_sources(Lathe PRIVATE
     Source/Main.cpp
@@ -148,7 +151,9 @@ juce_add_gui_app(LathePatcher
     PRODUCT_NAME    "LathePatcher"
     COMPANY_NAME    "Taddei"
     BUNDLE_ID       com.taddei.lathe.patcher
-    VERSION         ${PROJECT_VERSION})
+    VERSION         ${PROJECT_VERSION}
+    ICON_BIG        "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
+    ICON_SMALL      "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-small.png")
 target_sources(LathePatcher PRIVATE
     Source/Patcher/PatcherMain.cpp
     Source/Patcher/Updater.cpp)

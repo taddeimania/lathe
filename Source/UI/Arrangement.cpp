@@ -214,11 +214,7 @@ public:
         name.setInterceptsMouseClicks (false, false);
         name.onTextChange = [this]
         {
-            if (name.getText().trim().isNotEmpty() && name.getText().trim() != group->name)
-            {
-                group->name = name.getText().trim();
-                ctx.edit.changed();
-            }
+            ctx.edit.renameGroup (group->id, name.getText());
         };
         // Don't touch the text here: on Return, JUCE hides the editor before it reports
         // the new text, so resetting it now would throw the rename away.
@@ -228,6 +224,10 @@ public:
         styleToggle (arm, "", theme::record, "Arm / disarm every track in the group");
         styleToggle (solo, "S", theme::solo, "Solo the whole group");
         styleToggle (mute, "M", theme::mute, "Mute the whole group");
+        fx.setButtonText ("FX");
+        fx.setWantsKeyboardFocus (false);
+        fx.onClick = [this] { showGroupBus (ctx, group); };
+        addAndMakeVisible (fx);
         arm.onClick = [this] { ctx.edit.toggleGroupArm (group->id); };
         solo.onClick = [this] { toggleSolo (ctx, nullptr, group.get()); };
         mute.onClick = [this] { group->mute = ! group->mute.load(); ctx.edit.touched(); };
@@ -242,6 +242,10 @@ public:
         arm.setToggleState (ctx.edit.isGroupArmed (group->id), dontSendNotification);
         solo.setToggleState (group->solo.load(), dontSendNotification);
         mute.setToggleState (group->mute.load(), dontSendNotification);
+        const auto bus = ctx.edit.findGroupBus (group->id);
+        fx.setToggleState (bus != nullptr, dontSendNotification);
+        fx.setTooltip (bus != nullptr ? "Show \"" + bus->name + "\": the group's plug-ins, EQ and fader"
+                                      : String ("Add plug-ins to the whole group (makes a group bus every track plays through)"));
         repaint();
     }
 
@@ -273,7 +277,7 @@ public:
         g.setColour (theme::textDim);
         g.setFont (theme::font (11.0f));
         g.drawText (String ((int) members.size()) + (members.size() == 1 ? " track" : " tracks"),
-                    name.getBounds().withLeft (name.getX() + nameTextWidth() + 8).withRight (arm.getX() - 4),
+                    name.getBounds().withLeft (name.getX() + nameTextWidth() + 8).withRight (fx.getX() - 4),
                     Justification::centredLeft, true);
     }
 
@@ -293,6 +297,8 @@ public:
         solo.setBounds (r.removeFromRight (22));
         r.removeFromRight (2);
         arm.setBounds (r.removeFromRight (22));
+        r.removeFromRight (2);
+        fx.setBounds (r.removeFromRight (28));
         r.removeFromRight (6);
         name.setBounds (r);
     }
@@ -344,7 +350,7 @@ private:
     ArrangementView& owner;
     AppContext& ctx;
     Label name;
-    TextButton arm, solo, mute;
+    TextButton arm, solo, mute, fx;
 };
 
 //==============================================================================

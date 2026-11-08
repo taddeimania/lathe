@@ -155,6 +155,9 @@ void Edit::removeTrack (int trackId)
 
     for (auto& t : tracks) fixRouting (*t);
     for (auto& t : buses)  fixRouting (*t);
+    for (auto& g : groups)
+        if (g->busId == trackId)
+            g->busId = -1;
 
     changed();
 }
@@ -244,6 +247,17 @@ void Edit::setTrackGroup (int trackId, int groupId)
     if (t == nullptr || ! t->holdsClips())
         return;
 
+    // Leaving a group with a bus: stop playing through it.
+    if (auto oldBus = findGroupBus (t->groupId); oldBus != nullptr && t->groupId != groupId
+        && t->output.kind == OutputRoute::Kind::bus && t->output.busId == oldBus->id)
+        t->output = {};
+    // Joining one: play through its bus (unless it was sent somewhere on purpose).
+    if (auto newBus = findGroupBus (groupId); newBus != nullptr && t->output.kind == OutputRoute::Kind::master)
+    {
+        t->output.kind = OutputRoute::Kind::bus;
+        t->output.busId = newBus->id;
+    }
+
     if (groupId >= 0 && findGroup (groupId) != nullptr)
     {
         // Move it next to the other members.
@@ -263,6 +277,60 @@ void Edit::setTrackGroup (int trackId, int groupId)
 
     removeEmptyGroups();
     changed();
+}
+
+std::shared_ptr<Track> Edit::findGroupBus (int groupId) const
+{
+    if (auto g = findGroup (groupId); g != nullptr && g->busId >= 0)
+        for (auto& b : buses)
+            if (b->id == g->busId)
+                return b;
+    return {};
+}
+
+std::shared_ptr<Track> Edit::makeGroupBus (int groupId)
+{
+    auto g = findGroup (groupId);
+    if (g == nullptr)
+        return {};
+    if (auto existing = findGroupBus (groupId))
+        return existing;
+
+    auto bus = addTrack (TrackKind::bus, g->name + " Bus");
+    bus->colour = g->colour;
+    g->busId = bus->id;
+    for (auto& t : groupMembers (groupId))
+    {
+        if (t->output.kind == OutputRoute::Kind::master)
+        {
+            t->output.kind = OutputRoute::Kind::bus;
+            t->output.busId = bus->id;
+        }
+    }
+    changed();
+    return bus;
+}
+
+void Edit::renameGroup (int groupId, const String& newName)
+{
+    auto g = findGroup (groupId);
+    const auto name = newName.trim();
+    if (g == nullptr || name.isEmpty() || name == g->name)
+        return;
+    if (auto bus = findGroupBus (groupId); bus != nullptr && bus->name == g->name + " Bus")
+        bus->name = name + " Bus";
+    g->name = name;
+    changed();
+}
+
+void Edit::removeGroupBus (int groupId)
+{
+    auto g = findGroup (groupId);
+    auto bus = findGroupBus (groupId);
+    if (g == nullptr || bus == nullptr)
+        return;
+    g->busId = -1;
+    removeTrack (bus->id);   // members routed to it fall back to the master
 }
 
 void Edit::ungroup (int groupId)
@@ -894,6 +962,8 @@ var Edit::toVar (bool asTemplate) const
         go->setProperty ("mute", g->mute.load());
         go->setProperty ("solo", g->solo.load());
         go->setProperty ("collapsed", g->collapsed);
+        if (g->busId >= 0)
+            go->setProperty ("bus", g->busId);
         groupList.add (var (go.get()));
     }
     if (! groupList.isEmpty())
@@ -974,6 +1044,7 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
             g->mute = (bool) v["mute"];
             g->solo = (bool) v["solo"];
             g->collapsed = (bool) v["collapsed"];
+            g->busId = v.hasProperty ("bus") ? (int) v["bus"] : -1;
             groups.push_back (g);
         }
     }
@@ -1032,6 +1103,9 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
         if (t->groupId >= 0 && findGroup (t->groupId) == nullptr)
             t->groupId = -1;
     removeEmptyGroups();
+    for (auto& g : groups)
+        if (g->busId >= 0 && findGroupBus (g->id) == nullptr)
+            g->busId = -1;
 
     int maxId = master->id;
     for (auto& g : groups)

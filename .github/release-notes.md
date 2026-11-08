@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.4.2
+
+- **Group buses.** Click **FX** on a group's header (or right-click it → Add
+  Plug-ins to the Whole Group) and the group gets its own bus: a channel every
+  track in the group plays through. Put a compressor, a reverb, the channel EQ
+  and a fader on it to process, say, all your drums at once. Tracks that join the
+  group later go through it too.
+- **Faster cloud transfers.** Up to 4 files (or pieces of a big file) upload and
+  download at once, and a dropped connection is retried instead of failing the
+  whole push. Change it under Cloud > Transfers at Once.
+- **An app icon** for Lathe and Lathe Patcher.
+
 ## New in 0.4.1
 
 - **Fixed: Lathe crashed a few seconds after opening a project whose sharing

@@ -1,4 +1,5 @@
 #include "CloudClient.h"
+#include <thread>
 
 #ifndef LATHE_CLOUD_API_URL
  #define LATHE_CLOUD_API_URL ""
@@ -468,6 +469,106 @@ var Client::call (const String& method, const String& path, const var& body, Api
 }
 
 //==============================================================================
+//==============================================================================
+namespace testing
+{
+std::atomic<int> droppedTransfers { 0 };
+void dropNextTransfers (int count)   { droppedTransfers = count; }
+} // namespace testing
+
+namespace
+{
+/** Runs numTasks tasks on up to `concurrency` threads. The calling thread waits,
+    calling poll() about ten times a second (return false to cancel: no new tasks
+    start, running ones finish). The first failure stops the rest. */
+Result runParallel (int numTasks, int concurrency,
+                    const std::function<Result (int index, const std::atomic<bool>& stop)>& task,
+                    const std::function<bool()>& poll)
+{
+    if (numTasks <= 0)
+        return Result::ok();
+
+    std::atomic<int> next { 0 }, running { 0 };
+    std::atomic<bool> stop { false };
+    CriticalSection errorLock;
+    Result firstError = Result::ok();
+    WaitableEvent wake;
+
+    auto worker = [&]
+    {
+        for (;;)
+        {
+            if (stop.load())
+                break;
+            const int i = next.fetch_add (1);
+            if (i >= numTasks)
+                break;
+            auto r = task (i, stop);
+            if (r.failed())
+            {
+                const ScopedLock sl (errorLock);
+                if (firstError.wasOk())
+                    firstError = r;
+                stop = true;
+            }
+        }
+        --running;
+        wake.signal();
+    };
+
+    const int n = jlimit (1, numTasks, concurrency);
+    running = n;
+    std::vector<std::thread> threads;
+    threads.reserve ((size_t) n);
+    for (int i = 0; i < n; ++i)
+        threads.emplace_back (worker);
+
+    bool cancelled = false;
+    while (running.load() > 0)
+    {
+        wake.wait (100);
+        if (! cancelled && poll && ! poll())
+        {
+            cancelled = true;
+            stop = true;
+        }
+    }
+    for (auto& t : threads)
+        t.join();
+
+    if (firstError.failed())
+        return firstError;
+    return cancelled ? Result::fail ("Cancelled.") : Result::ok();
+}
+
+/** Retries a request that failed in a way worth retrying (dropped connection,
+    timeout, throttling, server error), waiting 1 s, then 3 s. */
+HttpResult withRetries (const std::function<HttpResult()>& attempt, const std::atomic<bool>& stop)
+{
+    HttpResult r;
+    for (int tries = 0; tries < 3; ++tries)
+    {
+        if (tries > 0)
+        {
+            for (int waited = 0; waited < (tries == 1 ? 1000 : 3000) && ! stop.load(); waited += 100)
+                Thread::sleep (100);
+            if (stop.load())
+                break;
+        }
+
+        if (testing::droppedTransfers.load() > 0 && testing::droppedTransfers.fetch_sub (1) > 0)
+            r = {};   // simulated dropped connection (tests)
+        else
+            r = attempt();
+
+        const bool worthRetrying = r.status == 0 || r.status == 408 || r.status == 429 || r.status >= 500;
+        if (r.ok() || ! worthRetrying)
+            break;
+    }
+    return r;
+}
+} // namespace
+
 Result Client::upload (const String& projectId, const std::vector<UploadItem>& items,
                        const std::function<bool (double)>& progress, int& uploadedCount)
 {
@@ -488,7 +589,7 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& i
         list.add (var (o.get()));
     }
 
-    // Ask in batches (the API takes up to 500 at a time).
+    // Ask which files the server still needs (up to 500 at a time).
     Array<var> uploads;
     for (int i = 0; i < list.size(); i += 400)
     {
@@ -505,87 +606,126 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& i
             uploads.addArray (*u);
     }
 
-    int64 total = 0, done = 0;
-    for (auto& u : uploads)
-        if (auto it = byHash.find (u["hash"].toString()); it != byHash.end())
-            total += it->second->size();
+    // Every PUT is a task: a whole small file, or one piece of a big one.
+    struct Piece
+    {
+        const UploadItem* item;
+        String url;
+        int64 start, length;
+        int fileIndex, partNumber;   // partNumber 0 = a whole file
+    };
+    struct BigFile
+    {
+        String hash, uploadId;
+        std::vector<String> etags;   // by part number - 1
+    };
 
-    const String octet = "Content-Type: application/octet-stream";
+    std::vector<Piece> pieces;
+    std::vector<BigFile> bigFiles;
+    int64 total = 0;
     for (auto& u : uploads)
     {
-        const auto hash = u["hash"].toString();
-        auto it = byHash.find (hash);
+        auto it = byHash.find (u["hash"].toString());
         if (it == byHash.end())
             continue;
-        const auto& item = *it->second;
-        const int64 size = item.size();
-
-        auto readRange = [&item] (int64 start, int64 length, MemoryBlock& out) -> bool
-        {
-            out.reset();
-            if (item.file == File())
-            {
-                out.append (static_cast<const char*> (item.data.getData()) + start, (size_t) length);
-                return true;
-            }
-            FileInputStream in (item.file);
-            if (in.failedToOpen() || ! in.setPosition (start))
-                return false;
-            out.setSize ((size_t) length);
-            return in.read (out.getData(), (int) length) == (int) length;
-        };
+        const auto* item = it->second;
+        const int64 size = item->size();
+        total += size;
 
         if (u["method"].toString() == "PUT")
         {
-            MemoryBlock data;
-            if (! readRange (0, size, data))
-                return Result::fail ("Couldn't read " + item.file.getFullPathName());
-            const auto r = httpRequest ("PUT", u["url"].toString(), &data, octet, 300000);
-            if (! r.ok())
-                return Result::fail ("Upload failed: " + r.errorMessage());
-            done += size;
+            pieces.push_back ({ item, u["url"].toString(), 0, size, -1, 0 });
+            continue;
+        }
+
+        const int64 partSize = u["partSize"].isVoid() ? (int64) kPartSizeFallback : (int64) u["partSize"];
+        BigFile big { item->hash, u["uploadId"].toString(), {} };
+        if (auto* parts = u["parts"].getArray())
+        {
+            big.etags.resize ((size_t) parts->size());
+            for (auto& p : *parts)
+            {
+                const int number = (int) p["number"];
+                const int64 start = (int64) (number - 1) * partSize;
+                pieces.push_back ({ item, p["url"].toString(), start, jmin (partSize, size - start),
+                                    (int) bigFiles.size(), number });
+            }
+        }
+        bigFiles.push_back (std::move (big));
+    }
+
+    std::atomic<int64> done { 0 };
+    std::atomic<int> wholeFilesDone { 0 };
+    CriticalSection etagLock;
+    const String octet = "Content-Type: application/octet-stream";
+
+    auto r = runParallel ((int) pieces.size(), parallelTransfers.load(), [&] (int index, const std::atomic<bool>& stop)
+    {
+        const auto& piece = pieces[(size_t) index];
+        const auto& item = *piece.item;
+        if (piece.length <= 0)
+            return Result::fail ("Couldn't read " + item.file.getFullPathName());
+
+        // Read just this piece, right before sending it.
+        MemoryBlock data;
+        if (item.file == File())
+        {
+            data.append (static_cast<const char*> (item.data.getData()) + piece.start, (size_t) piece.length);
         }
         else
         {
-            const int64 partSize = u["partSize"].isVoid() ? (int64) kPartSizeFallback : (int64) u["partSize"];
-            Array<var> etags;
-            if (auto* parts = u["parts"].getArray())
-            {
-                for (auto& p : *parts)
-                {
-                    const int number = (int) p["number"];
-                    const int64 start = (int64) (number - 1) * partSize;
-                    const int64 length = jmin (partSize, size - start);
-                    MemoryBlock data;
-                    if (length <= 0 || ! readRange (start, length, data))
-                        return Result::fail ("Couldn't read " + item.file.getFullPathName());
-                    const auto r = httpRequest ("PUT", p["url"].toString(), &data, octet, 600000);
-                    if (! r.ok())
-                        return Result::fail ("Upload failed: " + r.errorMessage());
-                    DynamicObject::Ptr e = new DynamicObject();
-                    e->setProperty ("number", number);
-                    e->setProperty ("etag", r.headers.getValue ("ETag", {}));
-                    etags.add (var (e.get()));
-                    done += length;
-                    if (progress && total > 0 && ! progress ((double) done / (double) total))
-                        return Result::fail ("Cancelled.");
-                }
-            }
-            DynamicObject::Ptr req = new DynamicObject();
-            req->setProperty ("hash", hash);
-            req->setProperty ("uploadId", u["uploadId"]);
-            req->setProperty ("parts", etags);
-            ApiError err;
-            // Joining the parts of a big file can take S3 a while.
-            call ("POST", "/projects/" + projectId + "/blobs/complete", var (req.get()), err, 600000);
-            if (err.status != 0)
-                return Result::fail (err.message);
+            FileInputStream in (item.file);
+            data.setSize ((size_t) piece.length);
+            if (in.failedToOpen() || ! in.setPosition (piece.start)
+                || in.read (data.getData(), (int) piece.length) != (int) piece.length)
+                return Result::fail ("Couldn't read " + item.file.getFullPathName());
         }
 
-        ++uploadedCount;
-        if (progress && total > 0 && ! progress ((double) done / (double) total))
-            return Result::fail ("Cancelled.");
+        const auto res = withRetries ([&] { return httpRequest ("PUT", piece.url, &data, octet, 600000); }, stop);
+        if (! res.ok())
+            return Result::fail ("Upload failed: " + res.errorMessage());
+
+        if (piece.partNumber > 0)
+        {
+            const ScopedLock sl (etagLock);
+            bigFiles[(size_t) piece.fileIndex].etags[(size_t) piece.partNumber - 1] = res.headers.getValue ("ETag", {});
+        }
+        else
+        {
+            ++wholeFilesDone;
+        }
+        done += piece.length;
+        return Result::ok();
+    },
+    [&] { return progress == nullptr || total <= 0 || progress ((double) done.load() / (double) total); });
+
+    if (r.failed())
+        return r;
+
+    // Join each big file's pieces (S3 can take a while for very big ones).
+    for (auto& big : bigFiles)
+    {
+        Array<var> parts;
+        for (size_t i = 0; i < big.etags.size(); ++i)
+        {
+            DynamicObject::Ptr e = new DynamicObject();
+            e->setProperty ("number", (int) i + 1);
+            e->setProperty ("etag", big.etags[i]);
+            parts.add (var (e.get()));
+        }
+        DynamicObject::Ptr req = new DynamicObject();
+        req->setProperty ("hash", big.hash);
+        req->setProperty ("uploadId", big.uploadId);
+        req->setProperty ("parts", parts);
+        ApiError err;
+        call ("POST", "/projects/" + projectId + "/blobs/complete", var (req.get()), err, 600000);
+        if (err.status != 0)
+            return Result::fail (err.message);
     }
+
+    uploadedCount = wholeFilesDone.load() + (int) bigFiles.size();
+    if (progress)
+        progress (1.0);
     return Result::ok();
 }
 
@@ -595,6 +735,8 @@ Result Client::download (const String& projectId, const std::vector<std::pair<St
     if (wanted.empty())
         return Result::ok();
 
+    // Links for everything first (cheap), then the files, several at a time.
+    std::vector<String> urls (wanted.size());
     for (size_t i = 0; i < wanted.size(); i += 400)
     {
         Array<var> hashes;
@@ -606,24 +748,69 @@ Result Client::download (const String& projectId, const std::vector<std::pair<St
         const auto resp = call ("POST", "/projects/" + projectId + "/blobs/downloads", var (req.get()), err);
         if (err.status != 0)
             return Result::fail (err.message);
-
         for (size_t j = i; j < jmin (wanted.size(), i + 400); ++j)
         {
-            const auto& [hash, dest] = wanted[j];
-            const auto url = resp["urls"][Identifier (hash)].toString();
-            if (url.isEmpty())
-                return Result::fail ("The server didn't offer " + hash.substring (0, 12));
-
-            const double start = (double) j / (double) wanted.size(), span = 1.0 / (double) wanted.size();
-            if (auto r = httpDownload (url, dest, subProgress (progress, start, span)); r.failed())
-                return r;
-            if (sha256OfFile (dest) != hash)
-            {
-                dest.deleteFile();
-                return Result::fail ("A downloaded file was damaged (" + dest.getFileName() + "). Try again.");
-            }
+            urls[j] = resp["urls"][Identifier (wanted[j].first)].toString();
+            if (urls[j].isEmpty())
+                return Result::fail ("The server didn't offer " + wanted[j].first.substring (0, 12));
         }
     }
+
+    std::vector<std::atomic<float>> fraction (wanted.size());
+    for (auto& f : fraction)
+        f = 0.0f;
+
+    auto r = runParallel ((int) wanted.size(), parallelTransfers.load(), [&] (int index, const std::atomic<bool>& stop)
+    {
+        const auto& [hash, dest] = wanted[(size_t) index];
+        Result last = Result::ok();
+        for (int tries = 0; tries < 3; ++tries)
+        {
+            if (tries > 0)
+                for (int waited = 0; waited < (tries == 1 ? 1000 : 3000) && ! stop.load(); waited += 100)
+                    Thread::sleep (100);
+            if (stop.load())
+                return Result::fail ("Cancelled.");
+
+            if (testing::droppedTransfers.load() > 0 && testing::droppedTransfers.fetch_sub (1) > 0)
+            {
+                last = Result::fail ("Couldn't connect (simulated).");
+                continue;
+            }
+
+            last = httpDownload (urls[(size_t) index], dest, [&] (double p)
+            {
+                fraction[(size_t) index] = (float) p;
+                return ! stop.load();
+            });
+            if (last.failed())
+            {
+                if (stop.load())
+                    return last;
+                continue;   // dropped connection: try again
+            }
+            if (sha256OfFile (dest) == hash)
+            {
+                fraction[(size_t) index] = 1.0f;
+                return Result::ok();
+            }
+            dest.deleteFile();
+            last = Result::fail ("A downloaded file was damaged (" + dest.getFileName() + ").");
+        }
+        return last;
+    },
+    [&]
+    {
+        if (progress == nullptr)
+            return true;
+        double sum = 0.0;
+        for (auto& f : fraction)
+            sum += f.load();
+        return progress (sum / (double) wanted.size());
+    });
+
+    if (r.failed())
+        return r;
     if (progress)
         progress (1.0);
     return Result::ok();

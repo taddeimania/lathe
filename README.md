@@ -83,6 +83,7 @@ Lathe can share a project with collaborators through your own small cloud backen
 **Push**
 - Uploads what you have open as a new revision, with your description and an automatic summary of what changed (faders, pans, mutes, sends, EQ bands, plug-in knobs, clips, new or removed tracks, tempo, monitor mixes).
 - Audio files are stored once under their content hash, so a take is never uploaded twice.
+- Up to 4 files (or 64 MB pieces of a big file) move at once, in both directions, and a dropped connection is retried. Change this under **Cloud > Transfers at Once**: 1 sends one file at a time, which is gentler on a slow connection.
 
 **Pull**
 - Downloads new revisions and the latest one's audio.
@@ -152,8 +153,9 @@ Select tracks (Cmd/Ctrl-click or Shift-click their names), then press **Cmd/Ctrl
 - **Arm** arms every track in the group, or disarms them all if they're all armed.
 - **S / M** solo or mute the whole group, on top of each track's own buttons. The members' own states are kept, so un-muting the group brings back exactly what was there before.
 - **The triangle** collapses the group to its header, to save space on a big session.
+- **FX** gives the group its own bus (a drum bus, say): a channel every track in the group plays through. It opens in the device panel, so you can add plug-ins (a compressor, a reverb), the channel EQ and a fader that process the whole group at once. Tracks that join the group later play through it too; tracks that leave go back to the master. The bus also shows in the mixer with the returns. Right-click the group header → **Remove Group Bus** to send the tracks straight to the master again.
 
-Click a group's header to select all its tracks. Double-click its name to rename it, and right-click it for colour, arm all, collapse and **Ungroup** (Cmd/Ctrl+Shift+G), which keeps the tracks. In the mixer, members show the group's name above their own. Groups are saved in projects and templates. They control tracks together but don't change the audio routing; to process a group's audio together, send its tracks to a return.
+Click a group's header to select all its tracks. Double-click its name to rename it, and right-click it for colour, arm all, collapse and **Ungroup** (Cmd/Ctrl+Shift+G), which keeps the tracks. In the mixer, members show the group's name above their own. Groups (and group buses) are saved in projects and templates. Without a bus a group only controls its tracks together; with one, their audio is mixed and processed together too.
 
 Double-click any track or group name to rename it in place (Return keeps, Escape cancels). The scroll wheel scrolls the track list wherever the pointer is over the arrangement.
 

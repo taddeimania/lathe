@@ -100,6 +100,10 @@ public:
     /** Uploads whichever items the server doesn't have yet. progress: 0..1. */
     Result upload (const String& projectId, const std::vector<UploadItem>& items,
                    const std::function<bool (double)>& progress, int& uploadedCount);
+    /** How many files (or pieces of a big file) move at once, up and down. Default 4. */
+    void setParallelTransfers (int n)    { parallelTransfers = jlimit (1, 16, n); }
+    int getParallelTransfers() const     { return parallelTransfers.load(); }
+
     /** Downloads blobs to files, checking each file's SHA-256. */
     Result download (const String& projectId, const std::vector<std::pair<String, File>>& hashAndDestination,
                      const std::function<bool (double)>& progress);
@@ -111,7 +115,14 @@ private:
     Config config;
     mutable CriticalSection lock;
     Session session;
+    std::atomic<int> parallelTransfers { 4 };
 };
+
+namespace testing
+{
+/** Makes the next `count` transfer requests fail as if the connection dropped. */
+void dropNextTransfers (int count);
+}
 
 /** SHA-256 of a file, as lowercase hex. Streams in pieces; progress (0..1) can cancel,
     in which case it returns an empty string. */

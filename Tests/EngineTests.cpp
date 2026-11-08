@@ -1022,6 +1022,84 @@ int main()
                "replaces Lathe.app as a whole");
     }
 
+    std::cout << "Group buses" << std::endl;
+    {
+        Edit e;
+        e.sampleRate = 48000.0;
+        auto kick = e.addTrack (TrackKind::audio, "Kick");
+        auto snare = e.addTrack (TrackKind::audio, "Snare");
+        auto bass = e.addTrack (TrackKind::audio, "Bass");
+        for (auto& t : { kick, snare })
+        {
+            t->input = { 0, false };
+            t->monitor = (int) Monitor::in;
+        }
+        auto drums = e.createGroup ({ kick->id, snare->id }, "Drums");
+        auto bus = e.makeGroupBus (drums->id);
+        check (bus != nullptr && bus->name == "Drums Bus" && bus->isBus() && drums->busId == bus->id
+                 && kick->output.kind == OutputRoute::Kind::bus && kick->output.busId == bus->id
+                 && snare->output.busId == bus->id && bass->output.kind == OutputRoute::Kind::master,
+               "making a group bus routes the group's tracks (and only them) through it");
+        check (e.makeGroupBus (drums->id) == bus, "asking again gives the same bus");
+
+        // Audio: two monitored inputs at 0.25 each -> 0.5 on the bus -> bus fader -6 dB -> 0.25 out.
+        Engine eng (host, pool, props);
+        eng.setEdit (&e);
+        FakeDevice dev (2, 2, 0, 0);
+        eng.audioDeviceAboutToStart (&dev);
+        eng.rebuild();
+        AudioBuffer<float> ins (2, 256), outs (2, 256);
+        auto run = [&] (int blocks)
+        {
+            for (int b = 0; b < blocks; ++b)
+            {
+                ins.clear();
+                FloatVectorOperations::fill (ins.getWritePointer (0), 0.25f, 256);
+                eng.audioDeviceIOCallbackWithContext (ins.getArrayOfReadPointers(), 2, outs.getArrayOfWritePointers(), 2, 256, {});
+            }
+        };
+        run (4);
+        check (std::abs (outs.getSample (0, 255) - 0.5f) < 0.01f, "both drums reach the master through the bus (got " + String (outs.getSample (0, 255)) + ")");
+        bus->volumeDb = -6.0206f;
+        run (4);
+        check (std::abs (outs.getSample (0, 255) - 0.25f) < 0.01f, "the bus fader sets the whole group's level (got " + String (outs.getSample (0, 255)) + ")");
+        bus->volumeDb = 0.0f;
+        bus->eq.bands[0].on = true;   // a low cut on the bus removes the DC from both drums
+        bus->eq.bands[0].freq = 100.0f;
+        run (200);
+        check (outs.getMagnitude (0, 0, 256) < 0.001f, "processing on the bus applies to the whole group");
+        bus->eq.bands[0].on = false;
+        eng.setEdit (nullptr);
+
+        // Membership follows the bus.
+        e.setTrackGroup (bass->id, drums->id);
+        check (bass->output.kind == OutputRoute::Kind::bus && bass->output.busId == bus->id, "a track joining the group plays through its bus");
+        e.setTrackGroup (bass->id, -1);
+        check (bass->output.kind == OutputRoute::Kind::master, "and goes back to the master when it leaves");
+        auto hats = e.addTrack (TrackKind::audio, "Hats");
+        hats->output.kind = OutputRoute::Kind::hardware;
+        hats->output.channel = 2;
+        e.setTrackGroup (hats->id, drums->id);
+        check (hats->output.kind == OutputRoute::Kind::hardware, "a track sent to hardware on purpose keeps its output");
+
+        e.renameGroup (drums->id, "Kit");
+        check (drums->name == "Kit" && bus->name == "Kit Bus", "renaming the group renames its bus");
+
+        Edit loaded;
+        loaded.loadFrom (JSON::parse (JSON::toString (e.toVar (true))), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        auto lg = loaded.groups.empty() ? nullptr : loaded.groups[0];
+        auto lbus = lg != nullptr ? loaded.findGroupBus (lg->id) : nullptr;
+        check (lbus != nullptr && lbus->name == "Kit Bus" && loaded.tracks[0]->output.busId == lbus->id, "a group bus survives a template save and load");
+
+        e.removeGroupBus (drums->id);
+        check (e.buses.empty() && drums->busId == -1 && kick->output.kind == OutputRoute::Kind::master
+                 && snare->output.kind == OutputRoute::Kind::master, "removing the bus sends the tracks straight to the master");
+
+        auto b2 = e.makeGroupBus (drums->id);
+        e.removeTrack (b2->id);
+        check (drums->busId == -1 && e.findGroupBus (drums->id) == nullptr, "deleting the bus channel itself is handled too");
+    }
+
     std::cout << "Cloud: change summaries" << std::endl;
     {
         Edit a;
@@ -1258,6 +1336,61 @@ int main()
         int uploads = -1;
         joel.upload (joelStore.getProjectId(), { { cloud::sha256OfFile (take.file), take.file, {} } }, {}, uploads);
         check (uploads == 0, "the take was only ever uploaded once");
+
+        // Several files at once, plus a big one in pieces; dropped connections are retried.
+        {
+            const auto batchDir = dir.getChildFile ("cloud-parallel");
+            batchDir.createDirectory();
+            std::vector<cloud::Client::UploadItem> batch;
+            std::vector<std::pair<String, File>> back;
+            for (int i = 0; i < 6; ++i)
+            {
+                MemoryBlock m ((size_t) 300000 + (size_t) i);
+                for (size_t k = 0; k < m.getSize(); ++k)
+                    static_cast<uint8*> (m.getData())[k] = (uint8) ((k * 31 + (size_t) i * 7) & 0xff);
+                const auto f = batchDir.getChildFile ("take" + String (i) + ".wav");
+                f.replaceWithData (m.getData(), m.getSize());
+                batch.push_back ({ cloud::sha256OfFile (f), f, {} });
+                back.push_back ({ batch.back().hash, batchDir.getChildFile ("back/take" + String (i) + ".wav") });
+            }
+            {
+                // 110 MB: over the single-upload limit, so it goes up as two pieces.
+                const auto big = batchDir.getChildFile ("long-take.wav");
+                FileOutputStream out (big);
+                HeapBlock<uint8> chunk (1 << 20);
+                for (int mb = 0; mb < 110; ++mb)
+                {
+                    for (int k = 0; k < (1 << 20); ++k)
+                        chunk[k] = (uint8) ((k ^ (mb * 131)) & 0xff);
+                    out.write (chunk, 1 << 20);
+                }
+                out.flush();
+                batch.push_back ({ cloud::sha256OfFile (big), big, {} });
+                back.push_back ({ batch.back().hash, batchDir.getChildFile ("back/long-take.wav") });
+            }
+
+            joel.setParallelTransfers (4);
+            cloud::testing::dropNextTransfers (2);
+            std::vector<double> seen;
+            int sent = 0;
+            const auto r = joel.upload (joelStore.getProjectId(), batch, [&] (double p) { seen.push_back (p); return true; }, sent);
+            check (r.wasOk() && sent == 7, "uploads 7 files, 4 at a time, through 2 dropped connections (" + r.getErrorMessage() + ")");
+            check (! seen.empty() && seen.back() == 1.0 && std::is_sorted (seen.begin(), seen.end()), "progress only goes forward and ends at 100%");
+
+            cloud::testing::dropNextTransfers (1);
+            const auto d = joel.download (joelStore.getProjectId(), back, {});
+            bool same = d.wasOk();
+            for (size_t i = 0; i < back.size() && same; ++i)
+                same = cloud::sha256OfFile (back[i].second) == batch[i].hash;
+            check (same, "downloads them 4 at a time, every file intact (" + d.getErrorMessage() + ")");
+
+            // Stopping partway: nothing new starts, and it says so.
+            std::vector<std::pair<String, File>> again;
+            for (auto& [h, f] : back)
+                again.push_back ({ h, f.getSiblingFile ("again-" + f.getFileName()) });
+            const auto c = joel.download (joelStore.getProjectId(), again, [] (double) { return false; });
+            check (c.failed() && c.getErrorMessage() == "Cancelled.", "a transfer can be stopped");
+        }
 
         // Signed-out access is refused by the API.
         cloud::Client nobody (config);
