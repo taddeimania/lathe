@@ -51,7 +51,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-These are headless engine checks that run a fake audio device through the real audio callback. They cover clip timing, plug-in delay compensation, mute, solo and faders, sends, looping, record-latency offset, export, project round-trip, and clip splitting and undo. The test build also makes three tiny VST3s (one that works, one that crashes while loading, and one that hangs). With those, the tests check that scanning skips the bad plug-ins without freezing or crashing Lathe. They also test the plug-in store: release parsing against the real release format, picking the right platform archive, zip (with Unix permissions) and tar.gz installs, updates over an existing copy, staged updates, and the full download-and-install flow.
+These are headless engine checks that run a fake audio device through the real audio callback. They cover clip timing, plug-in delay compensation, mute, solo and faders, sends, looping, record-latency offset, export, project round-trip, clip splitting and undo, and joining clips (the joined audio plays back sample-identical). The test build also makes three tiny VST3s (one that works, one that crashes while loading, and one that hangs). With those, the tests check that scanning skips the bad plug-ins without freezing or crashing Lathe. They also test the plug-in store: release parsing against the real release format, picking the right platform archive, zip (with Unix permissions) and tar.gz installs, updates over an existing copy, staged updates, and the full download-and-install flow.
 
 ---
 
@@ -106,7 +106,7 @@ Lathe can share a project with collaborators through your own small cloud backen
 
 ## Updating (Lathe Patcher)
 
-Lathe comes with a small updater, **Lathe Patcher**. Open it from **Options > Check for Updates…** in Lathe. On Windows and Linux you can also double-click `LathePatcher` in the Lathe folder.
+Lathe comes with a small updater, **Lathe Patcher**. Open it from **Options > Check for Updates…** in Lathe. Lathe also checks GitHub on its own, shortly after it starts and then every 12 hours. When there's a newer release it shows **Update available** in orange at the bottom right of the window (no pop-up). Click it to open the patcher. Right-click it to skip that version or turn the checks off. **Options > Check for Updates Automatically** also turns them off or back on. The check uses `LATHE_UPDATE_URL` too. On Windows and Linux you can also double-click `LathePatcher` in the Lathe folder.
 
 - It asks GitHub for the latest **published** release of `taddeimania/lathe` and compares it with the installed version.
 - If there's a newer one, it shows the release notes. **Update** then:
@@ -209,9 +209,13 @@ Every track, return and the master has a built-in EQ after its plug-ins and befo
 | Cmd/Ctrl+B | Plug-in browser |
 | Cmd/Ctrl+G, +Shift+G | Group the selected tracks / ungroup |
 | Cmd/Ctrl+T, +Shift+T, +Alt+T | Add audio / MIDI / return track |
-| Cmd/Ctrl+D | Duplicate clip |
-| Cmd/Ctrl+E | Split clip at the start marker |
-| Delete | Delete clip (or notes in the piano roll) |
+| Cmd/Ctrl-click, Shift-click | Add a clip to the selection (or take it out). Drag on empty lane space to box-select clips. |
+| Cmd/Ctrl+A | Select all clips |
+| Cmd/Ctrl+C, X, V | Copy / cut the selected clips; paste them at the start marker on the selected track (click an empty spot to put the marker there) |
+| Cmd/Ctrl+D | Duplicate the selected clips |
+| Cmd/Ctrl+J | Join the selected clips on each track into one clip (audio is rendered to a new file) |
+| Cmd/Ctrl+E | Split the selected clips at the start marker |
+| Delete | Delete the selected clips (or notes in the piano roll) |
 | Cmd/Ctrl+Z, Shift+Z | Undo / redo for clip and note edits |
 | Cmd/Ctrl+scroll | Zoom. Shift+scroll scrolls sideways. Hold Alt while dragging to ignore the grid. |
 | Piano roll | Double-click to add or delete a note, drag to move, drag a note's end to resize, drag on empty space to select, ↑↓ to transpose (Shift moves an octave), Q to quantize |

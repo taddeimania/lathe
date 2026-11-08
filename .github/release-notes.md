@@ -3,6 +3,33 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.4.4
+
+- **Copy and paste clips.** Select a clip, press Cmd/Ctrl+C, click an empty
+  spot on a track (that puts the start marker there), and press Cmd/Ctrl+V.
+  The start marker moves past what you pasted, so pressing paste again lays
+  copies end to end. Cmd/Ctrl+X cuts.
+- **Select several clips.** Cmd/Ctrl- or Shift-click clips, drag a box around
+  them on empty lane space, or press Cmd/Ctrl+A. Copy, paste, duplicate, split
+  and delete work on all of them. Clips copied from several tracks paste in the
+  same layout, starting from the selected track.
+- **Join clips.** Cmd/Ctrl+J (or right-click > Join) turns the selected clips on
+  a track into one clip. Gaps become silence. For audio, Lathe writes a new file
+  that sounds exactly like the pieces did, clip gain included. Undo brings the
+  pieces back.
+- **You can see when you're recording.** The record button turns solid red and
+  pulses, the counters turn red, and a red line runs under the transport. A red
+  "Recording" clip grows on every armed track as you play.
+
+## New in 0.4.3
+
+- **Lathe tells you when there's an update.** A little after it opens (and then
+  twice a day), Lathe asks GitHub for the latest release. If there's a newer
+  one, a quiet orange **Update available** appears at the bottom right. No
+  pop-ups. Click it to update with Lathe Patcher. Right-click it to see what's
+  new, skip that version, or stop the checks. **Options > Check for Updates
+  Automatically** turns the checks off or back on.
+
 ## New in 0.4.2
 
 - **Group buses.** Click **FX** on a group's header (or right-click it → Add

@@ -19,7 +19,8 @@ struct AppContext
     {
         int trackId = -1;               // the focused track (device panel, record auto-arm)
         std::set<int> trackIds;         // all selected tracks (Cmd/Ctrl- and Shift-click add more)
-        int clipTrackId = -1, clipId = -1;
+        int clipTrackId = -1, clipId = -1;     // the clip clicked last (menus, piano roll)
+        std::set<std::pair<int, int>> clips;   // every selected clip as (trackId, clipId), including that one
     } selection;
 
     std::function<void()> selectionChanged;
@@ -73,11 +74,54 @@ struct AppContext
         selection.trackId = trackId;
         selection.clipTrackId = trackId;
         selection.clipId = clipId;
+        selection.clips = { { trackId, clipId } };
         if (selectionChanged) selectionChanged();
+    }
+    /** Cmd/Ctrl- or Shift-click on a clip: adds it to the selection, or takes it out. */
+    void toggleClip (int trackId, int clipId)
+    {
+        const std::pair<int, int> key { trackId, clipId };
+        if (selection.clips.count (key) > 0)
+        {
+            selection.clips.erase (key);
+            if (selection.clipId == clipId)
+            {
+                selection.clipTrackId = selection.clipId = -1;
+                if (! selection.clips.empty())
+                    std::tie (selection.clipTrackId, selection.clipId) = *selection.clips.begin();
+            }
+        }
+        else
+        {
+            selection.clips.insert (key);
+            selection.trackId = selection.clipTrackId = trackId;
+            selection.clipId = clipId;
+        }
+        if (selectionChanged) selectionChanged();
+    }
+    /** Replaces the clip selection with these (trackId, clipId) pairs. */
+    void setClipSelection (std::set<std::pair<int, int>> clips)
+    {
+        selection.clips = std::move (clips);
+        if (selection.clips.empty())
+            selection.clipTrackId = selection.clipId = -1;
+        else if (selection.clips.count ({ selection.clipTrackId, selection.clipId }) == 0)
+            std::tie (selection.clipTrackId, selection.clipId) = *selection.clips.begin();
+        if (selectionChanged) selectionChanged();
+    }
+    bool isClipSelected (int clipId) const
+    {
+        if (selection.clipId == clipId)
+            return true;
+        for (auto& c : selection.clips)
+            if (c.second == clipId)
+                return true;
+        return false;
     }
     void clearClipSelection()
     {
         selection.clipTrackId = selection.clipId = -1;
+        selection.clips.clear();
         if (selectionChanged) selectionChanged();
     }
 };

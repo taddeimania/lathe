@@ -20,10 +20,21 @@ public:
     void resized() override;
     void paint (Graphics&) override;
 
-    // clip commands (keyboard shortcuts and menus)
+    // clip commands (keyboard shortcuts and menus). They act on every selected clip.
     bool deleteSelectedClip();
     void duplicateSelectedClip();
     void splitSelectedClip();
+    /** Copies the selected clips (Cmd+C). Cut also removes them. */
+    bool copySelectedClips();
+    bool cutSelectedClips();
+    /** Pastes at the start marker on the selected track (Cmd+V). Clips copied from
+        several tracks keep their layout, going down from the selected track. */
+    void pasteClips();
+    /** Joins the selected clips on each track into one clip (Cmd+J). */
+    void joinSelectedClips();
+    void selectAllClips();
+    int numSelectedClips() const;
+    bool canPaste() const   { return ! clipboard.empty(); }
     void importFiles (const Array<File>&, int trackIndex, double atBeat);
     void zoom (double factor, float anchorX);
     void scrollToPlayhead();
@@ -73,6 +84,26 @@ private:
         int y = 0, height = 0;
     };
     void layoutRows();
+
+    /** A copied clip: its start is relative to the copied block, its track relative to the top track. */
+    struct CopiedClip
+    {
+        Clip clip;
+        int trackOffset = 0;
+        TrackKind kind = TrackKind::audio;
+    };
+    std::vector<CopiedClip> clipboard;
+    double clipboardLength = 0.0;
+
+    struct SelectedClip { std::shared_ptr<Track> track; int trackIndex = -1; Clip* clip = nullptr; };
+    /** The selected clips that still exist, in track order then time order. */
+    std::vector<SelectedClip> getSelectedClips() const;
+    std::vector<CopiedClip> gatherSelection (double& blockStart, double& blockEnd, int& topTrack) const;
+    /** Places copies at a beat, from a track index down. Returns how many couldn't be placed. */
+    int placeClips (const std::vector<CopiedClip>&, double atBeat, int topTrackIndex);
+
+    // recording display
+    bool wasRecording = false;
 
     void scrollBarMoved (ScrollBar*, double newRangeStart) override;
     void updateScrollBars();

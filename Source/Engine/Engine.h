@@ -56,6 +56,8 @@ public:
     double getPlayheadBeats() const;
     void seekTo (double beats);
     std::atomic<bool> metronomeOn { false };
+    /** Where the current (or last) recording started, in beats. */
+    std::atomic<double> recordStartBeats { 0.0 };
 
     // --- device info
     double getSampleRate() const noexcept   { return deviceRate.load(); }

@@ -7,10 +7,10 @@ namespace menu
     enum
     {
         newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit,
-        undo = 100, redo, deleteClip, duplicate, split,
+        undo = 100, redo, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut,
-        settings = 400, scan, metronome, browser, checkUpdates,
+        settings = 400, scan, metronome, browser, checkUpdates, autoUpdates,
         templateBase = 1000, recentBase = 2000
     };
 }
@@ -177,6 +177,10 @@ MainComponent::MainComponent (PropertiesFile& s)
     hooks.projectsDir = [] { return getProjectsDir(); };
     cloud = std::make_unique<CloudController> (ctx, settings, hooks);
     addAndMakeVisible (cloud->getStatusComponent());
+
+    updateNotice = std::make_unique<UpdateNotice> (settings, [this] { openPatcher(); });
+    updateNotice->onShowOrHide = [this] { resized(); };
+    addChildComponent (*updateNotice);
 
     setSize (1360, 860);
     startTimerHz (30);
@@ -726,6 +730,8 @@ void MainComponent::resized()
     auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
     if (cloud != nullptr)
         cloud->getStatusComponent().setBounds (status.removeFromRight (300));
+    if (updateNotice != nullptr && updateNotice->isVisible())
+        updateNotice->setBounds (status.removeFromRight (230));
     statusRight.setBounds (status.removeFromRight (360));
     statusLeft.setBounds (status);
 
@@ -805,10 +811,19 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::undo, "Undo (clips and notes)", cmd + "Z", edit.canUndo());
         item (menu::redo, "Redo", cmd + "Shift+Z", edit.canRedo());
         m.addSeparator();
-        const bool hasClip = ctx.selection.clipId >= 0;
-        item (menu::duplicate, "Duplicate Clip", cmd + "D", hasClip);
-        item (menu::split, "Split Clip at Start Marker", cmd + "E", hasClip);
-        item (menu::deleteClip, "Delete Clip", "Delete", hasClip);
+        const int numClips = arrangement.numSelectedClips();
+        const bool hasClip = numClips > 0;
+        const String clips = numClips > 1 ? "Clips" : "Clip";
+        item (menu::cutClips, "Cut " + clips, cmd + "X", hasClip);
+        item (menu::copyClips, "Copy " + clips, cmd + "C", hasClip);
+        item (menu::pasteClips, "Paste at Start Marker", cmd + "V", arrangement.canPaste());
+        item (menu::duplicate, "Duplicate " + clips, cmd + "D", hasClip);
+        m.addSeparator();
+        item (menu::joinClips, "Join Clips", cmd + "J", numClips > 1);
+        item (menu::split, "Split " + clips + " at Start Marker", cmd + "E", hasClip);
+        item (menu::deleteClip, "Delete " + clips, "Delete", hasClip);
+        m.addSeparator();
+        item (menu::selectAllClips, "Select All Clips", cmd + "A", true);
     }
     else if (index == 2)
     {
@@ -840,6 +855,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::metronome, "Metronome", "C", true, engine.metronomeOn.load());
         m.addSeparator();
         item (menu::checkUpdates, "Check for Updates...", {});
+        item (menu::autoUpdates, "Check for Updates Automatically", {}, true,
+              updateNotice != nullptr && updateNotice->checksAutomatically());
     }
     else if (index == 5 && cloud != nullptr)
     {
@@ -908,6 +925,11 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::deleteClip:    arrangement.deleteSelectedClip(); break;
         case menu::duplicate:     arrangement.duplicateSelectedClip(); break;
         case menu::split:         arrangement.splitSelectedClip(); break;
+        case menu::cutClips:      arrangement.cutSelectedClips(); break;
+        case menu::copyClips:     arrangement.copySelectedClips(); break;
+        case menu::pasteClips:    arrangement.pasteClips(); break;
+        case menu::joinClips:     arrangement.joinSelectedClips(); break;
+        case menu::selectAllClips: arrangement.selectAllClips(); break;
 
         case menu::addAudio:      ctx.selectTrack (edit.addTrack (TrackKind::audio)->id); break;
         case menu::addMidi:       ctx.selectTrack (edit.addTrack (TrackKind::midi)->id); break;
@@ -931,6 +953,10 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::scan:          host.startScan (false); break;
         case menu::browser:       openPluginBrowser(); break;
         case menu::checkUpdates:  openPatcher(); break;
+        case menu::autoUpdates:
+            if (updateNotice != nullptr)
+                updateNotice->setChecksAutomatically (! updateNotice->checksAutomatically());
+            break;
         case menu::metronome:     engine.metronomeOn = ! engine.metronomeOn.load(); break;
         default: break;
     }
@@ -965,6 +991,11 @@ bool MainComponent::keyPressed (const KeyPress& k)
         if (is ('i')) { menuItemSelected (menu::importAudio, 0); return true; }
         if (is ('e')) { menuItemSelected (shift ? menu::exportAudio : menu::split, 0); return true; }
         if (is ('d')) { menuItemSelected (menu::duplicate, 0); return true; }
+        if (is ('c')) { menuItemSelected (menu::copyClips, 0); return true; }
+        if (is ('x')) { menuItemSelected (menu::cutClips, 0); return true; }
+        if (is ('v')) { menuItemSelected (menu::pasteClips, 0); return true; }
+        if (is ('j')) { menuItemSelected (menu::joinClips, 0); return true; }
+        if (is ('a')) { menuItemSelected (menu::selectAllClips, 0); return true; }
         if (is ('t')) { menuItemSelected (mods.isAltDown() ? menu::addReturn : shift ? menu::addMidi : menu::addAudio, 0); return true; }
         if (ch == ',') { menuItemSelected (menu::settings, 0); return true; }
         if (is ('b')) { openPluginBrowser(); return true; }

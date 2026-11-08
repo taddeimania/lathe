@@ -1,4 +1,5 @@
 #include "Arrangement.h"
+#include "../Engine/ClipJoin.h"
 #include <set>
 
 namespace lathe
@@ -623,15 +624,63 @@ public:
             }
         }
 
+        // what's being recorded right now: a red clip growing on each armed track
+        const bool recording = ctx.engine.isRecording() && ctx.engine.isPlaying();
+        if (recording)
+        {
+            // (The engine records straight through, ignoring the loop.)
+            const double from = ctx.engine.recordStartBeats.load();
+            const double to = ctx.engine.getPlayheadBeats();
+            for (int i = 0; i < (int) edit.tracks.size(); ++i)
+            {
+                auto& t = *edit.tracks[(size_t) i];
+                if (! owner.isTrackShown (i) || ! t.holdsClips() || ! t.arm.load() || to <= from)
+                    continue;
+                const float x1 = owner.beatToX (from), x2 = owner.beatToX (to);
+                drawRecordingClip (g, { x1, (float) owner.trackTop (i) + 1.0f, jmax (2.0f, x2 - x1), (float) theme::trackHeight - 3.0f });
+            }
+        }
+
+        // box selection
+        if (! marquee.isEmpty())
+        {
+            g.setColour (theme::accent.withAlpha (0.08f));
+            g.fillRect (marquee);
+            g.setColour (theme::accent.withAlpha (0.7f));
+            g.drawRect (marquee, 1.0f);
+        }
+
         // start marker and playhead
         g.setColour (theme::text.withAlpha (0.35f));
         g.drawVerticalLine (roundToInt (owner.beatToX (edit.insertMarker)), 0.0f, (float) contentBottom);
 
         if (ctx.engine.isPlaying())
         {
-            g.setColour (ctx.engine.isRecording() ? theme::record : theme::accent);
-            g.fillRect (Rectangle<float> (owner.beatToX (ctx.engine.getPlayheadBeats()) - 0.5f, 0.0f, 1.5f, (float) contentBottom));
+            const float w = recording ? 2.0f : 1.5f;
+            g.setColour (recording ? theme::record : theme::accent);
+            g.fillRect (Rectangle<float> (owner.beatToX (ctx.engine.getPlayheadBeats()) - w * 0.5f, 0.0f, w, (float) contentBottom));
         }
+    }
+
+    void drawRecordingClip (Graphics& g, Rectangle<float> r)
+    {
+        const auto outline = r;
+        g.setColour (theme::record.withAlpha (0.16f));
+        g.fillRect (r);
+        auto titleBar = r.removeFromTop (14.0f);
+        g.setColour (theme::record);
+        g.fillRect (titleBar);
+        g.setColour (Colours::white);
+        g.setFont (theme::font (11.0f));
+        auto text = titleBar.reduced (4.0f, 0.0f);
+        if (text.getWidth() > 12.0f)
+        {
+            g.fillEllipse (text.removeFromLeft (7.0f).withSizeKeepingCentre (6.0f, 6.0f));
+            text.removeFromLeft (4.0f);
+            g.drawText ("Recording", text, Justification::centredLeft, true);
+        }
+        g.setColour (theme::record);
+        g.drawRect (outline, 1.5f);
     }
 
     Rectangle<float> clipBounds (int trackIndex, const Clip& c) const
@@ -642,7 +691,7 @@ public:
 
     void drawClip (Graphics& g, Track& t, const Clip& c, Rectangle<float> r)
     {
-        const bool selected = ctx.selection.clipId == c.id;
+        const bool selected = ctx.isClipSelected (c.id);
         const auto colour = t.colour;
         const auto outline = r;
 
@@ -763,20 +812,40 @@ public:
 
         auto track = ctx.edit.tracks[(size_t) h.trackIndex];
 
+        const bool adding = (e.mods.isCommandDown() || e.mods.isShiftDown()) && ! e.mods.isPopupMenu();
+
         if (h.clipId < 0)
         {
+            // Click: set the start marker here (where Play starts and Paste goes).
+            // Drag: draw a box to select clips; with Cmd/Ctrl or Shift it adds to the selection.
             ctx.selectTrack (track->id);
-            ctx.clearClipSelection();
+            drag.baseSelection = adding ? ctx.selection.clips : std::set<std::pair<int, int>>();
+            if (! adding)
+                ctx.clearClipSelection();
             ctx.edit.insertMarker = jmax (0.0, owner.snap (owner.xToBeat ((float) e.x), e.mods.isAltDown()));
             ctx.engine.seekTo (ctx.edit.insertMarker);
             ctx.edit.sendChangeMessage();
             if (e.mods.isPopupMenu())
                 showAddTrackMenu();
+            else
+            {
+                drag.mode = Drag::marquee;
+                drag.anchor = e.position;
+            }
             owner.repaint();
             return;
         }
 
-        ctx.selectClip (track->id, h.clipId);
+        if (adding)
+        {
+            ctx.toggleClip (track->id, h.clipId);
+            owner.repaint();
+            return;
+        }
+
+        // Right-clicking one of several selected clips keeps them all (for Join, Copy...).
+        if (! (e.mods.isPopupMenu() && ctx.isClipSelected (h.clipId) && ctx.selection.clips.size() > 1))
+            ctx.selectClip (track->id, h.clipId);
 
         if (e.mods.isPopupMenu())
         {
@@ -796,6 +865,25 @@ public:
     {
         if (drag.mode == Drag::none || (e.getDistanceFromDragStart() < 3 && ! drag.started))
             return;
+
+        if (drag.mode == Drag::marquee)
+        {
+            drag.started = true;
+            marquee = Rectangle<float> (drag.anchor, e.position);
+            auto picked = drag.baseSelection;
+            for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+            {
+                if (! owner.isTrackShown (i))
+                    continue;
+                auto& t = *ctx.edit.tracks[(size_t) i];
+                for (auto& c : t.clips)
+                    if (clipBounds (i, c).intersects (marquee))
+                        picked.insert ({ t.id, c.id });
+            }
+            ctx.setClipSelection (picked);
+            repaint();
+            return;
+        }
 
         auto track = ctx.edit.findTrack (drag.trackId);
         if (track == nullptr)
@@ -859,6 +947,14 @@ public:
 
     void mouseUp (const MouseEvent&) override
     {
+        if (drag.mode == Drag::marquee)
+        {
+            marquee = {};
+            drag = {};
+            repaint();
+            return;
+        }
+
         if (drag.mode != Drag::none && drag.started)
         {
             if (auto track = ctx.edit.findTrack (drag.trackId))
@@ -951,8 +1047,12 @@ private:
         PopupMenu m;
         if (c->kind == ClipKind::midi)
             m.addItem (10, "Edit notes...");
-        m.addItem (1, "Rename...");
+        const int numSelected = owner.numSelectedClips();
+        m.addItem (1, "Rename...", numSelected <= 1);
+        m.addItem (20, numSelected > 1 ? "Copy " + String (numSelected) + " Clips" : String ("Copy"));
+        m.addItem (21, "Paste at Start Marker", owner.canPaste());
         m.addItem (2, "Duplicate");
+        m.addItem (22, "Join " + String (jmax (2, numSelected)) + " Clips", numSelected > 1);
         m.addItem (3, "Split at start marker", ctx.edit.insertMarker > c->start && ctx.edit.insertMarker < c->end());
         if (c->kind == ClipKind::audio)
         {
@@ -985,6 +1085,9 @@ private:
                     if (auto* cc = track->findClip (clipId)) { cc->name = name; context->edit.changed(); }
                 });
             else if (r == 2) view->duplicateSelectedClip();
+            else if (r == 20) view->copySelectedClips();
+            else if (r == 21) view->pasteClips();
+            else if (r == 22) view->joinSelectedClips();
             else if (r == 3) view->splitSelectedClip();
             else if (r == 4) view->deleteSelectedClip();
             else if (r == 11) clip->file.revealToUser();
@@ -999,12 +1102,15 @@ private:
 
     struct Drag
     {
-        enum Mode { none, move, trimStart, trimEnd } mode = none;
+        enum Mode { none, move, trimStart, trimEnd, marquee } mode = none;
         int trackId = -1, clipId = -1;
         Clip original;
         double grabBeat = 0.0;
         bool started = false;
+        Point<float> anchor;                              // marquee
+        std::set<std::pair<int, int>> baseSelection;      // marquee with Cmd/Ctrl or Shift adds to this
     };
+    Rectangle<float> marquee;
 
     ArrangementView& owner;
     AppContext& ctx;
@@ -1147,6 +1253,22 @@ void ArrangementView::tick()
     for (auto* h : headers)
         h->tick();
 
+    // Recording started or stopped: redraw the lanes so the red take appears / goes.
+    // While it runs, redraw the take itself as it grows (its label and outline move).
+    const bool rec = ctx.engine.isRecording();
+    if (rec != wasRecording)
+    {
+        wasRecording = rec;
+        lanes->repaint();
+    }
+    else if (rec)
+    {
+        const int x1 = jmax (0, roundToInt (beatToX (ctx.engine.recordStartBeats.load())) - 2);
+        const int x2 = roundToInt (beatToX (ctx.engine.getPlayheadBeats())) + 4;
+        if (x2 > x1)
+            lanes->repaint (x1, 0, x2 - x1, lanes->getHeight());
+    }
+
     const float x = ctx.engine.isPlaying() ? beatToX (ctx.engine.getPlayheadBeats()) : -100.0f;
     if (std::abs (x - lastPlayheadX) >= 0.5f)
     {
@@ -1284,18 +1406,107 @@ void ArrangementView::resized()
 }
 
 //==============================================================================
+std::vector<ArrangementView::SelectedClip> ArrangementView::getSelectedClips() const
+{
+    auto wanted = ctx.selection.clips;
+    if (ctx.selection.clipId >= 0)
+        wanted.insert ({ ctx.selection.clipTrackId, ctx.selection.clipId });
+
+    std::vector<SelectedClip> out;
+    for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+    {
+        auto& t = ctx.edit.tracks[(size_t) i];
+        std::vector<SelectedClip> onTrack;
+        for (auto& c : t->clips)
+            if (wanted.count ({ t->id, c.id }) > 0)
+                onTrack.push_back ({ t, i, &c });
+        std::sort (onTrack.begin(), onTrack.end(), [] (const SelectedClip& a, const SelectedClip& b) { return a.clip->start < b.clip->start; });
+        out.insert (out.end(), onTrack.begin(), onTrack.end());
+    }
+    return out;
+}
+
+int ArrangementView::numSelectedClips() const
+{
+    return (int) getSelectedClips().size();
+}
+
+std::vector<ArrangementView::CopiedClip> ArrangementView::gatherSelection (double& blockStart, double& blockEnd, int& topTrack) const
+{
+    std::vector<CopiedClip> out;
+    const auto selected = getSelectedClips();
+    if (selected.empty())
+        return out;
+
+    blockStart = selected.front().clip->start;
+    blockEnd = selected.front().clip->end();
+    topTrack = selected.front().trackIndex;
+    for (auto& s : selected)
+    {
+        blockStart = jmin (blockStart, s.clip->start);
+        blockEnd = jmax (blockEnd, s.clip->end());
+        topTrack = jmin (topTrack, s.trackIndex);
+    }
+
+    for (auto& s : selected)
+    {
+        CopiedClip c;
+        c.clip = *s.clip;
+        c.clip.start -= blockStart;
+        c.trackOffset = s.trackIndex - topTrack;
+        c.kind = s.track->kind;
+        out.push_back (c);
+    }
+    return out;
+}
+
+int ArrangementView::placeClips (const std::vector<CopiedClip>& clips, double atBeat, int topTrackIndex)
+{
+    int skipped = 0;
+    std::set<std::pair<int, int>> placed;
+    for (auto& c : clips)
+    {
+        const int index = topTrackIndex + c.trackOffset;
+        if (index < 0 || index >= (int) ctx.edit.tracks.size() || ctx.edit.tracks[(size_t) index]->kind != c.kind)
+        {
+            ++skipped;
+            continue;
+        }
+
+        auto& track = *ctx.edit.tracks[(size_t) index];
+        Clip copy = c.clip;
+        copy.id = ctx.edit.newId();
+        copy.start = atBeat + c.clip.start;
+        ctx.edit.clearRange (track, copy.start, copy.end());
+        track.clips.push_back (copy);
+        placed.insert ({ track.id, copy.id });
+    }
+
+    if (! placed.empty())
+    {
+        ctx.selection.trackId = ctx.edit.tracks[(size_t) jlimit (0, (int) ctx.edit.tracks.size() - 1, topTrackIndex)]->id;
+        ctx.setClipSelection (placed);
+    }
+    return skipped;
+}
+
 bool ArrangementView::deleteSelectedClip()
 {
-    auto track = ctx.edit.findTrack (ctx.selection.clipTrackId);
-    if (track == nullptr)
+    const auto selected = getSelectedClips();
+    if (selected.empty())
         return false;
 
-    const int index = track->indexOfClip (ctx.selection.clipId);
-    if (index < 0)
-        return false;
+    std::vector<std::pair<std::shared_ptr<Track>, int>> doomed;   // ids: erasing moves the clips
+    for (auto& s : selected)
+        doomed.push_back ({ s.track, s.clip->id });
 
     ctx.edit.beginClipEdit();
-    track->clips.erase (track->clips.begin() + index);
+    for (auto& [track, id] : doomed)
+    {
+        const int index = track->indexOfClip (id);
+        if (index >= 0)
+            track->clips.erase (track->clips.begin() + index);
+    }
     ctx.clearClipSelection();
     ctx.edit.changed();
     return true;
@@ -1303,39 +1514,187 @@ bool ArrangementView::deleteSelectedClip()
 
 void ArrangementView::duplicateSelectedClip()
 {
-    auto track = ctx.edit.findTrack (ctx.selection.clipTrackId);
-    if (track == nullptr)
-        return;
-    auto* c = track->findClip (ctx.selection.clipId);
-    if (c == nullptr)
+    double start = 0.0, end = 0.0;
+    int top = 0;
+    const auto block = gatherSelection (start, end, top);
+    if (block.empty())
         return;
 
     ctx.edit.beginClipEdit();
-    Clip copy = *c;
-    copy.id = ctx.edit.newId();
-    copy.start = c->end();
-    ctx.edit.clearRange (*track, copy.start, copy.end());
-    track->clips.push_back (copy);
-    ctx.selectClip (track->id, copy.id);
+    placeClips (block, end, top);
     ctx.edit.changed();
+}
+
+bool ArrangementView::copySelectedClips()
+{
+    double start = 0.0, end = 0.0;
+    int top = 0;
+    auto block = gatherSelection (start, end, top);
+    if (block.empty())
+        return false;
+
+    clipboard = std::move (block);
+    clipboardLength = end - start;
+    ctx.showStatus (clipboard.size() == 1 ? String ("Copied 1 clip. Click where it should go and paste (Cmd/Ctrl+V).")
+                                          : "Copied " + String ((int) clipboard.size()) + " clips. Click where they should go and paste (Cmd/Ctrl+V).");
+    return true;
+}
+
+bool ArrangementView::cutSelectedClips()
+{
+    if (! copySelectedClips())
+        return false;
+    deleteSelectedClip();
+    ctx.showStatus (clipboard.size() == 1 ? String ("Cut 1 clip.") : "Cut " + String ((int) clipboard.size()) + " clips.");
+    return true;
+}
+
+void ArrangementView::pasteClips()
+{
+    if (clipboard.empty())
+    {
+        ctx.showStatus ("Nothing to paste. Select a clip and copy it first (Cmd/Ctrl+C).");
+        return;
+    }
+
+    int top = -1;
+    for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+        if (ctx.edit.tracks[(size_t) i]->id == ctx.selection.trackId)
+            top = i;
+    if (top < 0)
+    {
+        ctx.showStatus ("Click a track to choose where to paste.");
+        return;
+    }
+
+    int fits = 0;
+    for (auto& c : clipboard)
+    {
+        const int index = top + c.trackOffset;
+        fits += (index < (int) ctx.edit.tracks.size() && ctx.edit.tracks[(size_t) index]->kind == c.kind) ? 1 : 0;
+    }
+    if (fits == 0)
+    {
+        auto kind = clipboard.front().kind == TrackKind::midi ? "a MIDI" : "an audio";
+        ctx.showStatus (clipboard.size() == 1 ? String ("That's ") + kind + " clip: paste it on " + kind + " track."
+                                              : String ("The clips don't fit here: paste on tracks of the same kind (audio or MIDI)."));
+        return;
+    }
+
+    ctx.edit.beginClipEdit();
+    const double at = ctx.edit.insertMarker;
+    const int skipped = placeClips (clipboard, at, top);
+
+    // Move the start marker past what was pasted, so pasting again lines up after it.
+    ctx.edit.insertMarker = at + clipboardLength;
+    if (! ctx.engine.isPlaying())
+        ctx.engine.seekTo (ctx.edit.insertMarker);
+    ctx.edit.changed();
+
+    if (skipped > 0)
+        ctx.showStatus ("Pasted. " + String (skipped) + (skipped == 1 ? " clip didn't" : " clips didn't")
+                        + " fit: there was no track of the same kind (audio or MIDI) for it.");
+}
+
+void ArrangementView::joinSelectedClips()
+{
+    const auto selected = getSelectedClips();
+    if (selected.size() < 2)
+    {
+        ctx.showStatus ("Select two or more clips on a track to join them (Cmd/Ctrl- or Shift-click, or drag a box around them).");
+        return;
+    }
+
+    // One join per track.
+    std::map<int, std::vector<int>> byTrack;
+    for (auto& s : selected)
+        byTrack[s.track->id].push_back (s.clip->id);
+
+    bool any = false;
+    for (auto& [trackId, ids] : byTrack)
+        any = any || ids.size() >= 2;
+    if (! any)
+    {
+        ctx.showStatus ("Clips are joined per track: select two or more clips on the same track.");
+        return;
+    }
+
+    for (auto& [trackId, ids] : byTrack)
+    {
+        auto track = ctx.edit.findTrack (trackId);
+        if (track != nullptr && ids.size() >= 2 && track->isAudio())
+            for (int id : ids)
+                if (auto* c = track->findClip (id); c != nullptr && ! c->file.existsAsFile())
+                {
+                    ctx.showStatus ("Can't join: " + c->file.getFileName() + " is missing.");
+                    return;
+                }
+    }
+
+    ctx.edit.beginClipEdit();
+    std::set<std::pair<int, int>> joined;
+    String problem;
+    for (auto& [trackId, ids] : byTrack)
+    {
+        auto track = ctx.edit.findTrack (trackId);
+        if (track == nullptr || ids.size() < 2)
+            continue;
+
+        int newId = -1;
+        auto r = joinClips (ctx.edit, ctx.pool, *track, ids, newId);
+        if (r.failed())
+            problem = r.getErrorMessage();
+        else
+            joined.insert ({ trackId, newId });
+    }
+
+    if (joined.empty())
+    {
+        ctx.edit.undo();
+        ctx.showStatus (problem);
+        return;
+    }
+
+    ctx.setClipSelection (joined);
+    ctx.edit.changed();
+    ctx.showStatus (problem.isNotEmpty() ? "Joined, except: " + problem
+                                         : joined.size() == 1 ? String ("Joined into one clip.") : "Joined into one clip per track.");
+}
+
+void ArrangementView::selectAllClips()
+{
+    std::set<std::pair<int, int>> all;
+    for (auto& t : ctx.edit.tracks)
+        for (auto& c : t->clips)
+            all.insert ({ t->id, c.id });
+    ctx.setClipSelection (all);
+    repaint();
 }
 
 void ArrangementView::splitSelectedClip()
 {
-    auto track = ctx.edit.findTrack (ctx.selection.clipTrackId);
-    if (track == nullptr)
-        return;
-    auto* c = track->findClip (ctx.selection.clipId);
-    if (c == nullptr || ctx.edit.insertMarker <= c->start || ctx.edit.insertMarker >= c->end())
+    const double at = ctx.edit.insertMarker;
+    std::vector<std::pair<std::shared_ptr<Track>, int>> targets;   // ids: splitting adds clips
+    for (auto& s : getSelectedClips())
+        if (at > s.clip->start && at < s.clip->end())
+            targets.push_back ({ s.track, s.clip->id });
+
+    if (targets.empty())
     {
         ctx.showStatus ("Place the start marker inside the selected clip to split it.");
         return;
     }
 
     ctx.edit.beginClipEdit();
-    const int newId = ctx.edit.splitClip (*track, c->id, ctx.edit.insertMarker);
-    if (newId >= 0)
-        ctx.selectClip (track->id, newId);
+    std::set<std::pair<int, int>> rights;
+    for (auto& [track, id] : targets)
+    {
+        const int newId = ctx.edit.splitClip (*track, id, at);
+        if (newId >= 0)
+            rights.insert ({ track->id, newId });
+    }
+    if (! rights.empty())
+        ctx.setClipSelection (rights);
     ctx.edit.changed();
 }
 

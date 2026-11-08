@@ -3,6 +3,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/PluginStore.h"
+#include "Engine/ClipJoin.h"
 #include "Patcher/Updater.h"
 #include "Cloud/ProjectDiff.h"
 #include "Cloud/Revisions.h"
@@ -1400,6 +1401,111 @@ int main()
     else
     {
         std::cout << "  (cloud end-to-end skipped: run lathe-backend/scripts/local_stack.py and set LATHE_API_URL etc.)" << std::endl;
+    }
+
+    std::cout << "Join clips" << std::endl;
+    {
+        Edit j;
+        auto jdir = dir.getChildFile ("join");
+        jdir.createDirectory();
+        j.workDir = jdir;
+        j.sampleRate = 48000.0;
+        j.tempo = 120.0;   // 24000 samples per beat
+
+        // A steady 0.25 signal, so gains and gaps are easy to read back.
+        const auto src = jdir.getChildFile ("steady.wav");
+        {
+            AudioBuffer<float> b (1, 96000);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                b.setSample (0, i, 0.25f);
+            std::unique_ptr<OutputStream> stream (src.createOutputStream());
+            WavAudioFormat wav;
+            auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (48000.0).withNumChannels (1).withBitsPerSample (24));
+            w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+
+        auto t = j.addTrack (TrackKind::audio, "Gtr");
+        t->input.channel = -1;
+        Clip a;
+        a.id = j.newId(); a.kind = ClipKind::audio; a.name = "Gtr 1"; a.file = src;
+        a.start = 0.0; a.length = 1.0;
+        Clip b = a;
+        b.id = j.newId(); b.name = "Gtr 2"; b.start = 2.0; b.length = 1.0; b.sourceOffset = 1000; b.gainDb = 6.0f;
+        t->clips = { b, a };   // not in time order on purpose
+
+        // What the two clips sound like through the engine...
+        engine.setEdit (&j);
+        engine.rebuild();
+        j.insertMarker = 0.0;
+        engine.play();
+        const auto before = runCallbacks (engine, 320);
+        engine.stop();
+
+        j.beginClipEdit();
+        int joinedId = -1;
+        const auto r = joinClips (j, pool, *t, { a.id, b.id }, joinedId);
+        check (r.wasOk() && t->clips.size() == 1 && t->clips[0].id == joinedId, "two audio clips join into one (" + r.getErrorMessage() + ")");
+        if (t->clips.size() == 1)
+        {
+            const auto& c = t->clips[0];
+            check (c.start == 0.0 && std::abs (c.length - 3.0) < 1.0e-9 && c.name == "Gtr 1", "the joined clip spans both and takes the first one's name");
+            check (c.file.existsAsFile() && c.file.getParentDirectory() == j.getAudioDir(), "it's a new file in the project's Audio folder");
+
+            std::unique_ptr<AudioFormatReader> rd (pool.formats.createReaderFor (c.file));
+            AudioBuffer<float> got (1, (int) rd->lengthInSamples);
+            rd->read (&got, 0, got.getNumSamples(), 0, true, false);
+            check (got.getNumSamples() == 72000, "3 beats long (" + String (got.getNumSamples()) + " samples)");
+            check (std::abs (got.getSample (0, 12000) - 0.25f) < 0.001f, "first clip's audio is there");
+            check (got.getSample (0, 36000) == 0.0f, "the gap between them is silence");
+            check (std::abs (got.getSample (0, 60000) - 0.25f * Decibels::decibelsToGain (6.0f)) < 0.001f, "second clip keeps its +6 dB clip gain");
+        }
+
+        // ...and the joined clip sounds the same.
+        engine.rebuild();
+        engine.play();
+        const auto after = runCallbacks (engine, 320);
+        engine.stop();
+        float worst = 0.0f;
+        for (size_t i = 0; i < jmin (before.size(), after.size()); ++i)
+            worst = jmax (worst, std::abs (before[i] - after[i]));
+        check (before.size() == after.size() && worst < 1.0e-4f, "playback is identical after joining (max difference " + String (worst) + ")");
+
+        check (j.undo() && t->clips.size() == 2, "undo brings the two clips back");
+
+        // MIDI: notes move into the new clip; what was hidden past a clip's end stays out.
+        auto m = j.addTrack (TrackKind::midi, "Keys");
+        Clip ma;
+        ma.id = j.newId(); ma.kind = ClipKind::midi; ma.name = "Keys 1"; ma.start = 1.0; ma.length = 1.0;
+        ma.notes = { { 60, 0.5, 0.25, 0.8f }, { 62, 0.9, 0.5, 0.8f }, { 64, 1.5, 0.25, 0.8f } };
+        MidiEvent cc; cc.beat = 0.25; cc.size = 3; cc.data[0] = 0xb0; cc.data[1] = 1; cc.data[2] = 64;
+        ma.events = { cc };
+        Clip mb;
+        mb.id = j.newId(); mb.kind = ClipKind::midi; mb.name = "Keys 2"; mb.start = 4.0; mb.length = 2.0;
+        mb.notes = { { 67, 0.0, 1.0, 0.8f } };
+        m->clips = { ma, mb };
+
+        int midiId = -1;
+        const auto mr = joinClips (j, pool, *m, { ma.id, mb.id }, midiId);
+        check (mr.wasOk() && m->clips.size() == 1, "two MIDI clips join into one");
+        if (m->clips.size() == 1)
+        {
+            const auto& c = m->clips[0];
+            check (c.start == 1.0 && c.length == 5.0, "spans 1 to 6");
+            check (c.notes.size() == 3, "the note hidden past the first clip's end is left out (" + String ((int) c.notes.size()) + " notes)");
+            check (c.notes.size() == 3 && c.notes[0].start == 0.5 && std::abs (c.notes[1].length - 0.1) < 1.0e-9 && c.notes[2].start == 3.0 && c.notes[2].pitch == 67,
+                   "notes keep their place, and one running past the clip end is cut there");
+            check (c.events.size() == 1 && c.events[0].beat == 0.25, "controller data comes along");
+        }
+
+        Clip mc = m->clips[0];
+        Clip md;
+        md.id = j.newId(); md.kind = ClipKind::audio; md.file = src; md.start = 8.0; md.length = 1.0;
+        int none = -1;
+        check (joinClips (j, pool, *m, { mc.id }, none).failed(), "joining one clip is refused");
+        t->clips.push_back (md);
+        check (joinClips (j, pool, *t, { a.id, md.id, b.id }, none).wasOk(), "three audio clips with gaps join");
+
+        engine.setEdit (&edit);
     }
 
     engine.setEdit (nullptr);

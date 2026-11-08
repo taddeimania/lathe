@@ -8,6 +8,7 @@
 #include "PianoRoll.h"
 #include "PluginBrowser.h"
 #include "TransportBar.h"
+#include "UpdateNotice.h"
 
 namespace lathe
 {
@@ -78,6 +79,7 @@ private:
     PluginStore store;
     std::unique_ptr<PluginBrowserWindow> browserWindow;
     std::unique_ptr<CloudController> cloud;
+    std::unique_ptr<UpdateNotice> updateNotice;
     bool announcedUpdates = false;
     std::unique_ptr<Divider> divider;
     Label statusLeft, statusRight;

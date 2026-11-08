@@ -67,5 +67,6 @@ private:
     Label cpu;
     TextButton deviceButton;
     int refreshCounter = 0;
+    bool showingRecording = false;
 };
 } // namespace lathe

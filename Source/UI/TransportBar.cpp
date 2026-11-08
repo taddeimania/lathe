@@ -101,6 +101,18 @@ void TransportIcon::paintButton (Graphics& g, bool highlighted, bool down)
     auto r = getLocalBounds().toFloat().reduced (0.5f);
     const bool on = getToggleState();
 
+    if (shape == Shape::record && on)
+    {
+        // Recording: a solid red button with a slow pulse, unmistakable next to Play.
+        const double phase = std::sin (Time::getMillisecondCounterHiRes() * MathConstants<double>::twoPi / 1100.0);
+        const float glow = 0.80f + 0.20f * (float) phase;
+        g.setColour (onColour.withMultipliedBrightness (glow));
+        g.fillRoundedRectangle (r, 2.0f);
+        g.setColour (Colours::white.withAlpha (0.65f + 0.35f * glow));
+        g.fillEllipse (r.withSizeKeepingCentre (12.0f, 12.0f));
+        return;
+    }
+
     g.setColour (on ? onColour.withAlpha (0.18f) : (highlighted ? theme::controlHi : theme::control));
     if (down) g.setColour (theme::controlHi.darker (0.1f));
     g.fillRoundedRectangle (r, 2.0f);
@@ -241,6 +253,20 @@ void TransportBar::refresh()
 
     playButton.setToggleState (eng.isPlaying(), dontSendNotification);
     recordButton.setToggleState (eng.isRecording(), dontSendNotification);
+
+    const bool rec = eng.isRecording();
+    if (rec)
+        recordButton.repaint();   // the pulse
+    if (rec != showingRecording)
+    {
+        showingRecording = rec;
+        for (auto* l : { &position, &time })
+        {
+            l->setColour (Label::textColourId, rec ? theme::record.brighter (0.25f) : theme::text);
+            l->setColour (Label::outlineColourId, rec ? theme::record : theme::border);
+        }
+        repaint();
+    }
     clickButton.setToggleState (eng.metronomeOn.load(), dontSendNotification);
     loopButton.setToggleState (e.loopEnabled, dontSendNotification);
 
@@ -274,8 +300,17 @@ void TransportBar::refresh()
 void TransportBar::paint (Graphics& g)
 {
     g.fillAll (theme::panel);
-    g.setColour (theme::border);
-    g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+    if (showingRecording)
+    {
+        // A red edge under the whole transport while recording.
+        g.setColour (theme::record);
+        g.fillRect (0, getHeight() - 3, getWidth(), 3);
+    }
+    else
+    {
+        g.setColour (theme::border);
+        g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+    }
 
     g.setColour (theme::textDim);
     g.setFont (theme::font (14.0f));

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.4.2 LANGUAGES C CXX)
+project(Lathe VERSION 0.4.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,7 @@ target_sources(Lathe PRIVATE
     Source/Engine/PluginHost.cpp
     Source/Engine/PluginStore.cpp
     Source/Engine/Engine.cpp
+    Source/Engine/ClipJoin.cpp
     Source/UI/Theme.cpp
     Source/UI/Widgets.cpp
     Source/UI/TransportBar.cpp
@@ -79,6 +80,8 @@ target_sources(Lathe PRIVATE
     Source/UI/DeviceChain.cpp
     Source/UI/EqEditor.cpp
     Source/UI/CloudUI.cpp
+    Source/UI/UpdateNotice.cpp
+    Source/Patcher/Updater.cpp
     Source/UI/PianoRoll.cpp
     Source/UI/Dialogs.cpp
     Source/UI/PluginBrowser.cpp
@@ -209,6 +212,7 @@ if(LATHE_BUILD_TESTS)
         Source/Engine/PluginHost.cpp
         Source/Engine/PluginStore.cpp
         Source/Engine/Engine.cpp
+        Source/Engine/ClipJoin.cpp
         Source/Patcher/Updater.cpp)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE

@@ -978,6 +978,7 @@ void Engine::startRecording()
                 for (auto& t : recordSession->midi)  if (t->track == rt.track) rt.midiTake = t.get();
             }
         }
+        recordStartBeats = playing ? getPlayheadBeats() : edit->insertMarker;
         recording = true;
     }
 
