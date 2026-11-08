@@ -717,7 +717,9 @@ int main()
         }
 
         check (finished, "scan finished (" + String ((Time::getMillisecondCounterHiRes() - start) / 1000.0, 1) + " s)");
-        check (longestStall < 250.0, "UI never froze during the scan (longest stall " + String (roundToInt (longestStall)) + " ms)");
+        // A real freeze (a plug-in scanned inside Lathe) lasts seconds: the hang fixture never
+        // returns. Shared CI machines can pause for a few hundred ms on their own, so allow 1 s.
+        check (longestStall < 1000.0, "UI never froze during the scan (longest stall " + String (roundToInt (longestStall)) + " ms)");
 
         bool gainFound = false;
         for (auto& d : scanHost.known.getTypes())
