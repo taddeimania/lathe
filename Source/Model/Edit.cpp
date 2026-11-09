@@ -453,7 +453,7 @@ double Edit::getEndBeat() const
 void Edit::setTempo (double newTempo)
 {
     newTempo = jlimit (20.0, 400.0, newTempo);
-    if (newTempo == tempo)
+    if (exactlyEqual (newTempo, tempo))
         return;
 
     // Audio isn't time-stretched: keep each audio clip covering the same audio.

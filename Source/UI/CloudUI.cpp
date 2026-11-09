@@ -178,11 +178,11 @@ private:
         auto result = std::make_shared<Result> (Result::ok());
         auto needsNew = std::make_shared<bool> (false);
         Component::SafePointer<SignInDialog> safe (this);
-        auto client = owner.client;
+        auto api = owner.client;
 
-        owner.run ("Signing in", [client, mail, pass, chosen, result, needsNew]
+        owner.run ("Signing in", [api, mail, pass, chosen, result, needsNew]
         {
-            *result = client->signIn (mail, pass, [chosen, needsNew]
+            *result = api->signIn (mail, pass, [chosen, needsNew]
             {
                 *needsNew = true;
                 return chosen;
@@ -197,10 +197,10 @@ private:
             {
                 safe->owner.settings.setValue ("cloudEmail", mail);
                 safe->owner.ctx.showStatus ("Signed in as " + mail);
-                auto then = safe->then;
+                auto next = safe->then;
                 safe->close();
-                if (then)
-                    then();
+                if (next)
+                    next();
                 return;
             }
             if (*needsNew && ! safe->newPassword.isVisible())
@@ -633,18 +633,18 @@ void CloudController::run (const String& what, std::function<void()> work, std::
         hooks.setStatus (what + "...");
     updateStatus();
     WeakReference<CloudController> weak (this);
-    worker.addJob ([weak, work = std::move (work), done = std::move (done)]() mutable
+    worker.addJob ([weak, job = std::move (work), onDone = std::move (done)]() mutable
     {
-        work();
-        MessageManager::callAsync ([weak, done = std::move (done)]
+        job();
+        MessageManager::callAsync ([weak, callback = std::move (onDone)]
         {
             if (auto* self = weak.get())
             {
                 self->busy = false;
                 self->activity = {};
                 self->updateStatus();
-                if (done)
-                    done();
+                if (callback)
+                    callback();
             }
         });
     });
@@ -1136,29 +1136,29 @@ void CloudController::openCloudSong (const var& song)
 
         const auto dest = folder.exists() ? folder.getNonexistentSibling (true) : folder;
         const auto projectFile = dest.getChildFile (dest.getFileName() + ".lathe");
-        auto store = std::make_shared<cloud::LocalStore> (projectFile);
+        auto songStore = std::make_shared<cloud::LocalStore> (projectFile);
         auto outcome = std::make_shared<cloud::PullOutcome>();
         auto project = std::make_shared<var>();
         auto result = std::make_shared<Result> (Result::ok());
         auto c = self->client;
         auto progress = self->progressReporter();
 
-        self->run ("Downloading \"" + name + "\"", [c, store, dest, id, name, outcome, project, result, progress]
+        self->run ("Downloading \"" + name + "\"", [c, songStore, dest, id, name, outcome, project, result, progress]
         {
             dest.getChildFile ("Audio").createDirectory();
-            store->link (id, name);
-            *outcome = cloud::pull (*c, *store, progress);
+            songStore->link (id, name);
+            *outcome = cloud::pull (*c, *songStore, progress);
             if (outcome->result.failed())
             {
                 *result = outcome->result;
                 return;
             }
-            if (auto head = store->getRevision (outcome->head))
-                *result = cloud::prepareRevision (c.get(), *store, *head, *project, progress);
+            if (auto head = songStore->getRevision (outcome->head))
+                *result = cloud::prepareRevision (c.get(), *songStore, *head, *project, progress);
             else
                 *result = Result::fail ("\"" + name + "\" has no revisions yet. Ask its owner to push one.");
         },
-        [weak, store, outcome, project, result, projectFile, dest, name]
+        [weak, songStore, outcome, project, result, projectFile, dest, name]
         {
             auto* me = weak.get();
             if (me == nullptr)
@@ -1171,7 +1171,7 @@ void CloudController::openCloudSong (const var& song)
                 return;
             }
             projectFile.replaceWithText (JSON::toString (*project));
-            store->setBase (outcome->head);
+            songStore->setBase (outcome->head);
             me->hooks.openProject (projectFile);
             me->projectChanged();
             me->hooks.setStatus ("Opened \"" + name + "\" from the cloud, in " + dest.getFullPathName());
@@ -1197,13 +1197,13 @@ void CloudController::request (const String& method, const String& path, const v
 {
     auto c = client;
     WeakReference<CloudController> weak (this);
-    apiWorker.addJob ([c, method, path, body, weak, done = std::move (done)]() mutable
+    apiWorker.addJob ([c, method, path, body, weak, onDone = std::move (done)]() mutable
     {
         cloud::ApiError err;
         // An empty POST still sends a body, so every platform's HTTP stack treats it as a POST.
         const auto sendBody = body.isVoid() && method != "GET" && method != "DELETE" ? var (new DynamicObject()) : body;
         auto resp = c->call (method, path, sendBody, err);
-        MessageManager::callAsync ([weak, resp, err, done = std::move (done)]
+        MessageManager::callAsync ([weak, resp, err, callback = std::move (onDone)]
         {
             auto* self = weak.get();
             if (self == nullptr)
@@ -1212,8 +1212,8 @@ void CloudController::request (const String& method, const String& path, const v
                 self->oldServer = true;
             else if (err.status == 0)
                 self->oldServer = false;
-            if (done)
-                done (resp, err);
+            if (callback)
+                callback (resp, err);
         });
     });
 }

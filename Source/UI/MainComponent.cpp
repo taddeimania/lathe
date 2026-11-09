@@ -51,7 +51,7 @@ MainComponent::MainComponent (PropertiesFile& s)
     : settings (s),
       host (s),
       engine (host, pool, s),
-      ctx { edit, engine, host, pool, s, {}, {}, {}, {}, {} },
+      ctx { edit, engine, host, pool, s, {}, {}, {}, {}, {}, {} },
       transport (ctx),
       arrangement (ctx),
       mixer (ctx),

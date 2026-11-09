@@ -104,7 +104,7 @@ void LatheLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colou
 
 Font LatheLookAndFeel::getTextButtonFont (TextButton&, int buttonHeight)
 {
-    return theme::font (jmin (13.0f, buttonHeight * 0.6f));
+    return theme::font (jmin (13.0f, (float) buttonHeight * 0.6f));
 }
 
 void LatheLookAndFeel::drawButtonText (Graphics& g, TextButton& b, bool, bool)
@@ -133,7 +133,7 @@ void LatheLookAndFeel::drawComboBox (Graphics& g, int width, int height, bool, i
 
 Font LatheLookAndFeel::getComboBoxFont (ComboBox& box)
 {
-    return theme::font (jmin (12.5f, box.getHeight() * 0.62f));
+    return theme::font (jmin (12.5f, (float) box.getHeight() * 0.62f));
 }
 
 void LatheLookAndFeel::positionComboBoxText (ComboBox& box, Label& label)
@@ -149,11 +149,11 @@ void LatheLookAndFeel::drawLinearSlider (Graphics& g, int x, int y, int width, i
     if (style == Slider::LinearVertical)
     {
         // Fader: thin slot plus a flat rectangular cap.
-        const float cx = x + width * 0.5f;
+        const float cx = (float) x + (float) width * 0.5f;
         g.setColour (theme::border);
         g.fillRoundedRectangle (cx - 2.0f, (float) y, 4.0f, (float) height, 2.0f);
 
-        auto cap = Rectangle<float> (0, 0, jmin (26.0f, width - 2.0f), 12.0f).withCentre ({ cx, sliderPos });
+        auto cap = Rectangle<float> (0, 0, jmin (26.0f, (float) width - 2.0f), 12.0f).withCentre ({ cx, sliderPos });
         // A fader editing a cue mix carries the cue's colour on its cap.
         const auto capColour = s.isColourSpecified (Slider::thumbColourId) ? s.findColour (Slider::thumbColourId) : theme::controlHi;
         g.setColour (s.isEnabled() ? capColour : theme::control.withAlpha (0.6f));

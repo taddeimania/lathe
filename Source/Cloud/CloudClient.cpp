@@ -24,11 +24,6 @@ String trimSlash (String s)
     return s;
 }
 
-/** Splits a body over the progress range of one item among several. */
-std::function<bool (double)> subProgress (const std::function<bool (double)>& progress, double start, double span)
-{
-    return [=] (double p) { return progress == nullptr || progress (start + span * jlimit (0.0, 1.0, p)); };
-}
 } // namespace
 
 //==============================================================================

@@ -11,7 +11,7 @@ class ArrangementView::Header : public Component
 {
 public:
     Header (ArrangementView& o, std::shared_ptr<Track> t)
-        : track (std::move (t)), owner (o), ctx (o.ctx), meter (track)
+        : track (std::move (t)), ctx (o.ctx), meter (track)
     {
         name.setFont (theme::font (13.0f));
         name.setColour (Label::textColourId, theme::text);
@@ -191,7 +191,6 @@ public:
     std::shared_ptr<Track> track;
 
 private:
-    ArrangementView& owner;
     AppContext& ctx;
     Label name;
     TextButton arm, solo, mute;
@@ -208,7 +207,7 @@ class ArrangementView::GroupHeader : public Component
 {
 public:
     GroupHeader (ArrangementView& o, std::shared_ptr<TrackGroup> g)
-        : group (std::move (g)), owner (o), ctx (o.ctx)
+        : group (std::move (g)), ctx (o.ctx)
     {
         name.setFont (theme::font (13.0f, true));
         name.setEditable (false, false, false);
@@ -348,7 +347,6 @@ private:
     Rectangle<int> disclosureArea() const   { return { 8, 0, 18, getHeight() }; }
     int nameTextWidth() const               { return GlyphArrangement::getStringWidthInt (name.getFont(), group->name); }
 
-    ArrangementView& owner;
     AppContext& ctx;
     Label name;
     TextButton arm, solo, mute, fx;
@@ -401,7 +399,7 @@ public:
             const float x = owner.beatToX (bar * barLen);
             const bool labelled = (bar % barStep) == 0;
             g.setColour (labelled ? theme::textDim : theme::gridBar);
-            g.drawVerticalLine (roundToInt (x), labelled ? (float) loopH + 2.0f : getHeight() - 6.0f, (float) getHeight());
+            g.drawVerticalLine (roundToInt (x), labelled ? (float) loopH + 2.0f : (float) getHeight() - 6.0f, (float) getHeight());
             if (labelled)
             {
                 g.setColour (theme::text);
@@ -428,9 +426,10 @@ public:
         if (e.y < 10)
         {
             const float x1 = owner.beatToX (edit.loopStart), x2 = owner.beatToX (edit.loopEnd);
-            if (std::abs (e.x - x1) < 6.0f)       loopDrag = LoopDrag::start;
-            else if (std::abs (e.x - x2) < 6.0f)  loopDrag = LoopDrag::end;
-            else if (e.x > x1 && e.x < x2)        loopDrag = LoopDrag::move;
+            const float mx = (float) e.x;
+            if (std::abs (mx - x1) < 6.0f)       loopDrag = LoopDrag::start;
+            else if (std::abs (mx - x2) < 6.0f)  loopDrag = LoopDrag::end;
+            else if (mx > x1 && mx < x2)         loopDrag = LoopDrag::move;
             else
             {
                 loopDrag = LoopDrag::end;
@@ -745,14 +744,14 @@ public:
                 lo -= 2;
                 hi += 2;
                 const float rowH = body.getHeight() / (float) (hi - lo + 1);
-                const float pxPerBeat = (float) owner.pxPerBeat;
+                const float beatWidth = (float) owner.pxPerBeat;
                 g.setColour (colour.brighter (0.3f));
                 for (auto& n : c.notes)
                 {
                     if (n.start >= c.length)
                         continue;
-                    const float x = body.getX() + (float) n.start * pxPerBeat;
-                    const float w = jmax (1.5f, (float) jmin (n.length, c.length - n.start) * pxPerBeat - 1.0f);
+                    const float x = body.getX() + (float) n.start * beatWidth;
+                    const float w = jmax (1.5f, (float) jmin (n.length, c.length - n.start) * beatWidth - 1.0f);
                     const float y = body.getBottom() - (float) (n.pitch - lo + 1) * rowH;
                     g.fillRect (x, y, w, jmax (1.5f, rowH - 1.0f));
                 }
@@ -766,7 +765,7 @@ public:
     // --- hit testing
     struct Hit { int trackIndex = -1; int clipId = -1; enum Zone { none, body, left, right } zone = none; };
 
-    Hit hitTest (Point<int> p) const
+    Hit hitTestClip (Point<int> p) const
     {
         Hit h;
         h.trackIndex = owner.trackIndexAtY (p.y);
@@ -783,7 +782,7 @@ public:
             {
                 h.clipId = c.id;
                 const float edge = jmin (7.0f, r.getWidth() / 3.0f);
-                h.zone = p.x < r.getX() + edge ? Hit::left : p.x > r.getRight() - edge ? Hit::right : Hit::body;
+                h.zone = (float) p.x < r.getX() + edge ? Hit::left : (float) p.x > r.getRight() - edge ? Hit::right : Hit::body;
                 return h;
             }
         }
@@ -792,7 +791,7 @@ public:
 
     void mouseMove (const MouseEvent& e) override
     {
-        auto h = hitTest (e.getPosition());
+        auto h = hitTestClip (e.getPosition());
         setMouseCursor (h.zone == Hit::left || h.zone == Hit::right ? MouseCursor::LeftRightResizeCursor
                         : h.zone == Hit::body ? MouseCursor::DraggingHandCursor : MouseCursor::NormalCursor);
     }
@@ -800,7 +799,7 @@ public:
     void mouseDown (const MouseEvent& e) override
     {
         grabKeyboardFocus();
-        auto h = hitTest (e.getPosition());
+        auto h = hitTestClip (e.getPosition());
         drag = {};
 
         if (h.trackIndex < 0)
@@ -970,7 +969,7 @@ public:
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
-        auto h = hitTest (e.getPosition());
+        auto h = hitTestClip (e.getPosition());
         if (h.trackIndex < 0)
             return;
 
@@ -1273,7 +1272,7 @@ void ArrangementView::tick()
     if (std::abs (x - lastPlayheadX) >= 0.5f)
     {
         // Keep the playhead on screen while playing.
-        if (ctx.engine.isPlaying() && (x > lanes->getWidth() - 20 || x < 0.0f) && ! isMouseButtonDownAnywhere())
+        if (ctx.engine.isPlaying() && (x > (float) lanes->getWidth() - 20.0f || x < 0.0f) && ! isMouseButtonDownAnywhere())
         {
             scrollToPlayhead();
             return;

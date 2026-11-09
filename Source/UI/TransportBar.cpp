@@ -12,7 +12,7 @@ DragNumber::DragNumber (double minValue, double maxValue, int decimalPlaces, dou
 void DragNumber::setValue (double v, bool notify)
 {
     v = jlimit (minimum, maximum, decimals == 0 ? std::round (v) : v);
-    if (v == value)
+    if (exactlyEqual (v, value))
         return;
 
     value = v;

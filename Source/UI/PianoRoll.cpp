@@ -135,7 +135,7 @@ Rectangle<int> PianoRoll::velocityArea() const
 }
 
 float PianoRoll::beatToX (double beat) const   { return (float) (gridArea().getX() + (beat - scrollBeat) * pxPerBeat); }
-double PianoRoll::xToBeat (float x) const      { return scrollBeat + (x - gridArea().getX()) / pxPerBeat; }
+double PianoRoll::xToBeat (float x) const      { return scrollBeat + (x - (float) gridArea().getX()) / pxPerBeat; }
 int PianoRoll::pitchToY (int pitch) const      { return gridArea().getY() + (127 - pitch) * noteHeight - scrollY; }
 int PianoRoll::yToPitch (int y) const          { return jlimit (0, 127, 127 - (y - gridArea().getY() + scrollY) / noteHeight); }
 
@@ -172,9 +172,10 @@ int PianoRoll::noteAt (Point<int> p, bool& onRightEdge)
         auto& n = c->notes[(size_t) i];
         const float x1 = beatToX (n.start), x2 = beatToX (n.start + n.length);
         const int y = pitchToY (n.pitch);
-        if (p.y >= y && p.y < y + noteHeight && p.x >= x1 && p.x <= x2)
+        const float px = (float) p.x;
+        if (p.y >= y && p.y < y + noteHeight && px >= x1 && px <= x2)
         {
-            onRightEdge = p.x > x2 - jmin (6.0f, (x2 - x1) * 0.4f);
+            onRightEdge = px > x2 - jmin (6.0f, (x2 - x1) * 0.4f);
             return i;
         }
     }
@@ -301,7 +302,7 @@ void PianoRoll::paint (Graphics& g)
         {
             auto& n = c->notes[(size_t) i];
             const float x = beatToX (n.start);
-            const float h = (vel.getHeight() - 4) * n.velocity;
+            const float h = (float) (vel.getHeight() - 4) * n.velocity;
             g.setColour (selected.count (i) ? theme::accent : colour);
             g.fillRect (Rectangle<float> (x, (float) vel.getBottom() - h, 3.0f, h));
         }
@@ -424,7 +425,7 @@ void PianoRoll::mouseDrag (const MouseEvent& e)
             int bestIndex = -1;
             for (int i = 0; i < (int) c->notes.size(); ++i)
             {
-                const double d = std::abs (beatToX (c->notes[(size_t) i].start) - e.x);
+                const double d = std::abs (beatToX (c->notes[(size_t) i].start) - (float) e.x);
                 if (d < best && d < 8.0) { best = d; bestIndex = i; }
             }
             if (bestIndex >= 0) targets.insert (bestIndex);

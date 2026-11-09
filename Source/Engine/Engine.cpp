@@ -478,7 +478,7 @@ void Engine::prepareSlot (PluginSlot& slot)
     if (slot.instance == nullptr || sr <= 0 || bs <= 0)
         return;
 
-    if (slot.preparedRate == sr && slot.preparedBlock == bs)
+    if (exactlyEqual (slot.preparedRate, sr) && slot.preparedBlock == bs)
         return;
 
     if (slot.preparedRate > 0)
@@ -806,7 +806,7 @@ void Engine::rebuild()
         auto check = [&] (const Track& t)
         {
             for (auto& p : t.plugins)
-                if (p->instance != nullptr && p->preparedRate > 0 && (p->preparedRate != sr || p->preparedBlock != bs))
+                if (p->instance != nullptr && p->preparedRate > 0 && (! exactlyEqual (p->preparedRate, sr) || p->preparedBlock != bs))
                     reprepare = true;
         };
         for (auto& t : edit->tracks) check (*t);
@@ -1130,7 +1130,7 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
         return;
 
     auto& g = *graph;
-    if (g.sampleRate != deviceRate.load() || g.maxBlock <= 0)
+    if (! exactlyEqual (g.sampleRate, deviceRate.load()) || g.maxBlock <= 0)
         return;
 
     const float* inDev[kMaxChannels] {};

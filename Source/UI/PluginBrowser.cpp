@@ -164,7 +164,7 @@ public:
         else if (e->hasRelease())
         {
             line1 = e->version + " on GitHub";
-            line2 = String (e->assetSize / (1024.0 * 1024.0), 1) + " MB";
+            line2 = String ((double) e->assetSize / (1024.0 * 1024.0), 1) + " MB";
         }
         else
         {

@@ -222,7 +222,7 @@ void EqEditor::mouseDrag (const MouseEvent& e)
     auto& b = track->eq.bands[dragging];
     if (e.mods.isAltDown() && b.hasQ())
     {
-        const float factor = std::pow (2.0f, -e.getDistanceFromDragStartY() / 40.0f);
+        const float factor = std::pow (2.0f, (float) -e.getDistanceFromDragStartY() / 40.0f);
         b.q = jlimit (0.1f, 18.0f, dragStartQ * factor);
     }
     else

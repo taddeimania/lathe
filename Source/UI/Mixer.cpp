@@ -632,7 +632,7 @@ public:
         r.removeFromLeft (36);
         for (auto* t : tabs)
         {
-            const int w = jmax (56, theme::font (12.0f).getStringWidth (t->label) + 24);
+            const int w = jmax (56, GlyphArrangement::getStringWidthInt (theme::font (12.0f), t->label) + 24);
             t->setBounds (r.removeFromLeft (w));
             r.removeFromLeft (2);
         }

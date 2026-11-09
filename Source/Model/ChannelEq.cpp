@@ -209,7 +209,7 @@ void EqProcessor::process (const ChannelEq& eq, AudioBuffer<float>& buffer, int 
         return;
     }
 
-    if (sr != lastRate)
+    if (! exactlyEqual (sr, lastRate))
     {
         resetState();
         lastRate = sr;
@@ -231,7 +231,7 @@ void EqProcessor::process (const ChannelEq& eq, AudioBuffer<float>& buffer, int 
         }
 
         const float f = band.freq.load(), g = band.gainDb.load(), q = band.q.load();
-        if (! st.active || f != st.freq || g != st.gain || q != st.q)
+        if (! st.active || ! exactlyEqual (f, st.freq) || ! exactlyEqual (g, st.gain) || ! exactlyEqual (q, st.q))
         {
             st.numStages = band.isCut() ? 2 : 1;
             for (int s = 0; s < st.numStages; ++s)

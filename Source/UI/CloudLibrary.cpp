@@ -129,7 +129,7 @@ class CloudController::LibraryWindow : public DocumentWindow
 {
 public:
     LibraryWindow (CloudController& c, const String& selectSong)
-        : DocumentWindow ("Lathe Cloud: Projects", theme::panel, DocumentWindow::closeButton), cc (c)
+        : DocumentWindow ("Lathe Cloud: Projects", theme::panel, DocumentWindow::closeButton)
     {
         setUsingNativeTitleBar (true);
         setContentOwned (content = new Content (c, selectSong), true);
@@ -487,10 +487,10 @@ private:
             });
         }
 
-        void afterChange (const String& status)
+        void afterChange (const String& statusText)
         {
-            if (status.isNotEmpty())
-                cc.hooks.setStatus (status);
+            if (statusText.isNotEmpty())
+                cc.hooks.setStatus (statusText);
             reload();
             if (cc.isLinked() && cc.isSignedIn())
                 cc.poll();
@@ -750,7 +750,6 @@ private:
         TextButton openButton, shareButton, renameButton, moveButton, stopButton, deleteButton, leaveButton;
     };
 
-    CloudController& cc;
     Content* content = nullptr;
 };
 
@@ -972,14 +971,14 @@ private:
             });
         }
 
-        void drop (const String& id, const String& status)
+        void drop (const String& id, const String& statusText)
         {
-            api ("DELETE", "/v2/friends/" + esc (id), {}, [this, status] (const var&, const cloud::ApiError& err)
+            api ("DELETE", "/v2/friends/" + esc (id), {}, [this, statusText] (const var&, const cloud::ApiError& err)
             {
                 if (err.status != 0)
                     alert ("Couldn't do that", err.message);
-                else if (status.isNotEmpty())
-                    cc.hooks.setStatus (status);
+                else if (statusText.isNotEmpty())
+                    cc.hooks.setStatus (statusText);
                 changed();
             });
         }

@@ -317,7 +317,8 @@ Result Snapshot::finish (LocalStore& store, const Progress& progress)
     int index = 0;
     for (auto& a : audio)
     {
-        if (! report (progress, "Checking audio files (" + String (++index) + " of " + String (total) + ")",
+        ++index;
+        if (! report (progress, "Checking audio files (" + String (index) + " of " + String (total) + ")",
                       total > 0 ? (double) (index - 1) / (double) total : 0.0))
         {
             store.saveHashCache();   // keep what's done: next time is quicker
@@ -331,16 +332,16 @@ Result Snapshot::finish (LocalStore& store, const Progress& progress)
         if (auto* o = a.clip.getDynamicObject())
         {
             const auto label = "Checking audio files (" + String (index) + " of " + String (total) + ")";
-            const auto hash = store.hashOf (a.file, [&] (double p)
+            const auto fileHash = store.hashOf (a.file, [&] (double p)
             {
                 return report (progress, label, ((double) (index - 1) + p) / (double) jmax (1, total));
             });
-            if (hash.isEmpty())
+            if (fileHash.isEmpty())
             {
                 store.saveHashCache();
                 return Result::fail ("Cancelled.");
             }
-            o->setProperty ("hash", hash);
+            o->setProperty ("hash", fileHash);
             // Everyone keeps shared audio in Audio/, whatever it's called on this machine.
             o->setProperty ("file", "Audio/" + a.file.getFileName());
         }
