@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.6.1
+
+- **Record the notes a plug-in generates** (an arpeggiator, or a generator like
+  Dicey). Arm its MIDI track and record: Lathe records the notes the generator
+  hands to the instrument, exactly in time (then bypass the generator so it
+  doesn't play along with the clip). Or pick its track under **From a track** in
+  another MIDI track's input box, and record there.
+
 ## New in 0.6.0
 
 Everyone sharing songs should update: songs pushed from 0.6.0 can't be pulled by

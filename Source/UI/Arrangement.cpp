@@ -84,13 +84,13 @@ public:
         resized();
 
         // Refill the input list only when the choices could have changed.
-        const auto key = track->isMidi() ? ctx.engine.getMidiInputNames().joinIntoString ("|") + track->midiInput
+        const auto key = track->isMidi() ? midiInputKey (ctx.edit, *track, ctx.engine.getMidiInputNames())
                                          : audioInputKey (ctx.edit, *track, ctx.engine.getInputChannelNames().size());
         if (key != inputKey)
         {
             inputKey = key;
             if (track->isMidi())
-                fillMidiInputs (input, *track, ctx.engine.getMidiInputNames());
+                fillMidiInputs (input, ctx.edit, *track, ctx.engine.getMidiInputNames());
             else
                 fillAudioInputs (input, ctx.edit, *track, ctx.engine.getInputChannelNames().size());
         }

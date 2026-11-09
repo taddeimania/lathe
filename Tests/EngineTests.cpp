@@ -57,6 +57,55 @@ private:
 };
 
 /** Pure delay "plug-in" that reports its latency, for testing compensation. */
+/** A MIDI generator (like an arpeggiator, or Dicey): plays one note on its own, from
+    sample `on` to sample `off` of the song, whatever comes in. */
+class NoteGenerator : public AudioPluginInstance
+{
+public:
+    NoteGenerator (int64 onAt, int64 offAt)
+        : AudioPluginInstance (BusesProperties().withOutput ("Out", AudioChannelSet::stereo())), on (onAt), off (offAt) {}
+
+    void fillInPluginDescription (PluginDescription& d) const override { d.name = "Gen"; d.pluginFormatName = "Test"; }
+    const String getName() const override         { return "Gen"; }
+    void prepareToPlay (double, int) override {}
+    void releaseResources() override {}
+    void processBlock (AudioBuffer<float>& b, MidiBuffer& midi) override
+    {
+        midi.clear();
+        auto* head = getPlayHead();
+        const auto pos = head != nullptr ? head->getPosition() : Optional<AudioPlayHead::PositionInfo>();
+        if (! pos.hasValue() || ! pos->getIsPlaying() || ! pos->getTimeInSamples().hasValue())
+            return;
+        const int64 start = *pos->getTimeInSamples();
+        if (on >= start && on < start + b.getNumSamples())   midi.addEvent (MidiMessage::noteOn (1, 64, (uint8) 100), (int) (on - start));
+        if (off >= start && off < start + b.getNumSamples()) midi.addEvent (MidiMessage::noteOff (1, 64), (int) (off - start));
+    }
+    double getTailLengthSeconds() const override  { return 0; }
+    bool acceptsMidi() const override             { return true; }
+    bool producesMidi() const override            { return true; }
+    AudioProcessorEditor* createEditor() override { return nullptr; }
+    bool hasEditor() const override               { return false; }
+    int getNumPrograms() override                 { return 1; }
+    int getCurrentProgram() override              { return 0; }
+    void setCurrentProgram (int) override {}
+    const String getProgramName (int) override    { return {}; }
+    void changeProgramName (int, const String&) override {}
+    void getStateInformation (MemoryBlock&) override {}
+    void setStateInformation (const void*, int) override {}
+
+private:
+    int64 on, off;
+};
+
+/** A "synth": swallows the notes it gets (as instruments do). */
+class NoteEater : public NoteGenerator
+{
+public:
+    NoteEater() : NoteGenerator (-1, -1) {}
+    bool producesMidi() const override { return false; }
+    void processBlock (AudioBuffer<float>&, MidiBuffer& midi) override   { midi.clear(); }
+};
+
 class LatencyPlugin : public AudioPluginInstance
 {
 public:
@@ -426,6 +475,70 @@ int main()
         }
         rec->arm = false;
         edit.removeTrack (rec->id);
+        engine.rebuild();
+    }
+
+    std::cout << "Recording the notes a plug-in generates" << std::endl;
+    {
+        std::vector<std::pair<Track*, bool>> wasMuted;
+        for (auto& t : edit.tracks)
+        {
+            wasMuted.push_back ({ t.get(), t->mute.load() });
+            t->mute = true;
+        }
+        auto addPlugin = [&] (Track& t, std::unique_ptr<AudioPluginInstance> p, const String& name, bool instrument)
+        {
+            auto slot = std::make_shared<PluginSlot>();
+            slot->instance = std::move (p);
+            slot->description.name = name;
+            slot->description.isInstrument = instrument;
+            engine.prepareSlot (*slot);
+            t.plugins.push_back (slot);
+        };
+
+        // Gen plays a note from sample 10000 to 20000; the synth after it swallows the notes.
+        auto gen = edit.addTrack (TrackKind::midi, "Dicey");
+        addPlugin (*gen, std::make_unique<NoteGenerator> (10000, 20000), "Gen", false);
+        addPlugin (*gen, std::make_unique<NoteEater>(), "Synth", true);
+        gen->arm = true;
+        engine.rebuild();
+
+        edit.insertMarker = 0.0;
+        engine.toggleRecord();
+        runCallbacks (engine, 100);
+        engine.stop();
+        const double spb = edit.samplesPerBeat (48000.0);
+        check (gen->clips.size() == 1 && gen->clips[0].notes.size() == 1, "armed on its own track: the generated note is recorded");
+        if (! gen->clips.empty() && ! gen->clips[0].notes.empty())
+        {
+            const auto& n = gen->clips[0].notes[0];
+            check (n.pitch == 64 && std::abs ((gen->clips[0].start + n.start) * spb - 10000.0) < 1.0
+                       && std::abs (n.length * spb - 10000.0) < 1.0,
+                   "exactly where it played, no latency taken off (start " + String ((gen->clips[0].start + n.start) * spb) + ")");
+        }
+        gen->arm = false;
+        gen->clips.clear();
+
+        // From a track: another MIDI track records (and plays) what Gen generates.
+        auto rec = edit.addTrack (TrackKind::midi, "Synth track");
+        rec->input.track = gen->id;
+        rec->arm = true;
+        engine.rebuild();
+        engine.toggleRecord();
+        runCallbacks (engine, 100);
+        engine.stop();
+        check (gen->clips.empty(), "the generator's own track records nothing when it isn't armed");
+        check (rec->clips.size() == 1 && rec->clips[0].notes.size() == 1 && rec->clips[0].notes[0].pitch == 64,
+               "a MIDI track taking its input from it records the note");
+        if (! rec->clips.empty() && ! rec->clips[0].notes.empty())
+            check (std::abs ((rec->clips[0].start + rec->clips[0].notes[0].start) * spb - 10000.0) < 1.0, "on time there too");
+
+        // Keyboard input still records as before on a track without a generator.
+        rec->arm = false;
+        edit.removeTrack (rec->id);
+        edit.removeTrack (gen->id);
+        for (auto& [t, m] : wasMuted)
+            t->mute = m;
         engine.rebuild();
     }
 

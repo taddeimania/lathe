@@ -176,7 +176,9 @@ void applyAudioInput (ComboBox&, Track&);
 String audioInputKey (const Edit&, const Track&, int numDeviceInputs);
 void fillOutputs (ComboBox&, const Edit&, const Track&, int numDeviceOutputs);
 void applyOutput (ComboBox&, Track&, const Edit&);
-void fillMidiInputs (ComboBox&, const Track&, const StringArray& deviceNames);
+/** MIDI devices, then "From a track": other MIDI tracks (what they play or their plug-ins generate). */
+void fillMidiInputs (ComboBox&, const Edit&, const Track&, const StringArray& deviceNames);
+String midiInputKey (const Edit&, const Track&, const StringArray& deviceNames);
 void applyMidiInput (ComboBox&, Track&, const StringArray& deviceNames);
 void fillMidiOutputs (ComboBox&, const Track&, const StringArray& deviceNames);
 void applyMidiOutput (ComboBox&, Track&, const StringArray& deviceNames);

@@ -75,8 +75,9 @@ struct AudioInput
 {
     int channel = -1;      // first device input channel, 0-based; -1 = none
     bool stereo = false;
-    int track = -1;        // or another track's id: take what it plays (after its plug-ins
-                           // and EQ, before its fader), always stereo. Wins over channel.
+    int track = -1;        // or another track's id. Audio tracks: take what it plays (after its
+                           // plug-ins and EQ, before its fader), always stereo. MIDI tracks: take
+                           // the notes it plays or its plug-ins generate. Wins over the device input.
     bool isTrack() const noexcept   { return track >= 0; }
 };
 

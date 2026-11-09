@@ -127,12 +127,18 @@ const Track* findAnyTrack (const Edit& edit, int id)
 
 bool canFeed (const Track& source, const Track& to)
 {
-    return source.id != to.id && source.holdsClips();
+    // Audio tracks take any track's sound; MIDI tracks take another MIDI track's notes.
+    return source.id != to.id && source.holdsClips() && (to.isAudio() || source.isMidi());
 }
 } // namespace
 
 String describeInput (const Track& t, const Edit* edit)
 {
+    if (t.isMidi() && t.input.isTrack())
+    {
+        const auto* src = edit != nullptr ? findAnyTrack (*edit, t.input.track) : nullptr;
+        return src != nullptr ? "From " + src->name : String ("From a track");
+    }
     if (t.isMidi())
         return t.midiInput == "All" ? String ("All MIDI") : t.midiInput == "None" ? String ("No MIDI") : t.midiInput;
 
@@ -283,18 +289,47 @@ void applyOutput (ComboBox& box, Track& t, const Edit& edit)
     }
 }
 
-void fillMidiInputs (ComboBox& box, const Track& t, const StringArray& names)
+String midiInputKey (const Edit& edit, const Track& t, const StringArray& names)
+{
+    String key = names.joinIntoString ("|") + ":" + t.midiInput + ":" + String (t.input.track) + "|";
+    for (auto& o : edit.tracks)
+        if (canFeed (*o, t))
+            key << o->id << "=" << o->name << ",";
+    return key;
+}
+
+void fillMidiInputs (ComboBox& box, const Edit& edit, const Track& t, const StringArray& names)
 {
     box.clear (dontSendNotification);
     box.addItem ("All MIDI inputs", 1);
     box.addItem ("No MIDI input", 2);
+
+    // Another MIDI track's notes: what it plays, or what its plug-ins (an arpeggiator,
+    // a generator like Dicey) generate.
+    bool anyTrack = false;
+    for (auto& o : edit.tracks)
+    {
+        if (! canFeed (*o, t))
+            continue;
+        if (! anyTrack)
+            box.addSectionHeading ("From a track");
+        anyTrack = true;
+        box.addItem ("From " + o->name, kFromTrackBase + o->id);
+    }
+
     if (! names.isEmpty())
-        box.addSeparator();
+        box.addSectionHeading ("Devices");
     for (int i = 0; i < names.size(); ++i)
         box.addItem (names[i], 10 + i);
 
     int selected = t.midiInput == "All" ? 1 : t.midiInput == "None" ? 2 : 10 + names.indexOf (t.midiInput);
-    if (selected < 1)
+    if (t.input.isTrack())
+    {
+        selected = kFromTrackBase + t.input.track;
+        if (box.indexOfItemId (selected) < 0)
+            box.addItem ("From a deleted track", selected);
+    }
+    else if (selected < 1)
     {
         box.addItem (t.midiInput + " (not connected)", 9);
         selected = 9;
@@ -305,6 +340,8 @@ void fillMidiInputs (ComboBox& box, const Track& t, const StringArray& names)
 void applyMidiInput (ComboBox& box, Track& t, const StringArray& names)
 {
     const int id = box.getSelectedId();
+    if (id >= kFromTrackBase) { t.input.track = id - kFromTrackBase; return; }   // keeps the device choice for later
+    t.input.track = -1;
     if (id == 1)       t.midiInput = "All";
     else if (id == 2)  t.midiInput = "None";
     else if (id >= 10) t.midiInput = names[id - 10];

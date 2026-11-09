@@ -217,6 +217,8 @@ public:
         key << (cueMaster ? "cue" + String (cue->channel.load()) : String()) << "|";
         if (track->isAudio())
             key << audioInputKey (ctx.edit, *track, ctx.engine.getInputChannelNames().size());
+        else if (track->isMidi())
+            key << midiInputKey (ctx.edit, *track, ctx.engine.getMidiInputNames());
         key << track->input.channel << (track->input.stereo ? 1 : 0) << track->midiInput << track->midiOutput
             << (int) track->output.kind << track->output.busId << track->output.channel << (track->output.stereo ? 1 : 0);
 
@@ -225,7 +227,7 @@ public:
             routingKey = key;
             if (track->isMidi())
             {
-                fillMidiInputs (input, *track, ctx.engine.getMidiInputNames());
+                fillMidiInputs (input, ctx.edit, *track, ctx.engine.getMidiInputNames());
                 fillMidiOutputs (midiOut, *track, ctx.engine.getMidiOutputNames());
             }
             else if (track->isAudio())

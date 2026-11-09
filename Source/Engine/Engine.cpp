@@ -92,7 +92,15 @@ struct RenderTrack
     bool inputStereo = false;
     int inputTrack = -1;           // index in RenderGraph::tracks: record/monitor what that track plays
     std::vector<int> receivers;    // tracks taking their input from this one
-    AudioBuffer<float> tap;        // this block's sound after plug-ins and EQ (when someone listens)
+    AudioBuffer<float> tap;        // this block's sound after plug-ins and EQ (when an audio track listens)
+
+    // MIDI tracks: notes are "tapped" right after the last plug-in that generates MIDI (an
+    // arpeggiator, Dicey...) and before the first instrument; -1 = before any plug-in.
+    int midiTapAfter = -1;
+    bool recordGenerated = false;  // a plug-in generates notes: record what it hands on, not the input
+    String generatorName;
+    bool tapMidi = false;          // a MIDI track takes its input from this one
+    MidiBuffer midiTap;            // this block's notes at the tap
     int midiInput = -1;            // -1 = all devices, -2 = none, else device index
     MidiOutput* midiOut = nullptr;
     int midiChannel = 1;
@@ -164,6 +172,8 @@ struct MidiTake
     std::shared_ptr<Track> track;
     std::vector<Event> events;   // reserved up front: the audio thread never reallocates it
     int64 startSample = -1, endSample = 0;
+    int64 offset = 0;            // latency to take off: played notes only (generated ones are on time)
+    String generatedBy;          // the plug-in whose notes this is, when recorded on its own track
 };
 
 struct RecordSession
@@ -620,6 +630,23 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
         rt.buffer.clear();
         rt.midi.ensureSize (4096);
 
+        if (t->isMidi())
+        {
+            for (size_t i = 0; i < rt.plugins.size(); ++i)
+            {
+                if (rt.plugins[i].processor->producesMidi())
+                {
+                    rt.midiTapAfter = (int) i;
+                    rt.generatorName = rt.plugins[i].slot->getName();
+                }
+                else if (rt.plugins[i].slot->isInstrument())
+                {
+                    break;   // the instrument: notes after it aren't the track's notes anymore
+                }
+            }
+            rt.recordGenerated = rt.midiTapAfter >= 0;
+        }
+
         rt.outKind = t->output.kind;
         rt.outChannel = t->output.channel;
         rt.outStereo = t->output.stereo;
@@ -743,9 +770,10 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
         for (size_t i = 0; i < g->tracks.size(); ++i)
         {
             auto& rt = g->tracks[i];
-            if (! rt.track->isAudio() || ! rt.track->input.isTrack())
+            if (! rt.track->holdsClips() || ! rt.track->input.isTrack())
                 continue;
-            if (auto it = indexOf.find (rt.track->input.track); it != indexOf.end() && it->second != i)
+            if (auto it = indexOf.find (rt.track->input.track); it != indexOf.end() && it->second != i
+                && (rt.track->isAudio() || g->tracks[it->second].track->isMidi()))
                 rt.inputTrack = (int) it->second;
         }
 
@@ -774,7 +802,12 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
             {
                 auto& s = g->tracks[(size_t) src];
                 s.receivers.push_back ((int) i);
-                if (s.tap.getNumSamples() == 0)
+                if (g->tracks[i].kind == TrackKind::midi)
+                {
+                    s.tapMidi = true;
+                    s.midiTap.ensureSize (4096);
+                }
+                else if (s.tap.getNumSamples() == 0)
                 {
                     s.tap.setSize (2, bs);
                     s.tap.clear();
@@ -1069,6 +1102,20 @@ void Engine::startRecording()
             auto take = std::make_unique<MidiTake>();
             take->track = t;
             take->events.reserve (200000);
+            take->offset = session->midiOffset;   // played: you play to what you hear
+            for (auto& rt : graph->tracks)
+                if (rt.track == t)
+                {
+                    if (rt.recordGenerated)
+                    {
+                        take->offset = 0;          // generated in step with the playhead
+                        take->generatedBy = rt.generatorName;
+                    }
+                    else if (rt.inputTrack >= 0 && graph->tracks[(size_t) rt.inputTrack].recordGenerated)
+                    {
+                        take->offset = 0;
+                    }
+                }
             session->midi.push_back (std::move (take));
         }
     }
@@ -1128,6 +1175,7 @@ void Engine::finishRecording()
     const double spb = edit->samplesPerBeat (deviceRate.load() > 0 ? deviceRate.load() : edit->sampleRate);
     bool addedAny = false;
     bool overflowed = false;
+    String generatedNote;
 
     for (auto& take : session->audio)
     {
@@ -1182,7 +1230,7 @@ void Engine::finishRecording()
         struct Open { double start = -1.0; float velocity = 0.0f; };
         Open open[16][128];
 
-        auto toBeat = [&] (int64 s) { return jlimit (0.0, length, (double) (s - session->midiOffset - clipStart) / spb); };
+        auto toBeat = [&] (int64 s) { return jlimit (0.0, length, (double) (s - take->offset - clipStart) / spb); };
 
         for (auto& e : take->events)
         {
@@ -1224,8 +1272,13 @@ void Engine::finishRecording()
         edit->clearRange (*take->track, c.start, c.end());
         take->track->clips.push_back (c);
         addedAny = true;
+        if (take->generatedBy.isNotEmpty())
+            generatedNote = "Recorded the notes " + take->generatedBy + " played on \"" + take->track->name + "\". Bypass "
+                            + take->generatedBy + " now, or it plays along with the new clip.";
     }
 
+    if (generatedNote.isNotEmpty())
+        status (generatedNote);
     if (overflowed)
         status ("Warning: the disk couldn't keep up while recording; parts of the take may be missing.");
 
@@ -1538,7 +1591,7 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
         {
             auto& rcv = *g.tracks[(size_t) r].track;
             const int rmon = rcv.monitor.load();
-            if (rmon == (int) Monitor::in || (rmon == (int) Monitor::automatic && rcv.arm.load()))
+            if (rcv.isAudio() && (rmon == (int) Monitor::in || (rmon == (int) Monitor::automatic && rcv.arm.load())))
                 heardElsewhere = true;
             if (rcv.arm.load() || rmon == (int) Monitor::in)
                 monitorInput = monitorInput || mon == (int) Monitor::automatic;
@@ -1604,41 +1657,47 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
                 rt.midi.addEvent (it->data, it->size, (int) (it->sample - pos));
         }
 
-        if (realtime && (monitorInput || recordingHere) && rt.midiInput != -2)
+        auto* take = recordingHere ? rt.midiTake : nullptr;
+        if (take != nullptr)
         {
-            auto* take = recordingHere ? rt.midiTake : nullptr;
-            if (take != nullptr && take->startSample < 0)
+            if (take->startSample < 0)
                 take->startSample = pos;
+            take->endSample = pos + len;
+        }
+        // Played notes are recorded as they come in; generated ones where the generator
+        // hands them on (after the plug-ins, below).
+        auto* inputTake = rt.recordGenerated ? nullptr : take;
+        auto addIncoming = [&] (const uint8* src, int size, int s)
+        {
+            uint8 data[3] {};
+            std::memcpy (data, src, (size_t) size);
+            if (data[0] >= 0x80 && data[0] < 0xf0)
+                data[0] = (uint8) ((data[0] & 0xf0) | (ch - 1));
+            rt.midi.addEvent (data, size, s);
+            if (inputTake != nullptr && inputTake->events.size() < inputTake->events.capacity())
+                inputTake->events.push_back ({ pos + s, { data[0], data[1], data[2] }, (uint8) size });
+        };
 
-            for (size_t i = 0; i < liveMidi.size(); ++i)
+        if (realtime && (monitorInput || recordingHere))
+        {
+            if (rt.inputTrack >= 0)
             {
-                if (rt.midiInput >= 0 && (size_t) rt.midiInput != i)
-                    continue;
-
-                for (const auto meta : liveMidi[i])
+                // Another MIDI track's notes (processed earlier this block).
+                for (const auto meta : g.tracks[(size_t) rt.inputTrack].midiTap)
+                    if (meta.numBytes >= 1 && meta.numBytes <= 3 && meta.samplePosition >= 0 && meta.samplePosition < len)
+                        addIncoming (meta.data, meta.numBytes, meta.samplePosition);
+            }
+            else if (rt.midiInput != -2)
+            {
+                for (size_t i = 0; i < liveMidi.size(); ++i)
                 {
-                    if (meta.samplePosition < offset || meta.samplePosition >= offset + len || meta.numBytes > 3 || meta.numBytes < 1)
+                    if (rt.midiInput >= 0 && (size_t) rt.midiInput != i)
                         continue;
-
-                    uint8 data[3] {};
-                    std::memcpy (data, meta.data, (size_t) meta.numBytes);
-                    if (data[0] >= 0x80 && data[0] < 0xf0)
-                        data[0] = (uint8) ((data[0] & 0xf0) | (ch - 1));
-
-                    const int s = meta.samplePosition - offset;
-                    if (monitorInput || recordingHere)
-                        rt.midi.addEvent (data, meta.numBytes, s);
-
-                    if (take != nullptr && take->events.size() < take->events.capacity())
-                    {
-                        MidiTake::Event e { pos + s, { data[0], data[1], data[2] }, (uint8) meta.numBytes };
-                        take->events.push_back (e);
-                    }
+                    for (const auto meta : liveMidi[i])
+                        if (meta.samplePosition >= offset && meta.samplePosition < offset + len && meta.numBytes >= 1 && meta.numBytes <= 3)
+                            addIncoming (meta.data, meta.numBytes, meta.samplePosition - offset);
                 }
             }
-
-            if (take != nullptr)
-                take->endSample = pos + len;
         }
 
         if (realtime && rt.midiOut != nullptr && ! rt.midi.isEmpty())
@@ -1647,17 +1706,45 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
                                              g.sampleRate);
     }
 
-    // inserts
-    for (auto& p : rt.plugins)
+    // The notes at the tap: for MIDI tracks listening to this one, and for a recording of
+    // what a generator plug-in plays.
+    auto captureMidi = [&]
     {
-        if (p.slot->bypassed.load())
-            continue;
-        AudioBuffer<float> view (buf.getArrayOfWritePointers(), p.numChannels, len);
-        p.processor->processBlock (view, rt.midi);
+        if (rt.kind != TrackKind::midi)
+            return;
+        if (rt.tapMidi)
+        {
+            rt.midiTap.clear();
+            rt.midiTap.addEvents (rt.midi, 0, len, 0);
+        }
+        auto* take = recordingHere && rt.recordGenerated ? rt.midiTake : nullptr;
+        if (take != nullptr)
+            for (const auto meta : rt.midi)
+                if (meta.numBytes >= 1 && meta.numBytes <= 3 && take->events.size() < take->events.capacity())
+                {
+                    MidiTake::Event e { pos + meta.samplePosition, { 0, 0, 0 }, (uint8) meta.numBytes };
+                    std::memcpy (e.data, meta.data, (size_t) meta.numBytes);
+                    take->events.push_back (e);
+                }
+    };
+    if (rt.midiTapAfter < 0)
+        captureMidi();
+
+    // inserts
+    for (size_t i = 0; i < rt.plugins.size(); ++i)
+    {
+        auto& p = rt.plugins[i];
+        if (! p.slot->bypassed.load())
+        {
+            AudioBuffer<float> view (buf.getArrayOfWritePointers(), p.numChannels, len);
+            p.processor->processBlock (view, rt.midi);
+        }
+        if ((int) i == rt.midiTapAfter)
+            captureMidi();
     }
 
     t.rtEq.process (t.eq, buf, len, g.sampleRate);
-    if (! rt.receivers.empty())
+    if (rt.tap.getNumSamples() >= len)   // an audio track takes this one's sound as its input
         for (int ch = 0; ch < 2; ++ch)
             rt.tap.copyFrom (ch, 0, buf, ch, 0, len);
     rt.align.process (buf, len);

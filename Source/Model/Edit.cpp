@@ -784,6 +784,12 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
     o->setProperty ("arm", t.arm.load());
     o->setProperty ("monitor", monitorToString (t.monitor.load()));
 
+    if (t.isMidi() && t.input.isTrack())
+    {
+        DynamicObject::Ptr in = new DynamicObject();
+        in->setProperty ("track", t.input.track);
+        o->setProperty ("input", var (in.get()));
+    }
     if (t.isAudio())
     {
         DynamicObject::Ptr in = new DynamicObject();
