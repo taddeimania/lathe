@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.7.0
+
+- **AI assistant connection (MCP).** Let an AI app on your computer, like Claude
+  Desktop or Claude Code, look at your project and play or stop it: ask "why
+  can't I hear MIDI 2?" or "what does the bass play in bar 5?". It sees tracks,
+  routing, monitoring, plug-ins (and which ones generate notes), clips and notes,
+  and points out likely reasons a track is silent. It can't change the project
+  yet. Turn it on in **Options > AI Assistant...**, which also shows the setup to
+  copy into Claude Desktop or Claude Code. It's off until you turn it on, only
+  listens on this computer, and needs a secret key that Lathe makes fresh each
+  time.
+
 ## New in 0.6.1
 
 - **Record the notes a plug-in generates** (an arpeggiator, or a generator like

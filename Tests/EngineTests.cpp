@@ -8,6 +8,11 @@
 #include "Cloud/ProjectDiff.h"
 #include "Cloud/Revisions.h"
 #include "Cloud/Packing.h"
+#include "Assistant/AssistantServer.h"
+#include "Assistant/AssistantTools.h"
+#if ! JUCE_WINDOWS
+ #include <sys/stat.h>
+#endif
 #if ! JUCE_WINDOWS
  #include <unistd.h>
 #endif
@@ -540,6 +545,71 @@ int main()
         for (auto& [t, m] : wasMuted)
             t->mute = m;
         engine.rebuild();
+    }
+
+    std::cout << "Recording a real generator plug-in (LATHE_TEST_GENERATOR=<a .vst3>)" << std::endl;
+    if (auto genFile = File (SystemStats::getEnvironmentVariable ("LATHE_TEST_GENERATOR", {})); genFile.exists())
+    {
+        VST3PluginFormat vst3;
+        OwnedArray<PluginDescription> found;
+        vst3.findAllTypesForFile (found, genFile.getFullPathName());
+        String error;
+        auto instance = found.isEmpty() ? nullptr : vst3.createInstanceFromDescription (*found[0], 48000.0, 256, error);
+        check (instance != nullptr, "loads " + genFile.getFileName() + " " + error);
+        if (instance != nullptr)
+        {
+            std::cout << "    " << found[0]->name << ": producesMidi " << (int) instance->producesMidi()
+                      << ", isInstrument " << (int) found[0]->isInstrument << std::endl;
+            std::vector<std::pair<Track*, bool>> wasMuted;
+            for (auto& t : edit.tracks)
+            {
+                wasMuted.push_back ({ t.get(), t->mute.load() });
+                t->mute = true;
+            }
+            auto gen = edit.addTrack (TrackKind::midi, "Generator");
+            instance.reset();
+            String slotError;
+            auto slot = engine.makeSlot (*found[0], {}, slotError);   // the way the app loads it
+            check (slot->instance != nullptr, "loads it the way the app does " + slotError);
+            gen->plugins.push_back (slot);
+            gen->arm = true;
+            engine.rebuild();
+
+            const int bars4 = (int) (edit.samplesPerBeat (48000.0) * 16 / 256);
+            auto attempt = [&] (const String& how, int countIn, bool playFirst, double from)
+            {
+                gen->clips.clear();
+                engine.countInBars = countIn;
+                edit.insertMarker = from;
+                engine.seekTo (from);
+                if (playFirst)
+                {
+                    engine.play();
+                    runCallbacks (engine, 50);
+                }
+                engine.toggleRecord();
+                runCallbacks (engine, bars4 + (countIn > 0 ? bars4 / 4 : 0));
+                engine.stop();
+                runCallbacks (engine, 4);
+                const size_t notes = gen->clips.empty() ? 0 : gen->clips[0].notes.size();
+                check (notes > 0, "records the notes it generates, " + how + " (" + String ((int) notes) + " in 4 bars)");
+                engine.countInBars = 0;
+            };
+            attempt ("from a stop", 0, false, 0.0);
+            attempt ("with a count-in", 1, false, 0.0);
+            attempt ("while playing", 0, true, 0.0);
+            attempt ("from bar 5", 0, false, 16.0);
+            attempt ("from bar 5 with a count-in", 1, false, 16.0);
+            gen->arm = false;
+            edit.removeTrack (gen->id);
+            for (auto& [t, m] : wasMuted)
+                t->mute = m;
+            engine.rebuild();
+        }
+    }
+    else
+    {
+        std::cout << "  (skipped)" << std::endl;
     }
 
     std::cout << "Recording another track (an instrument into an audio track)" << std::endl;
@@ -1925,6 +1995,170 @@ int main()
         check (joinClips (j, pool, *m, { mc.id }, none).failed(), "joining one clip is refused");
         t->clips.push_back (md);
         check (joinClips (j, pool, *t, { a.id, md.id, b.id }, none).wasOk(), "three audio clips with gaps join");
+
+        engine.setEdit (&edit);
+    }
+
+    std::cout << "AI assistant (MCP)" << std::endl;
+    {
+        using namespace lathe::assistant;
+        const auto k1 = makeToken(), k2 = makeToken();
+        check (k1.length() == 64 && k1.containsOnly ("0123456789abcdef") && k1 != k2, "keys are 256 random bits, different every time");
+        check (tokensMatch (k1, k1) && ! tokensMatch (k1, k2) && ! tokensMatch (k1, k1.dropLastCharacters (1)) && ! tokensMatch ({}, {}),
+               "keys compare exactly (and an empty key never matches)");
+
+        Edit e;
+        e.tempo = 120.0;
+        engine.setEdit (&e);
+        auto gen = e.addTrack (TrackKind::midi, "Dice");
+        {
+            auto slot = std::make_shared<PluginSlot>();
+            slot->description.name = "Gen";
+            slot->instance = std::make_unique<NoteGenerator> (-1, -1);
+            gen->plugins.push_back (slot);
+            Clip c;
+            c.id = e.newId();
+            c.kind = ClipKind::midi;
+            c.start = 4.0;   // bar 2
+            c.length = 8.0;
+            c.notes = { { 64, 2.0, 1.0, 1.0f }, { 60, 0.0, 0.5, 0.5f }, { 72, 9.0, 1.0, 0.8f } };   // the last is past the clip end
+            gen->clips.push_back (c);
+        }
+        auto synth = e.addTrack (TrackKind::midi, "Synth");
+        {
+            auto slot = std::make_shared<PluginSlot>();
+            slot->description.name = "Eater";
+            slot->description.isInstrument = true;
+            slot->instance = std::make_unique<NoteEater>();
+            synth->plugins.push_back (slot);
+        }
+        synth->input.track = gen->id;
+        engine.rebuild();
+
+        Tools tools (e, engine);
+        check (tools.findTrack ("synth") == synth && tools.findTrack (gen->id) == gen && tools.findTrack (String (gen->id)) == gen
+               && tools.findTrack ("Master") == e.master && tools.findTrack ("nope") == nullptr,
+               "finds tracks by name (any case), id and \"Master\"");
+
+        const auto problems = tools.findProblems().joinIntoString ("\n");
+        check (problems.contains ("\"Synth\" takes its input from \"Dice\", but only plays it while armed"),
+               "explains that a track fed by another only plays it while armed");
+        check (problems.contains ("\"Dice\"'s clips go into Gen"), "warns that a generator hides the clips it's fed");
+        check (! problems.contains ("\"Dice\" has no instrument"), "a generator feeding another track isn't called silent");
+        synth->monitor = (int) Monitor::in;
+        gen->plugins[0]->bypassed = true;
+        const auto after = tools.findProblems().joinIntoString ("\n");
+        check (! after.contains ("only plays it while armed") && ! after.contains ("clips go into"),
+               "...and stops once monitoring is In and the generator is bypassed");
+
+        String status;
+        auto session = tools.call ("describe_session", var (new DynamicObject()), status);
+        const auto sessionText = session["content"][0]["text"].toString();
+        const auto sessionJson = JSON::parse (sessionText);
+        check (! (bool) session["isError"] && sessionJson["tracks"].size() == 2 && (double) sessionJson["tempo_bpm"] == 120.0
+               && sessionJson["tracks"][1]["input"].toString() == "from track \"Dice\"" && sessionJson["tracks"][0]["plugins"][0]["role"].toString() == "note generator",
+               "describe_session lists the tracks, their inputs and plug-in roles");
+
+        auto args = var (new DynamicObject());
+        args.getDynamicObject()->setProperty ("track", "dice");
+        const auto notesJson = JSON::parse (tools.call ("get_notes", args, status)["content"][0]["text"].toString());
+        const auto* list = notesJson["notes"].getArray();
+        check (list != nullptr && list->size() == 2 && (int) (*list)[0]["pitch"] == 60 && (*list)[0]["name"].toString() == "C3"
+               && (double) (*list)[0]["start_bar"] == 2.0 && (double) (*list)[1]["start_bar"] == 2.5 && (int) (*list)[0]["velocity"] == 64,
+               "get_notes: time order, names (C3 = middle C), song bars, velocity 1-127, nothing past the clip end");
+        args.getDynamicObject()->setProperty ("from_bar", 2.25);
+        check (JSON::parse (tools.call ("get_notes", args, status)["content"][0]["text"].toString())["notes"].size() == 1, "get_notes from a bar");
+        args.getDynamicObject()->setProperty ("track", "Nope");
+        check ((bool) tools.call ("get_notes", args, status)["isError"], "an unknown track is an error the AI can read");
+
+        args.getDynamicObject()->setProperty ("track", "Dice");
+        const auto trackJson = JSON::parse (tools.call ("describe_track", args, status)["content"][0]["text"].toString());
+        check (trackJson["clip_list"].size() == 1 && (int) trackJson["clip_list"][0]["notes"] == 2 && trackJson["feeds"].toString() == "Synth",
+               "describe_track lists clips (with note counts) and who it feeds");
+
+        auto from = var (new DynamicObject());
+        from.getDynamicObject()->setProperty ("from_bar", 3);
+        status = {};
+        const auto played = tools.call ("play", from, status);
+        check (! (bool) played["isError"] && engine.isPlaying() && std::abs (e.insertMarker - 8.0) < 1.0e-9 && status.contains ("bar 3"),
+               "play from bar 3 (and says so in the status bar)");
+        runCallbacks (engine, 4);
+        status = {};
+        tools.call ("stop", var (new DynamicObject()), status);
+        check (! engine.isPlaying() && std::abs (e.insertMarker - 8.0) < 1.0e-9 && status.isNotEmpty(), "stop (the insert marker stays)");
+        check (tools.call ("stop", var (new DynamicObject()), status)["content"][0]["text"].toString().contains ("wasn't playing")
+               && std::abs (e.insertMarker - 8.0) < 1.0e-9, "stop while stopped does nothing (doesn't rewind)");
+
+        // --- the HTTP server
+        const auto endpoint = dir.getChildFile ("assistant.json");
+        int connects = 0;
+        Server::Handler h;
+        h.callTool = [&] (const String& name, const var& a) { String st; return tools.call (name, a, st); };
+        h.onConnect = [&] (const String&) { ++connects; };
+        Server server (h, endpoint);
+        const auto key = makeToken();
+        check (server.start (key).wasOk() && server.getPort() >= kFirstPort, "the server starts on 127.0.0.1");
+        const auto ep = readEndpoint (endpoint);
+        check (ep.has_value() && ep->port == server.getPort() && ep->token == key, "and writes its port and key for LatheMCP");
+       #if ! JUCE_WINDOWS
+        check (endpoint.existsAsFile() && (File (endpoint).getFullPathName().isNotEmpty())
+               && ([&] { struct stat st {}; return ::stat (endpoint.getFullPathName().toRawUTF8(), &st) == 0 && (st.st_mode & 0077) == 0; })(),
+               "assistant.json is readable only by you");
+       #endif
+
+        auto raw = [&] (const String& request) -> HttpMessage
+        {
+            HttpMessage m;
+            StreamingSocket s;
+            if (s.connect ("127.0.0.1", server.getPort(), 2000) && writeAll (s, request))
+                readHttp (s, m, false, 5000);
+            return m;
+        };
+        auto post = [&] (const String& body, const String& extraHeaders, const String& host = {}) -> HttpMessage
+        {
+            String r;
+            r << "POST /mcp HTTP/1.1\r\nHost: " << (host.isNotEmpty() ? host : "127.0.0.1:" + String (server.getPort())) << "\r\n"
+              << extraHeaders << "Content-Type: application/json\r\nContent-Length: " << (int) body.getNumBytesAsUTF8() << "\r\n\r\n" << body;
+            return raw (r);
+        };
+        const String init = R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"Test"}}})";
+        const auto bearer = "Authorization: Bearer " + key + "\r\n";
+
+        check (post (init, {}).status == 401, "no key: refused");
+        check (post (init, "Authorization: Bearer " + makeToken() + "\r\n").status == 401, "wrong key: refused");
+        check (post (init, bearer, "evil.example:" + String (server.getPort())).status == 403, "another host name (DNS rebinding): refused");
+        check (post (init, bearer + "Origin: https://evil.example\r\n").status == 403, "a request from a web page: refused");
+        check (post (init, bearer + "Origin: http://localhost.evil.example\r\n").status == 403, "...even one named like localhost");
+        check (post (init, bearer + "Origin: null\r\n").status == 403, "...or a local file or sandboxed page (Origin: null)");
+        check (server.getActivity().refused == 6 && connects == 0, "refused requests never reach Lathe");
+
+        auto ok = post (init, bearer);
+        const auto initReply = JSON::parse (ok.body);
+        check (ok.status == 200 && initReply["result"]["protocolVersion"].toString() == "2025-03-26" && (int) initReply["id"] == 1
+               && initReply["result"]["capabilities"]["tools"].isObject() && connects == 1,
+               "initialize: agrees on the client's protocol version and offers tools");
+        check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
+        const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
+        check (listed["result"]["tools"].size() == 5 && listed["id"].toString() == "a", "tools/list has the five tools");
+
+        String body;
+        const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);
+        const auto called = JSON::parse (body);
+        const auto content = called["result"]["content"];
+        const auto calledText = content.isArray() && content.size() > 0 ? content[0]["text"].toString() : String();
+        check (code == 200 && ! (bool) called["result"]["isError"] && JSON::parse (calledText)["name"].toString() == "Synth",
+               "tools/call runs the tool (as LatheMCP sends it): " + String (code) + " " + body.substring (0, 200));
+        check (JSON::parse (post (R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rm_rf"}})", bearer).body)["error"].isObject(),
+               "an unknown tool is a protocol error");
+        check (JSON::parse (post (R"({"jsonrpc":"2.0","id":9,"method":"bogus"})", bearer).body)["error"]["code"].toString() == "-32601", "unknown methods too");
+        check (post ("{nope", bearer).status == 400, "bad JSON: 400");
+        check (raw ("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:" + String (server.getPort()) + "\r\n" + bearer + "\r\n").status == 405, "GET (a stream): not offered");
+        check (post (String::repeatedString ("x", kMaxBody + 10), bearer).status == 0, "a huge request is dropped");
+
+        server.stop();
+        check (! endpoint.existsAsFile(), "stopping removes assistant.json");
+        String none;
+        check (postToLathe (*ep, init, none, 2000) == 0, "and nothing listens any more");
 
         engine.setEdit (&edit);
     }

@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "../Assistant/AssistantService.h"
 
 namespace lathe
 {
@@ -10,7 +11,7 @@ namespace menu
         undo = 100, redo, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
-        settings = 400, scan, metronome, browser, checkUpdates, autoUpdates,
+        settings = 400, scan, metronome, browser, checkUpdates, autoUpdates, assistant,
         templateBase = 1000, deleteTemplateBase = 1500, restoreTemplates = 1999, recentBase = 2000
     };
 }
@@ -188,6 +189,9 @@ MainComponent::MainComponent (PropertiesFile& s)
     };
     notes->addChangeListener (this);
 
+    // AI assistant (MCP) connection: off unless you turned it on (Options > AI Assistant).
+    aiAssistant = std::make_shared<assistant::Service> (ctx);
+
     updateNotice = std::make_unique<UpdateNotice> (settings, [this] { openPatcher(); });
     updateNotice->onShowOrHide = [this] { resized(); };
     addChildComponent (*updateNotice);
@@ -202,6 +206,7 @@ MainComponent::MainComponent (PropertiesFile& s)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    aiAssistant.reset();   // before the project and engine it reads
     notes->removeChangeListener (this);
     ctx.notes = nullptr;
     notes.reset();
@@ -961,6 +966,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::scan, host.isScanning() ? "Scanning Plug-ins..." : "Scan for New Plug-ins", {}, ! host.isScanning());
         item (menu::metronome, "Metronome", "C", true, engine.metronomeOn.load());
         m.addSeparator();
+        item (menu::assistant, "AI Assistant...", {}, true, aiAssistant != nullptr && aiAssistant->isOn());
+        m.addSeparator();
         item (menu::checkUpdates, "Check for Updates...", {});
         item (menu::autoUpdates, "Check for Updates Automatically", {}, true,
               updateNotice != nullptr && updateNotice->checksAutomatically());
@@ -1100,6 +1107,7 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::zoomOut:       arrangement.zoom (0.8, 0.0f); break;
 
         case menu::settings:      showSettingsDialog (ctx); break;
+        case menu::assistant:     showAssistantDialog (ctx, aiAssistant); break;
         case menu::scan:          host.startScan (false); break;
         case menu::browser:       openPluginBrowser(); break;
         case menu::checkUpdates:  openPatcher(); break;

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.6.1 LANGUAGES C CXX)
+project(Lathe VERSION 0.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -88,6 +88,11 @@ target_sources(Lathe PRIVATE
     Source/UI/PianoRoll.cpp
     Source/UI/Dialogs.cpp
     Source/UI/PluginBrowser.cpp
+    Source/UI/AssistantDialog.cpp
+    Source/Assistant/AssistantShared.cpp
+    Source/Assistant/AssistantServer.cpp
+    Source/Assistant/AssistantTools.cpp
+    Source/Assistant/AssistantService.cpp
     Source/UI/MainComponent.cpp)
 
 target_include_directories(Lathe PRIVATE Source)
@@ -146,6 +151,28 @@ add_custom_command(TARGET Lathe POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheScanner> $<TARGET_FILE_DIR:Lathe>/
     COMMENT "Copying LatheScanner next to Lathe")
 
+# --- LatheMCP: the AI assistant bridge ------------------------------------------------
+# What an AI app (Claude Desktop, Claude Code, any MCP client) runs to reach Lathe: MCP
+# over stdin/stdout, passed on to the running Lathe on 127.0.0.1 with its key. Copied
+# next to the Lathe executable (inside Lathe.app/Contents/MacOS on the Mac).
+juce_add_console_app(LatheMCP PRODUCT_NAME "LatheMCP")
+target_sources(LatheMCP PRIVATE
+    Source/Assistant/BridgeMain.cpp
+    Source/Assistant/AssistantShared.cpp)
+target_compile_definitions(LatheMCP PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    LATHE_VERSION_STRING="${PROJECT_VERSION}")
+target_link_libraries(LatheMCP PRIVATE
+    juce::juce_core
+    juce::juce_recommended_config_flags)
+if(MSVC)
+    target_compile_options(LatheMCP PRIVATE /utf-8)
+endif()
+
+add_dependencies(Lathe LatheMCP)
+add_custom_command(TARGET Lathe POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheMCP> $<TARGET_FILE_DIR:Lathe>/
+    COMMENT "Copying LatheMCP next to Lathe")
+
 # --- Lathe Patcher -----------------------------------------------------------------
 # Checks GitHub for a newer Lathe and installs it in place. Ships inside
 # Lathe.app/Contents/Helpers on the Mac and next to Lathe(.exe) elsewhere;
@@ -203,6 +230,9 @@ if(LATHE_BUILD_TESTS)
     juce_add_console_app(LatheTests PRODUCT_NAME "LatheTests")
     target_sources(LatheTests PRIVATE
         Tests/EngineTests.cpp
+        Source/Assistant/AssistantShared.cpp
+        Source/Assistant/AssistantServer.cpp
+        Source/Assistant/AssistantTools.cpp
         Source/Model/Edit.cpp
         Source/Model/ChannelEq.cpp
         Source/Cloud/CloudClient.cpp
