@@ -868,8 +868,14 @@ void Engine::stop()
     if (edit == nullptr)
         return;
 
-    if (recording)
+    if (recording || isCountingIn())
+    {
+        const bool wasCounting = isCountingIn();
+        countInLeft = 0;
         finishRecording();
+        if (wasCounting)
+            return;   // stopped during the count-in: nothing was playing
+    }
 
     if (playing)
     {
@@ -888,15 +894,26 @@ void Engine::stop()
 
 void Engine::toggleRecord()
 {
-    if (recording)
+    if (recording || isCountingIn())
+    {
+        countInLeft = 0;     // (pressed again during the count-in: cancel it)
         finishRecording();
+    }
     else
         startRecording();
 }
 
+int Engine::getCountInBeatsLeft() const
+{
+    const auto left = countInLeft.load();
+    if (left <= 0 || countInSamplesPerClick <= 0.0)
+        return 0;
+    return (int) std::ceil ((double) left / countInSamplesPerClick - 1.0e-6);
+}
+
 void Engine::startRecording()
 {
-    if (edit == nullptr || recording)
+    if (edit == nullptr || recording || isCountingIn())
         return;
 
     if (deviceRate.load() <= 0.0 || graph == nullptr)
@@ -979,6 +996,18 @@ void Engine::startRecording()
             }
         }
         recordStartBeats = playing ? getPlayheadBeats() : edit->insertMarker;
+
+        // From a stop, with count-in on: click first. The audio thread starts playing and
+        // recording on the downbeat, in the same block, so the take lines up exactly.
+        const int bars = countInBars.load();
+        if (! playing && bars > 0 && graph != nullptr && graph->samplesPerClick > 0.0)
+        {
+            countInSamplesPerClick = graph->samplesPerClick;
+            countInTotal = (int64) std::llround (graph->samplesPerClick * jmax (1, graph->clicksPerBar) * bars);
+            seekTo (edit->insertMarker);
+            countInLeft = countInTotal;
+            return;
+        }
         recording = true;
     }
 
@@ -1155,13 +1184,46 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
         notesOff = true;
     }
 
-    const bool rolling = playing.load();
-    const bool rec = recording.load();
+    bool rolling = playing.load();
+    bool rec = recording.load();
 
     playHead.playing = rolling;
     playHead.recording = rec;
 
     int done = 0;
+
+    // Count-in: click (with the song stopped) until the downbeat, then roll and record.
+    if (int64 left = countInLeft.load(); left > 0 && ! rolling)
+    {
+        while (done < n && left > 0)
+        {
+            const int len = (int) jmin ((int64) (n - done), (int64) g.maxBlock, left);
+            countInClickPos = countInTotal - left;
+            playHead.position = pos;
+            renderChunk (g, pos, len, done, false, inDev, numDeviceInputs, outDev, numDeviceOutputs, true, notesOff);
+            countInClickPos = -1;
+            notesOff = false;
+            done += len;
+            const int64 before = left;
+            left -= len;
+            // Hand the new count back, unless Stop cancelled it meanwhile.
+            int64 expected = before;
+            if (! countInLeft.compare_exchange_strong (expected, left))
+            {
+                left = 0;
+                done = n;
+                break;
+            }
+            if (left == 0)
+            {
+                recording = true;
+                playing = true;
+                rolling = rec = true;
+                playHead.playing = playHead.recording = true;
+            }
+        }
+    }
+
     while (done < n)
     {
         int len = jmin (n - done, g.maxBlock);
@@ -1238,10 +1300,11 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
     if (! realtime)
         return;
 
-    const bool click = rolling && metronomeOn.load();
+    const bool countingIn = countInClickPos >= 0;
+    const bool click = countingIn || (rolling && metronomeOn.load());
     if (click)
     {
-        renderMetronome (g, pos, len);
+        renderMetronome (g, countingIn ? countInClickPos : pos, len);
         if (edit == nullptr || edit->clickInMain.load())
         {
             const auto* c = g.click.getReadPointer (0);

@@ -59,7 +59,9 @@ private:
     TransportIcon playButton { TransportIcon::Shape::play, theme::accent };
     TransportIcon stopButton { TransportIcon::Shape::stop, theme::text };
     TransportIcon recordButton { TransportIcon::Shape::record, theme::record };
-    TextButton clickButton, loopButton;
+    TextButton clickButton, loopButton, countInButton;
+    ComboBox countInLength;
+    void applyCountIn();
     DragNumber tempo { 20.0, 400.0, 2, 0.5 };
     DragNumber sigNum { 1.0, 32.0, 0, 0.2 }, sigDen { 1.0, 32.0, 0, 0.2 };
     Label position, time;

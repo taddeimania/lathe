@@ -163,6 +163,29 @@ TransportBar::TransportBar (AppContext& c) : ctx (c)
     };
     addAndMakeVisible (clickButton);
 
+    // Count-in: bars of click before recording starts (when you record from a stop).
+    styleToggle (countInButton, "Count-in", theme::record, "Click before recording starts (when you press record while stopped)");
+    countInButton.onClick = [this]
+    {
+        ctx.settings.setValue ("countIn", ! ctx.settings.getBoolValue ("countIn", false));
+        applyCountIn();
+    };
+    addAndMakeVisible (countInButton);
+    for (int bars : { 1, 2, 4 })
+        countInLength.addItem (String (bars) + (bars == 1 ? " bar" : " bars"), bars);
+    countInLength.setSelectedId (jlimit (1, 4, ctx.settings.getIntValue ("countInBars", 1)), dontSendNotification);
+    if (countInLength.getSelectedId() == 0)
+        countInLength.setSelectedId (1, dontSendNotification);
+    countInLength.setTooltip ("How many bars the count-in clicks");
+    countInLength.onChange = [this]
+    {
+        ctx.settings.setValue ("countInBars", countInLength.getSelectedId());
+        ctx.settings.setValue ("countIn", true);   // choosing a length means you want it
+        applyCountIn();
+    };
+    addAndMakeVisible (countInLength);
+    applyCountIn();
+
     styleToggle (loopButton, "Loop", theme::accent, "Loop the bracketed region  (L)");
     loopButton.onClick = [this]
     {
@@ -246,15 +269,23 @@ void TransportBar::setMixerShown (bool mixer)
     mixButton.setToggleState (mixer, dontSendNotification);
 }
 
+void TransportBar::applyCountIn()
+{
+    const bool on = ctx.settings.getBoolValue ("countIn", false);
+    countInButton.setToggleState (on, dontSendNotification);
+    ctx.engine.countInBars = on ? jmax (1, countInLength.getSelectedId()) : 0;
+}
+
 void TransportBar::refresh()
 {
     auto& e = ctx.edit;
     auto& eng = ctx.engine;
 
+    const bool counting = eng.isCountingIn();
     playButton.setToggleState (eng.isPlaying(), dontSendNotification);
-    recordButton.setToggleState (eng.isRecording(), dontSendNotification);
+    recordButton.setToggleState (eng.isRecording() || counting, dontSendNotification);
 
-    const bool rec = eng.isRecording();
+    const bool rec = eng.isRecording() || counting;
     if (rec)
         recordButton.repaint();   // the pulse
     if (rec != showingRecording)
@@ -280,7 +311,10 @@ void TransportBar::refresh()
     const double inBar = beats - bar * e.beatsPerBar();
     const int beat = (int) std::floor (inBar / beatLen);
     const int sixteenth = (int) std::floor ((inBar - beat * beatLen) / 0.25);
-    position.setText (String (bar + 1) + "." + String (beat + 1) + "." + String (sixteenth + 1), dontSendNotification);
+    if (counting)
+        position.setText ("In  " + String (eng.getCountInBeatsLeft()), dontSendNotification);
+    else
+        position.setText (String (bar + 1) + "." + String (beat + 1) + "." + String (sixteenth + 1), dontSendNotification);
 
     const double seconds = beats * 60.0 / e.tempo;
     const int mins = (int) (seconds / 60.0);
@@ -338,13 +372,17 @@ void TransportBar::resized()
     arrangeButton.setBounds (right.removeFromRight (70));
 
     // transport cluster in the middle
-    const int clusterWidth = 34 * 3 + 8 + 48 + 12 + 92 + 6 + 110;
+    const int clusterWidth = 34 * 3 + 4 + 70 + 2 + 70 + 8 + 48 + 12 + 92 + 6 + 110;
     auto mid = r.withSizeKeepingCentre (jmin (r.getWidth(), clusterWidth), r.getHeight());
     playButton.setBounds (mid.removeFromLeft (34));
     mid.removeFromLeft (2);
     stopButton.setBounds (mid.removeFromLeft (34));
     mid.removeFromLeft (2);
     recordButton.setBounds (mid.removeFromLeft (34));
+    mid.removeFromLeft (4);
+    countInButton.setBounds (mid.removeFromLeft (70));
+    mid.removeFromLeft (2);
+    countInLength.setBounds (mid.removeFromLeft (70));
     mid.removeFromLeft (8);
     loopButton.setBounds (mid.removeFromLeft (48));
     mid.removeFromLeft (12);

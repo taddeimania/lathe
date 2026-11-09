@@ -428,6 +428,92 @@ int main()
         engine.rebuild();
     }
 
+    std::cout << "Count-in" << std::endl;
+    {
+        auto rec = edit.addTrack (TrackKind::audio, "Rec");
+        rec->input = { 0, false };
+        rec->arm = true;
+        rec->monitor = (int) Monitor::off;
+        engine.rebuild();
+        engine.metronomeOn = false;   // the count-in clicks even with the metronome off
+
+        const int barSamples = 96000;          // 4/4 at 120 BPM, 48 kHz
+        const int blocksPerBar = barSamples / 256;
+        AudioBuffer<float> input (2, 256 * (blocksPerBar + 60));
+        input.clear();
+        input.setSample (0, 1000, 0.9f);                // played during the count-in: not recorded
+        input.setSample (0, barSamples + 5000, 0.7f);   // 5000 samples after the downbeat
+
+        edit.insertMarker = 0.0;
+        engine.countInBars = 1;
+        engine.toggleRecord();
+        check (engine.isCountingIn() && ! engine.isRecording() && ! engine.isPlaying(), "record starts a count-in, not a recording");
+        check (engine.getCountInBeatsLeft() == 4, "four beats to go (" + String (engine.getCountInBeatsLeft()) + ")");
+
+        const auto during = runCallbacks (engine, blocksPerBar - 1, &input);
+        check (engine.isCountingIn() && ! engine.isRecording() && engine.getCountInBeatsLeft() == 1, "still counting in the last beat");
+        int clicks = 0;
+        for (int beat = 0; beat < 3; ++beat)
+        {
+            float peak = 0.0f;
+            for (int i = beat * 24000; i < beat * 24000 + 1000; ++i)
+                peak = jmax (peak, std::abs (during[(size_t) i]));
+            clicks += peak > 0.1f ? 1 : 0;
+        }
+        check (clicks == 3, "a click on every beat of the count-in (" + String (clicks) + " of 3 heard)");
+        check (std::abs (engine.getPlayheadBeats()) < 1.0e-9, "the playhead waits at the start marker");
+
+        // The rest: the last count-in block, then recording.
+        AudioBuffer<float> rest (2, 256 * 61);
+        rest.copyFrom (0, 0, input, 0, 256 * (blocksPerBar - 1), 256 * 61);
+        rest.copyFrom (1, 0, input, 1, 256 * (blocksPerBar - 1), 256 * 61);
+        runCallbacks (engine, 1, &rest);
+        check (engine.isRecording() && engine.isPlaying() && ! engine.isCountingIn(), "recording starts on the downbeat");
+        AudioBuffer<float> after (2, 256 * 60);
+        after.copyFrom (0, 0, rest, 0, 256, 256 * 60);
+        after.copyFrom (1, 0, rest, 1, 256, 256 * 60);
+        runCallbacks (engine, 60, &after);
+        engine.stop();
+
+        check (rec->clips.size() == 1 && rec->clips[0].start == 0.0, "one take, at the start marker");
+        if (! rec->clips.empty())
+        {
+            auto src = pool.get (rec->clips[0].file);
+            check (src != nullptr && src->lengthInSamples == 256 * 60, "the take holds only what came after the count-in ("
+                       + String (src != nullptr ? src->lengthInSamples : -1) + " samples)");
+            if (src != nullptr)
+            {
+                std::vector<float> buf ((size_t) src->lengthInSamples);
+                float* chans[1] = { buf.data() };
+                src->reader->read (chans, 1, 0, (int) src->lengthInSamples);
+                int p = -1;
+                for (int i = 0; i < (int) buf.size(); ++i)
+                    if (std::abs (buf[(size_t) i]) > 0.5f) p = i;
+                check (p == 5000, "the impulse 5000 samples after the downbeat is at 5000 in the take (got " + String (p) + ")");
+            }
+        }
+
+        // Stop during the count-in: nothing recorded, nothing playing.
+        rec->clips.clear();
+        engine.toggleRecord();
+        runCallbacks (engine, 50);
+        engine.stop();
+        runCallbacks (engine, 2);
+        check (! engine.isCountingIn() && ! engine.isRecording() && ! engine.isPlaying() && rec->clips.empty(),
+               "Stop during the count-in cancels it, with no take");
+
+        // Off: record starts at once.
+        engine.countInBars = 0;
+        engine.toggleRecord();
+        check (engine.isRecording() && ! engine.isCountingIn(), "with count-in off, recording starts straight away");
+        engine.stop();
+        rec->clips.clear();
+
+        rec->arm = false;
+        edit.removeTrack (rec->id);
+        engine.rebuild();
+    }
+
     std::cout << "Template -> new project -> record every armed track" << std::endl;
     {
         // A template like "Terry Jam Start": Kick on input 1, Snare on input 2, two returns.

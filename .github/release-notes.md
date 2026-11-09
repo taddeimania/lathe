@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.1
+
+- **Count-in.** Turn on **Count-in** next to the record button and pick 1, 2 or
+  4 bars. Pressing record from a stop clicks that many bars first (even with the
+  metronome off), then records from the downbeat, exactly in time. The counter
+  shows the beats left; Stop cancels it.
+- Fixed the compiler warnings in Lathe's own code on macOS.
+
 ## New in 0.5.0
 
 Needs the updated Lathe Cloud server (lathe-backend: `terraform apply`). Until

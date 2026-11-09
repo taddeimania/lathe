@@ -56,6 +56,12 @@ public:
     double getPlayheadBeats() const;
     void seekTo (double beats);
     std::atomic<bool> metronomeOn { false };
+    /** Bars of click before recording starts (when you press record while stopped). 0 = off. */
+    std::atomic<int> countInBars { 0 };
+    /** Clicking before a recording: the playhead waits at the start marker. */
+    bool isCountingIn() const noexcept   { return countInLeft.load() > 0; }
+    /** Beats left in the count-in (rounded up), for the display. */
+    int getCountInBeatsLeft() const;
     /** Where the current (or last) recording started, in beats. */
     std::atomic<double> recordStartBeats { 0.0 };
 
@@ -175,6 +181,13 @@ private:
     TimeSliceThread diskThread { "Lathe disk writer" };
     HostPlayHead playHead;
     int reopenCountdown = 0;
+
+    // count-in: samples of click left before recording starts (set on the message thread,
+    // counted down and finished by the audio thread)
+    std::atomic<int64> countInLeft { 0 };
+    int64 countInTotal = 0;
+    double countInSamplesPerClick = 0.0;
+    int64 countInClickPos = -1;      // audio thread: where in the count-in this block's click is
 
     // metronome voice (audio thread)
     double clickPhase = 0.0, clickFreq = 1000.0;
