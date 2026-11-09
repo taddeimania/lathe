@@ -11,7 +11,7 @@ namespace
 enum MenuIds
 {
     signInId = CloudController::menuBase, signOutId, openSharedId, shareId, inviteId,
-    pushId, pullId, historyId, settingsId, libraryId, friendsId, unlinkId, uploadId,
+    pushId, pullId, historyId, libraryId, friendsId, unlinkId, uploadId,
     parallelBase = CloudController::menuBase + 20   // + 1, 2, 4, 6, 8
 };
 
@@ -443,7 +443,7 @@ CloudController::~CloudController()
 
 void CloudController::makeClient()
 {
-    client = std::make_shared<cloud::Client> (cloud::Config::load (settings));
+    client = std::make_shared<cloud::Client> (cloud::Config::load());
     WeakReference<CloudController> weak (this);
     client->onSessionChanged = [weak] (const cloud::Session& s)
     {
@@ -599,7 +599,6 @@ void CloudController::addMenuItems (PopupMenu& m)
         parallel.addItem (parallelBase + n, n == 1 ? String ("1 (one file at a time)") : String (n),
                           true, client->getParallelTransfers() == n);
     m.addSubMenu ("Transfers at Once", parallel);
-    m.addItem (settingsId, configured ? "Cloud Settings..." : "Cloud Settings (set up first)...", idle);
 }
 
 bool CloudController::handleMenuItem (int id)
@@ -618,7 +617,6 @@ bool CloudController::handleMenuItem (int id)
         case pushId:        push(); return true;
         case pullId:        pull(); return true;
         case historyId:     showHistory(); return true;
-        case settingsId:    showSettings(); return true;
         default:
             if (id > parallelBase && id <= parallelBase + 8)
             {
@@ -688,11 +686,6 @@ cloud::Progress CloudController::progressReporter()
 
 void CloudController::ensureReady (std::function<void()> then)
 {
-    if (! client->getConfig().isValid())
-    {
-        showSettings();
-        return;
-    }
     if (! isSignedIn())
     {
         showSignIn ([this, then] { ensureReady (then); });
@@ -719,11 +712,6 @@ void CloudController::ensureReady (std::function<void()> then)
 //==============================================================================
 void CloudController::showSignIn (std::function<void()> then)
 {
-    if (! client->getConfig().isValid())
-    {
-        showSettings();
-        return;
-    }
     DialogWindow::LaunchOptions o;
     o.content.setOwned (new SignInDialog (*this, std::move (then)));
     o.dialogTitle = "Sign In";
@@ -740,29 +728,6 @@ void CloudController::signOut()
     settings.removeValue ("cloudRefreshToken");
     hooks.setStatus ("Signed out of the cloud.");
     updateStatus();
-}
-
-void CloudController::showSettings()
-{
-    const auto current = client->getConfig();
-    askForText ("Cloud settings",
-                "Paste your Lathe cloud settings: the output of\n"
-                "terraform -chdir=infra output -raw lathe_cloud_json\n"
-                "(it looks like {\"apiUrl\": ..., \"region\": ..., \"clientId\": ...})",
-                current.isValid() ? current.toJson() : String(),
-                [this] (const String& text)
-    {
-        const auto c = cloud::Config::fromJson (text);
-        if (! c.isValid())
-        {
-            alert ("Cloud settings", "That isn't it: it needs apiUrl, region and clientId.");
-            return;
-        }
-        settings.setValue ("cloudConfig", c.toJson());
-        settings.removeValue ("cloudRefreshToken");
-        makeClient();
-        hooks.setStatus ("Cloud settings saved. Sign in from the Cloud menu.");
-    });
 }
 
 void CloudController::shareProject()
@@ -792,8 +757,7 @@ void CloudController::uploadSong()
         {
             if (err.status != 0)
             {
-                alert ("Couldn't reach Lathe Cloud", isOldServer (err) ? String ("The Lathe Cloud server needs updating for projects and friends "
-                                                                                 "(lathe-backend: terraform apply).") : err.message);
+                alert ("Couldn't reach Lathe Cloud", isOldServer (err) ? String ("Projects and friends aren't available on Lathe Cloud yet. Try again later.") : err.message);
                 return;
             }
             Array<var> mine;

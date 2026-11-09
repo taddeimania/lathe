@@ -1401,12 +1401,7 @@ int main()
     if (SystemStats::getEnvironmentVariable ("LATHE_API_URL", {}).isNotEmpty())
     {
         std::cout << "Cloud: two people sharing a project (local backend)" << std::endl;
-        PropertiesFile::Options o;
-        o.applicationName = "LatheCloudTests";
-        o.filenameSuffix = ".settings";
-        o.folderName = dir.getFullPathName();
-        PropertiesFile cloudSettings (dir.getChildFile ("cloud.settings"), o);
-        const auto config = cloud::Config::load (cloudSettings);
+        const auto config = cloud::Config::load();
         auto user = [] (const char* env)
         {
             const auto spec = SystemStats::getEnvironmentVariable (env, {});

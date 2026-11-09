@@ -257,8 +257,7 @@ private:
                 if (err.status != 0)
                 {
                     showMessage (cc.isOldServer (err)
-                                     ? "Projects and friends need the updated Lathe Cloud server.\n\n"
-                                       "Whoever runs it: update lathe-backend and run terraform apply."
+                                     ? "Projects and friends aren't available on Lathe Cloud yet. Try again later."
                                      : "Couldn't load your projects:\n" + err.message);
                     return;
                 }
@@ -830,7 +829,7 @@ private:
                 rows.clear();
                 if (err.status != 0)
                 {
-                    addHeading (cc.isOldServer (err) ? "Friends need the updated Lathe Cloud server (lathe-backend: terraform apply)."
+                    addHeading (cc.isOldServer (err) ? "Friends aren't available on Lathe Cloud yet. Try again later."
                                                      : "Couldn't load your friends: " + err.message);
                     layoutRows();
                     return;
@@ -1004,11 +1003,6 @@ private:
 //==============================================================================
 void CloudController::showLibrary (const String& selectSongId)
 {
-    if (! client->getConfig().isValid())
-    {
-        showSettings();
-        return;
-    }
     if (! isSignedIn())
     {
         showSignIn ([this, selectSongId] { showLibrary (selectSongId); });
@@ -1029,11 +1023,6 @@ void CloudController::showLibrary (const String& selectSongId)
 
 void CloudController::showFriends()
 {
-    if (! client->getConfig().isValid())
-    {
-        showSettings();
-        return;
-    }
     if (! isSignedIn())
     {
         showSignIn ([this] { showFriends(); });

@@ -1,14 +1,11 @@
 #include "CloudClient.h"
 #include <thread>
 
-#ifndef LATHE_CLOUD_API_URL
- #define LATHE_CLOUD_API_URL ""
-#endif
-#ifndef LATHE_CLOUD_REGION
- #define LATHE_CLOUD_REGION ""
-#endif
-#ifndef LATHE_CLOUD_CLIENT_ID
- #define LATHE_CLOUD_CLIENT_ID ""
+// Lathe Cloud is the only service Lathe talks to: there's no setting to point it
+// somewhere else. Development and test builds (LATHE_CLOUD_DEV_OVERRIDES) can be
+// pointed at a local backend with LATHE_API_URL and friends.
+#ifndef LATHE_CLOUD_DEV_OVERRIDES
+ #define LATHE_CLOUD_DEV_OVERRIDES 0
 #endif
 
 namespace lathe::cloud
@@ -27,49 +24,23 @@ String trimSlash (String s)
 } // namespace
 
 //==============================================================================
-Config Config::fromJson (const String& text)
+Config Config::load()
 {
     Config c;
-    const auto v = JSON::parse (text);
-    c.apiUrl = trimSlash (v["apiUrl"].toString().trim());
-    c.region = v["region"].toString().trim();
-    c.clientId = v["clientId"].toString().trim();
-    return c;
-}
+    c.apiUrl = "https://ys8qkybav0.execute-api.us-east-1.amazonaws.com";
+    c.region = "us-east-1";
+    c.clientId = "6c49cfl2ljkv1jminamqb7dja2";
+    c.cognitoUrl = "https://cognito-idp." + c.region + ".amazonaws.com/";
 
-String Config::toJson() const
-{
-    DynamicObject::Ptr o = new DynamicObject();
-    o->setProperty ("apiUrl", apiUrl);
-    o->setProperty ("region", region);
-    o->setProperty ("clientId", clientId);
-    return JSON::toString (var (o.get()), true);
-}
-
-Config Config::load (PropertiesFile& settings)
-{
-    Config c;
-    c.apiUrl = trimSlash (LATHE_CLOUD_API_URL);
-    c.region = LATHE_CLOUD_REGION;
-    c.clientId = LATHE_CLOUD_CLIENT_ID;
-
-    const auto saved = settings.getValue ("cloudConfig");
-    if (saved.isNotEmpty())
-    {
-        const auto s = fromJson (saved);
-        if (s.isValid())
-            c = s;
-    }
-
+   #if LATHE_CLOUD_DEV_OVERRIDES
     if (const auto env = SystemStats::getEnvironmentVariable ("LATHE_API_URL", {}); env.isNotEmpty())
     {
         c.apiUrl = trimSlash (env);
-        c.region = SystemStats::getEnvironmentVariable ("LATHE_REGION", c.region.isNotEmpty() ? c.region : "us-east-1");
+        c.region = SystemStats::getEnvironmentVariable ("LATHE_REGION", c.region);
         c.clientId = SystemStats::getEnvironmentVariable ("LATHE_CLIENT_ID", c.clientId);
+        c.cognitoUrl = SystemStats::getEnvironmentVariable ("LATHE_COGNITO_URL", "https://cognito-idp." + c.region + ".amazonaws.com/");
     }
-
-    c.cognitoUrl = SystemStats::getEnvironmentVariable ("LATHE_COGNITO_URL",
-                                                        "https://cognito-idp." + c.region + ".amazonaws.com/");
+   #endif
     return c;
 }
 
@@ -333,7 +304,7 @@ Result Client::applyAuthResult (const var& result, const String& email)
 Result Client::signIn (const String& email, const String& password, const std::function<String()>& newPassword)
 {
     if (! config.isValid())
-        return Result::fail ("Lathe isn't set up for the cloud yet (Cloud > Cloud Settings).");
+        return Result::fail ("Lathe Cloud isn't available in this build.");
 
     DynamicObject::Ptr params = new DynamicObject();
     params->setProperty ("USERNAME", email);

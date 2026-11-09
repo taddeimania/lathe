@@ -107,15 +107,12 @@ target_compile_definitions(Lathe PRIVATE
     JUCE_MODAL_LOOPS_PERMITTED=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
 
-# Cloud defaults baked into the build (CI fills these from repository variables), so
-# collaborators don't have to paste settings. Empty = configure in Cloud > Cloud Settings.
-set(LATHE_CLOUD_API_URL "" CACHE STRING "Default Lathe cloud API URL")
-set(LATHE_CLOUD_REGION "" CACHE STRING "Default Lathe cloud AWS region")
-set(LATHE_CLOUD_CLIENT_ID "" CACHE STRING "Default Lathe cloud Cognito app client id")
-target_compile_definitions(Lathe PRIVATE
-    LATHE_CLOUD_API_URL="${LATHE_CLOUD_API_URL}"
-    LATHE_CLOUD_REGION="${LATHE_CLOUD_REGION}"
-    LATHE_CLOUD_CLIENT_ID="${LATHE_CLOUD_CLIENT_ID}")
+# Lathe talks only to Lathe Cloud (its address is in Source/Cloud/CloudClient.cpp).
+# For development only: ON lets LATHE_API_URL etc. point Lathe at a local backend.
+option(LATHE_CLOUD_DEV_OVERRIDES "Let LATHE_API_URL etc. override the Lathe Cloud address (development only)" OFF)
+if(LATHE_CLOUD_DEV_OVERRIDES)
+    target_compile_definitions(Lathe PRIVATE LATHE_CLOUD_DEV_OVERRIDES=1)
+endif()
 
 if(WIN32 AND LATHE_ASIO AND LATHE_ASIO_SDK_DIR)
     target_compile_definitions(Lathe PRIVATE JUCE_ASIO=1)
@@ -219,7 +216,7 @@ if(LATHE_BUILD_TESTS)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=1 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
-        JUCE_MODAL_LOOPS_PERMITTED=1)
+        JUCE_MODAL_LOOPS_PERMITTED=1 LATHE_CLOUD_DEV_OVERRIDES=1)
     target_link_libraries(LatheTests PRIVATE
         juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra juce::juce_cryptography
         juce::juce_recommended_config_flags)

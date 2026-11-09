@@ -44,7 +44,6 @@ public:
     void pull();
     void showHistory();
     void openSharedProject();
-    void showSettings();
     void openRevision (const cloud::Revision&);
     /** Cloud > Projects: your projects and songs, sharing, moving, deleting. */
     void showLibrary (const String& selectSongId = {});
@@ -123,7 +122,7 @@ private:
     String songRole;                     // this song: owner, editor or viewer ("" until known)
     String songProjectName;
     bool lostAccess = false;             // the server says we can't open this song anymore
-    bool oldServer = false;              // lathe-backend without /v2 (projects, friends)
+    bool oldServer = false;              // a Lathe Cloud server without /v2 (projects, friends)
     int friendRequests = 0;
     bool showingNotices = false;
     int pollCountdown = 0;

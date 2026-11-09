@@ -12,8 +12,8 @@ a mix and stems. It doesn't try to do everything else.
 - **You can see when notes aren't syncing.** The Notes button says **Notes
   offline** (hover it for why), the Notes window says how many changes are
   waiting, and the status bar tells you when it stops and starts again.
-- A clearer message when the cloud server is too old for notes (it needs
-  lathe-backend's `terraform apply`).
+- Clearer messages when something isn't available on Lathe Cloud yet.
+- Lathe now connects only to Lathe Cloud: **Cloud > Cloud Settings** is gone.
 
 ## New in 0.5.3
 
@@ -25,8 +25,6 @@ a mix and stems. It doesn't try to do everything else.
   or 4 bars. When count-in is on, the record button shows the number of bars.
 
 ## New in 0.5.2
-
-Notes need the updated Lathe Cloud server (lathe-backend: `terraform apply`).
 
 - **Notes on tracks.** Right-click a track at a moment in the song: **Add Note
   Here** ("The bass part doesn't sit right here, can you rework it?"). It shows
@@ -50,9 +48,6 @@ Notes need the updated Lathe Cloud server (lathe-backend: `terraform apply`).
 - Fixed the compiler warnings in Lathe's own code on macOS.
 
 ## New in 0.5.0
-
-Needs the updated Lathe Cloud server (lathe-backend: `terraform apply`). Until
-then, Projects and Friends say the server needs updating; push and pull keep working.
 
 - **Friends.** Cloud > Friends: send a request to someone's email. Once they
   accept, you can share with each other. You can only share with friends.

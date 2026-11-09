@@ -6,7 +6,7 @@
 namespace lathe::cloud
 {
 //==============================================================================
-// Talks to lathe-backend: Cognito sign-in, the JSON API, and S3 uploads and
+// Talks to Lathe Cloud: Cognito sign-in, the JSON API, and S3 uploads and
 // downloads through presigned links. Every call here blocks, so run them on a
 // background thread (Lathe's CloudWorker does), never on the message thread.
 //==============================================================================
@@ -18,12 +18,9 @@ struct Config
 
     bool isValid() const   { return apiUrl.isNotEmpty() && region.isNotEmpty() && clientId.isNotEmpty(); }
 
-    /** Build-time defaults, then Lathe's settings ("cloudConfig" JSON), then the
-        LATHE_API_URL / LATHE_REGION / LATHE_CLIENT_ID / LATHE_COGNITO_URL environment. */
-    static Config load (PropertiesFile&);
-    /** Reads {"apiUrl", "region", "clientId"} (terraform's lathe_cloud_json output). */
-    static Config fromJson (const String&);
-    String toJson() const;
+    /** Lathe Cloud. (Dev and test builds only: LATHE_API_URL / LATHE_REGION /
+        LATHE_CLIENT_ID / LATHE_COGNITO_URL point it at a local backend instead.) */
+    static Config load();
 };
 
 struct HttpResult

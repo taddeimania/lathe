@@ -24,7 +24,7 @@ String who (const String& email, const String& me)
 String explain (CloudController& cloud, const cloud::ApiError& err)
 {
     if (cloud.isOldServer (err))
-        return "Notes need the updated Lathe Cloud server. Whoever runs it: update lathe-backend and run terraform apply.";
+        return "Notes aren't available on Lathe Cloud yet. Try again later.";
     if (err.status == 404)
         return "That note or song isn't there anymore (it may have been deleted or unshared).";
     return err.message;
@@ -237,7 +237,7 @@ String NotesController::offlineMessage (const cloud::ApiError& err) const
     const auto kept = n == 0 ? String ("Your notes are kept here")
                              : String (n) + (n == 1 ? " change is kept here" : " changes are kept here");
     if (cloud.isOldServer (err))
-        return "Notes aren't syncing: the Lathe Cloud server needs updating (lathe-backend: terraform apply). " + kept + " until then.";
+        return "Notes aren't syncing: Lathe Cloud doesn't have notes yet. " + kept + " until it does.";
     if (err.status == 401)
         return "Notes aren't syncing: sign in again (Cloud > Sign In). " + kept + " until then.";
     return "Notes aren't syncing: can't reach Lathe Cloud. " + kept + " and sent when it's back.";

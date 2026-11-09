@@ -75,9 +75,6 @@ jobs:
             libxinerama-dev libxrandr-dev libxrender-dev libcurl4-openssl-dev
 
       # Windows: the ASIO SDK (for the UMC1820's ASIO driver) is fetched by CMake.
-      # Cloud settings come from repository variables (Settings > Secrets and variables >
-      # Actions > Variables), so builds work with your Lathe cloud out of the box.
-      # Unset, Lathe asks for them in Cloud > Cloud Settings.
       - name: Configure
         run: |
           extra=()
@@ -89,9 +86,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DLATHE_JUCE_DIR=.juce \
             -DLATHE_BUILD_TESTS=ON \
-            -DLATHE_CLOUD_API_URL="${{ vars.LATHE_CLOUD_API_URL }}" \
-            -DLATHE_CLOUD_REGION="${{ vars.LATHE_CLOUD_REGION }}" \
-            -DLATHE_CLOUD_CLIENT_ID="${{ vars.LATHE_CLOUD_CLIENT_ID }}" \
             "${extra[@]}"
 
       - name: Build
