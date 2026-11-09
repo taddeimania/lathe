@@ -6,6 +6,8 @@
 
 namespace lathe
 {
+class NotesController;
+
 /** Everything a view needs to reach. Owned by MainComponent. */
 struct AppContext
 {
@@ -28,6 +30,7 @@ struct AppContext
     std::function<void (const String&)> showStatus;
     std::function<void()> openPluginBrowser;
     std::function<void()> showDevices;   // opens the device panel (plug-ins and EQ) for the selected track
+    NotesController* notes = nullptr;    // notes on the open song (set once the cloud is up)
 
     /** Which mix the mixer's faders, pans and mutes edit: -1 = the main mix, else a cue mix id. */
     int mixLayer = -1;

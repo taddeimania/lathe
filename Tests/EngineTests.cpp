@@ -683,6 +683,35 @@ int main()
         check (JSON::toString (loaded.toVar (false)) == text, "saving the loaded project gives identical JSON");
     }
 
+    std::cout << "Song notes (not in the cloud)" << std::endl;
+    {
+        Edit e;
+        e.sampleRate = 48000.0;
+        auto bass = e.addTrack (TrackKind::audio, "Bass");
+        SongNote n;
+        n.id = "1-a";
+        n.track = bass->id;
+        n.trackName = "Bass";
+        n.beat = 240.0;
+        n.text = "The bass part doesn't go well here";
+        n.replies.push_back ({ "r1", "terry@example.com", {}, "On it", 5 });
+        e.localNotes.push_back (n);
+        SongNote song;
+        song.id = "2-b";
+        song.text = "Where we are";
+        e.localNotes.push_back (song);
+
+        const auto saved = e.toVar (false);
+        Edit back;
+        back.loadFrom (saved, File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        check (back.localNotes.size() == 2 && back.localNotes[0].track == bass->id && back.localNotes[0].beat == 240.0
+                   && back.localNotes[0].replies.size() == 1 && back.localNotes[1].isSongNote(),
+               "notes and their replies survive save and load");
+        check (! e.toVar (true).hasProperty ("notes"), "templates don't carry notes");
+        const auto snap = cloud::Snapshot::capture (e);
+        check (! snap.project.hasProperty ("notes"), "cloud revisions never carry notes (they live on the server)");
+    }
+
     std::cout << "Clip editing" << std::endl;
     {
         Edit e;

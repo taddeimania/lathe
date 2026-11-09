@@ -485,6 +485,16 @@ bool CloudController::isLinked() const
     return store != nullptr && store->isLinked();
 }
 
+String CloudController::getSongId() const
+{
+    return isLinked() ? store->getProjectId() : String();
+}
+
+String CloudController::getEmail() const
+{
+    return isSignedIn() ? client->getSession().email : String();
+}
+
 bool CloudController::isUnfinishedShare() const
 {
     // Linked to a cloud project but never pushed: sharing was interrupted.

@@ -38,6 +38,10 @@ public:
     void importFiles (const Array<File>&, int trackIndex, double atBeat);
     void zoom (double factor, float anchorX);
     void scrollToPlayhead();
+    /** Shows a spot: scrolls to the track and beat, selects the track, moves the start marker there. */
+    void reveal (int trackId, double beat);
+    /** A small screen rectangle at a track and beat, for pointing a pop-up at. */
+    Rectangle<int> screenAreaFor (int trackId, double beat) const;
 
     // FileDragAndDropTarget
     bool isInterestedInFileDrag (const StringArray&) override;

@@ -33,8 +33,16 @@ public:
     enum class Shape { play, stop, record };
     TransportIcon (Shape s, Colour on);
     void paintButton (Graphics&, bool highlighted, bool down) override;
+    void mouseDown (const MouseEvent&) override;
+    void mouseUp (const MouseEvent&) override;
+
+    /** Right-click (instead of pressing the button). */
+    std::function<void()> onRightClick;
+    /** A small number in the corner (the record button's count-in bars); 0 = none. */
+    void setBadge (int n)   { if (n != badge) { badge = n; repaint(); } }
 
 private:
+    int badge = 0;
     Shape shape;
     Colour onColour;
 };
@@ -59,13 +67,14 @@ private:
     TransportIcon playButton { TransportIcon::Shape::play, theme::accent };
     TransportIcon stopButton { TransportIcon::Shape::stop, theme::text };
     TransportIcon recordButton { TransportIcon::Shape::record, theme::record };
-    TextButton clickButton, loopButton, countInButton;
-    ComboBox countInLength;
+    TextButton clickButton, clickMenuButton, loopButton;
     void applyCountIn();
+    /** Metronome and count-in (from Click's arrow, or right-clicking record). */
+    void showClickMenu (Component& target);
     DragNumber tempo { 20.0, 400.0, 2, 0.5 };
     DragNumber sigNum { 1.0, 32.0, 0, 0.2 }, sigDen { 1.0, 32.0, 0, 0.2 };
     Label position, time;
-    TextButton arrangeButton { "Arrange" }, mixButton { "Mix" };
+    TextButton arrangeButton { "Arrange" }, mixButton { "Mix" }, notesButton { "Notes" };
     Label cpu;
     TextButton deviceButton;
     int refreshCounter = 0;

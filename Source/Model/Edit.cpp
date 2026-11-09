@@ -61,6 +61,7 @@ void Edit::reset()
     buses.clear();
     groups.clear();
     cues.clear();
+    localNotes.clear();
     clickInMain = true;
     projectFile = File();
     workDir = File();
@@ -945,6 +946,13 @@ var Edit::toVar (bool asTemplate) const
 
     if (! asTemplate)
         o->setProperty ("insertMarker", insertMarker);
+    if (! asTemplate && ! localNotes.empty())
+    {
+        Array<var> list;
+        for (auto& n : localNotes)
+            list.add (n.toVar());
+        o->setProperty ("notes", list);
+    }
 
     Array<var> trackList, busList;
     for (auto& t : tracks) trackList.add (trackToVar (*t, asTemplate));
@@ -1096,6 +1104,11 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
             cues.push_back (c);
         }
     }
+
+    localNotes.clear();
+    if (auto* list = data["notes"].getArray())
+        for (auto& n : *list)
+            localNotes.push_back (SongNote::fromVar (n));
 
     // Keep new ids clear of everything loaded.
     // Tracks pointing at a group that isn't there are ungrouped; empty groups go.

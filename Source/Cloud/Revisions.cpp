@@ -261,7 +261,10 @@ Snapshot Snapshot::capture (const Edit& edit)
     Snapshot s;
     s.project = edit.toVar (false);
     if (auto* o = s.project.getDynamicObject())
+    {
         o->removeProperty ("insertMarker");   // where Play starts isn't part of the song
+        o->removeProperty ("notes");          // notes live on the server for cloud songs
+    }
 
     auto describe = [&s] (const var& trackVar, const Track& t)
     {

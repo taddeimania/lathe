@@ -1,4 +1,5 @@
 #include "TransportBar.h"
+#include "Notes.h"
 
 namespace lathe
 {
@@ -96,6 +97,23 @@ TransportIcon::TransportIcon (Shape s, Colour on) : Button ({}), shape (s), onCo
     setWantsKeyboardFocus (false);
 }
 
+void TransportIcon::mouseDown (const MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && onRightClick)
+    {
+        onRightClick();
+        return;
+    }
+    Button::mouseDown (e);
+}
+
+void TransportIcon::mouseUp (const MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && onRightClick)
+        return;
+    Button::mouseUp (e);
+}
+
 void TransportIcon::paintButton (Graphics& g, bool highlighted, bool down)
 {
     auto r = getLocalBounds().toFloat().reduced (0.5f);
@@ -139,6 +157,17 @@ void TransportIcon::paintButton (Graphics& g, bool highlighted, bool down)
             g.fillEllipse (icon);
             break;
     }
+
+    if (badge > 0)
+    {
+        // Count-in bars, in the corner.
+        auto b = Rectangle<float> (r.getRight() - 12.0f, r.getY() + 1.0f, 11.0f, 11.0f);
+        g.setColour (theme::record);
+        g.fillEllipse (b);
+        g.setColour (Colours::white);
+        g.setFont (theme::font (9.5f, true));
+        g.drawText (String (badge), b, Justification::centred, false);
+    }
 }
 
 //==============================================================================
@@ -163,27 +192,14 @@ TransportBar::TransportBar (AppContext& c) : ctx (c)
     };
     addAndMakeVisible (clickButton);
 
-    // Count-in: bars of click before recording starts (when you record from a stop).
-    styleToggle (countInButton, "Count-in", theme::record, "Click before recording starts (when you press record while stopped)");
-    countInButton.onClick = [this]
-    {
-        ctx.settings.setValue ("countIn", ! ctx.settings.getBoolValue ("countIn", false));
-        applyCountIn();
-    };
-    addAndMakeVisible (countInButton);
-    for (int bars : { 1, 2, 4 })
-        countInLength.addItem (String (bars) + (bars == 1 ? " bar" : " bars"), bars);
-    countInLength.setSelectedId (jlimit (1, 4, ctx.settings.getIntValue ("countInBars", 1)), dontSendNotification);
-    if (countInLength.getSelectedId() == 0)
-        countInLength.setSelectedId (1, dontSendNotification);
-    countInLength.setTooltip ("How many bars the count-in clicks");
-    countInLength.onChange = [this]
-    {
-        ctx.settings.setValue ("countInBars", countInLength.getSelectedId());
-        ctx.settings.setValue ("countIn", true);   // choosing a length means you want it
-        applyCountIn();
-    };
-    addAndMakeVisible (countInLength);
+    // The arrow next to Click: metronome and count-in settings. (Right-clicking record too.)
+    clickMenuButton.setButtonText (String (CharPointer_UTF8 ("\xe2\x96\xbe")));
+    clickMenuButton.setTooltip ("Metronome and count-in");
+    clickMenuButton.setConnectedEdges (Button::ConnectedOnLeft);
+    clickButton.setConnectedEdges (Button::ConnectedOnRight);
+    clickMenuButton.onClick = [this] { showClickMenu (clickMenuButton); };
+    addAndMakeVisible (clickMenuButton);
+    recordButton.onRightClick = [this] { showClickMenu (recordButton); };
     applyCountIn();
 
     styleToggle (loopButton, "Loop", theme::accent, "Loop the bracketed region  (L)");
@@ -225,6 +241,9 @@ TransportBar::TransportBar (AppContext& c) : ctx (c)
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
     }
+    styleToggle (notesButton, "Notes", theme::accent, "Notes on this song and its tracks  (Cmd/Ctrl+Shift+N)");
+    notesButton.onClick = [this] { if (ctx.notes != nullptr) ctx.notes->showWindow(); };
+    addAndMakeVisible (notesButton);
     arrangeButton.setTooltip ("Arrangement  (Tab)");
     mixButton.setTooltip ("Mixer  (Tab)");
     arrangeButton.onClick = [this] { setMixerShown (false); if (onViewChange) onViewChange (false); };
@@ -272,8 +291,44 @@ void TransportBar::setMixerShown (bool mixer)
 void TransportBar::applyCountIn()
 {
     const bool on = ctx.settings.getBoolValue ("countIn", false);
-    countInButton.setToggleState (on, dontSendNotification);
-    ctx.engine.countInBars = on ? jmax (1, countInLength.getSelectedId()) : 0;
+    const int bars = jlimit (1, 4, ctx.settings.getIntValue ("countInBars", 1));
+    ctx.engine.countInBars = on ? bars : 0;
+    recordButton.setBadge (on ? bars : 0);
+    recordButton.setTooltip (on ? "Record on armed tracks, after a " + String (bars) + "-bar" + " count-in  (R; right-click to change)"
+                                : String ("Record on armed tracks  (R; right-click for a count-in)"));
+}
+
+void TransportBar::showClickMenu (Component& target)
+{
+    const bool on = ctx.settings.getBoolValue ("countIn", false);
+    const int bars = jlimit (1, 4, ctx.settings.getIntValue ("countInBars", 1));
+    PopupMenu m;
+    m.addItem (1, "Metronome", true, ctx.engine.metronomeOn.load());
+    m.addSeparator();
+    m.addSectionHeader ("Count-in (recording from a stop)");
+    m.addItem (10, "Off", true, ! on);
+    for (int b : { 1, 2, 4 })
+        m.addItem (10 + b, String (b) + (b == 1 ? " bar" : " bars"), true, on && bars == b);
+    Component::SafePointer<TransportBar> safe (this);
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&target), [safe] (int r)
+    {
+        if (safe == nullptr || r == 0)
+            return;
+        auto& s = safe->ctx.settings;
+        if (r == 1)
+        {
+            safe->ctx.engine.metronomeOn = ! safe->ctx.engine.metronomeOn.load();
+            s.setValue ("metronome", safe->ctx.engine.metronomeOn.load());
+        }
+        else if (r == 10)
+            s.setValue ("countIn", false);
+        else
+        {
+            s.setValue ("countIn", true);
+            s.setValue ("countInBars", r - 10);
+        }
+        safe->applyCountIn();
+    });
 }
 
 void TransportBar::refresh()
@@ -299,6 +354,16 @@ void TransportBar::refresh()
         repaint();
     }
     clickButton.setToggleState (eng.metronomeOn.load(), dontSendNotification);
+    if (ctx.notes != nullptr)
+    {
+        // "Notes 3": lit when someone left something you haven't read.
+        const int unread = ctx.notes->unreadCount();
+        const int total = (int) ctx.notes->getNotes().size();
+        const auto text = unread > 0 ? "Notes " + String (unread) + " new" : total > 0 ? "Notes " + String (total) : String ("Notes");
+        if (notesButton.getButtonText() != text)
+            notesButton.setButtonText (text);
+        notesButton.setToggleState (unread > 0, dontSendNotification);
+    }
     loopButton.setToggleState (e.loopEnabled, dontSendNotification);
 
     tempo.setValue (e.tempo, false);
@@ -361,28 +426,27 @@ void TransportBar::resized()
     r.removeFromLeft (10);
     sigDen.setBounds (r.removeFromLeft (30));
     r.removeFromLeft (12);
-    clickButton.setBounds (r.removeFromLeft (48));
+    clickButton.setBounds (r.removeFromLeft (44));
+    clickMenuButton.setBounds (r.removeFromLeft (18));
 
-    auto right = r.removeFromRight (420);
+    auto right = r.removeFromRight (420 + 112);
     deviceButton.setBounds (right.removeFromRight (230));
     right.removeFromRight (8);
     cpu.setBounds (right.removeFromRight (62));
     right.removeFromRight (12);
     mixButton.setBounds (right.removeFromRight (52));
     arrangeButton.setBounds (right.removeFromRight (70));
+    right.removeFromRight (12);
+    notesButton.setBounds (right.removeFromRight (100));
 
     // transport cluster in the middle
-    const int clusterWidth = 34 * 3 + 4 + 70 + 2 + 70 + 8 + 48 + 12 + 92 + 6 + 110;
+    const int clusterWidth = 34 * 3 + 8 + 48 + 12 + 92 + 6 + 110;
     auto mid = r.withSizeKeepingCentre (jmin (r.getWidth(), clusterWidth), r.getHeight());
     playButton.setBounds (mid.removeFromLeft (34));
     mid.removeFromLeft (2);
     stopButton.setBounds (mid.removeFromLeft (34));
     mid.removeFromLeft (2);
     recordButton.setBounds (mid.removeFromLeft (34));
-    mid.removeFromLeft (4);
-    countInButton.setBounds (mid.removeFromLeft (70));
-    mid.removeFromLeft (2);
-    countInLength.setBounds (mid.removeFromLeft (70));
     mid.removeFromLeft (8);
     loopButton.setBounds (mid.removeFromLeft (48));
     mid.removeFromLeft (12);

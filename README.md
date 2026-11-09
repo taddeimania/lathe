@@ -84,6 +84,13 @@ Lathe can share a project with collaborators through your own small cloud backen
 - Only the owner manages a project or song: share, change someone's access, **Stop Sharing** (with one person or everyone), **Rename** (shares stay), **Move to Project** (a song; people who had it only through its old project, or shared on its own, lose it), and **Delete from Cloud**. Anyone can **Leave**.
 - When you lose access to something or become a viewer, Lathe tells you. Your copy on your computer is never touched: you just can't pull or push it anymore. **Cloud > Disconnect This Song** stops it asking.
 
+**Notes and conversations**
+- Leave a note on a track at a moment in the song: right-click the lane (or a clip) and choose **Add Note Here**, or **Track > Add Note at Start Marker** (Cmd/Ctrl+Alt+N). It shows as a speech bubble on the lane; the number is how many messages are in the thread.
+- **Song notes** are about the whole song (the plan so far, what's left): **Track > Add Song Note**, or **Add Song Note** in the Notes window.
+- Click a bubble to open the conversation: reply, **Resolve** (or Reopen), **Edit** your own note, **Delete**. You can delete your own notes and replies; the song's owner can delete any. Everyone the song is shared with can write notes, viewers too.
+- **Notes** in the top bar (Cmd/Ctrl+Shift+N) lists every note, song notes first then in time order. Click one to jump there. It lights up when someone left something you haven't read, and the status bar tells you who. **On tracks** (also View > Show on Tracks) shows every note, hides resolved ones, or hides them all; that only changes your screen.
+- A cloud song's notes live on the server: collaborators see them within a minute, with no Push needed and no conflicts. A song that isn't in the cloud keeps its notes in the project file, and they move to the server when you put it in the cloud.
+
 **Push**
 - Uploads what you have open as a new revision, with your description and an automatic summary of what changed (faders, pans, mutes, sends, EQ bands, plug-in knobs, clips, new or removed tracks, tempo, monitor mixes).
 - Audio files are stored once under their content hash, so a take is never uploaded twice.
@@ -146,7 +153,7 @@ Notes:
 
 - Arm tracks with the round button. **R** or the record button starts recording from the start marker.
 - If nothing is armed, record arms the selected track.
-- **Count-in** (next to the record button) clicks for 1, 2 or 4 bars before recording starts, with an accent on each downbeat, whether or not the metronome is on. The counter shows the beats left, and you can play along: armed inputs are monitored as usual. It applies when you record from a stop; recording while playing punches in at once. Stop (or record again) during the count-in cancels it. Your choice is remembered.
+- **Count-in**: click the arrow next to **Click** (or right-click the record button) and choose 1, 2 or 4 bars. When it's on, the record button shows the number of bars. Pressing record from a stop then clicks that many bars (accent on each downbeat, whether or not the metronome is on) and records from the downbeat. The counter shows the beats left, and armed inputs are monitored so you can play along. Recording while playing punches in at once. Stop (or record again) during the count-in cancels it.
 - Takes are shifted by the round-trip latency the driver reports, plus any plug-in latency, so they land in time. If your setup still lands early or late, adjust **Recording offset** in Settings. To measure it, record a click through a cable from an output back into an input.
 - A new take replaces whatever was underneath it on that track. Undo (Cmd/Ctrl+Z) brings the old material back.
 - MIDI tracks record notes, CC, and pitch bend from any MIDI input (or the one you pick). To play hardware from a MIDI track, set **MIDI to** in the mixer, for example to the UMC's MIDI OUT.

@@ -1,4 +1,5 @@
 #include "Arrangement.h"
+#include "Notes.h"
 #include "../Engine/ClipJoin.h"
 #include <set>
 
@@ -513,7 +514,7 @@ private:
 //==============================================================================
 // Lanes: grid, clips, playhead
 //==============================================================================
-class ArrangementView::Lanes : public Component, private ChangeListener
+class ArrangementView::Lanes : public Component, public TooltipClient, private ChangeListener
 {
 public:
     explicit Lanes (ArrangementView& o) : owner (o), ctx (o.ctx)
@@ -639,6 +640,10 @@ public:
                 drawRecordingClip (g, { x1, (float) owner.trackTop (i) + 1.0f, jmax (2.0f, x2 - x1), (float) theme::trackHeight - 3.0f });
             }
         }
+
+        // notes left on tracks
+        for (auto& mark : noteMarks())
+            drawNoteMark (g, mark);
 
         // box selection
         if (! marquee.isEmpty())
@@ -791,6 +796,12 @@ public:
 
     void mouseMove (const MouseEvent& e) override
     {
+        for (auto& mark : noteMarks())
+            if (mark.r.contains (e.position))
+            {
+                setMouseCursor (MouseCursor::PointingHandCursor);
+                return;
+            }
         auto h = hitTestClip (e.getPosition());
         setMouseCursor (h.zone == Hit::left || h.zone == Hit::right ? MouseCursor::LeftRightResizeCursor
                         : h.zone == Hit::body ? MouseCursor::DraggingHandCursor : MouseCursor::NormalCursor);
@@ -799,8 +810,20 @@ public:
     void mouseDown (const MouseEvent& e) override
     {
         grabKeyboardFocus();
-        auto h = hitTestClip (e.getPosition());
         drag = {};
+        clickBeat = jmax (0.0, owner.snap (owner.xToBeat ((float) e.x), e.mods.isAltDown()));
+        clickScreen = Rectangle<int> (e.getScreenX() - 2, e.getScreenY() - 2, 4, 4);
+
+        // A note's marker: open its conversation.
+        for (auto& mark : noteMarks())
+            if (mark.r.contains (e.position))
+            {
+                if (ctx.notes != nullptr)
+                    ctx.notes->showThread (mark.id, localAreaToGlobal (mark.r.toNearestInt()));
+                return;
+            }
+
+        auto h = hitTestClip (e.getPosition());
 
         if (h.trackIndex < 0)
         {
@@ -825,7 +848,7 @@ public:
             ctx.engine.seekTo (ctx.edit.insertMarker);
             ctx.edit.sendChangeMessage();
             if (e.mods.isPopupMenu())
-                showAddTrackMenu();
+                showLaneMenu (track);
             else
             {
                 drag.mode = Drag::marquee;
@@ -1022,6 +1045,102 @@ public:
 private:
     void changeListenerCallback (ChangeBroadcaster*) override   { repaint(); }
 
+    // --- notes
+    struct NoteMark { String id; Rectangle<float> r; int messages = 1; bool resolved = false, unread = false; };
+
+    std::vector<NoteMark> noteMarks() const
+    {
+        std::vector<NoteMark> out;
+        if (ctx.notes == nullptr)
+            return out;
+        for (auto& n : ctx.notes->getNotes())
+        {
+            if (! ctx.notes->isShownOnTracks (n))
+                continue;
+            for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+            {
+                if (ctx.edit.tracks[(size_t) i]->id != n.track || ! owner.isTrackShown (i))
+                    continue;
+                NoteMark m;
+                m.id = n.id;
+                m.messages = 1 + (int) n.replies.size();
+                m.resolved = n.resolved;
+                m.unread = ctx.notes->isUnread (n);
+                const float w = m.messages > 9 ? 26.0f : 20.0f;
+                m.r = { owner.beatToX (n.beat), (float) owner.trackTop (i) + 3.0f, w, 15.0f };
+                out.push_back (m);
+            }
+        }
+        return out;
+    }
+
+    void drawNoteMark (Graphics& g, const NoteMark& m)
+    {
+        // A speech bubble whose tail points down at the moment the note is about.
+        const auto fill = m.resolved ? theme::control : theme::accent;
+        Path p;
+        p.addRoundedRectangle (m.r, 3.0f);
+        p.addTriangle (m.r.getX(), m.r.getBottom() - 2.0f, m.r.getX() + 6.0f, m.r.getBottom() - 2.0f, m.r.getX(), m.r.getBottom() + 5.0f);
+        g.setColour (Colours::black.withAlpha (0.35f));
+        g.fillPath (p, AffineTransform::translation (0.0f, 1.0f));
+        g.setColour (fill);
+        g.fillPath (p);
+        g.setColour (fill.darker (0.5f));
+        g.drawVerticalLine (roundToInt (m.r.getX()), m.r.getBottom() + 5.0f, m.r.getBottom() + 40.0f);
+        g.setColour (m.resolved ? theme::textDim : theme::textDark);
+        g.setFont (theme::font (11.0f, true));
+        g.drawText (String (m.messages), m.r, Justification::centred, false);
+        if (m.unread)
+        {
+            g.setColour (Colours::white);
+            g.fillEllipse (m.r.getRight() - 4.0f, m.r.getY() - 3.0f, 7.0f, 7.0f);
+        }
+    }
+
+    String getTooltip() override
+    {
+        if (ctx.notes == nullptr)
+            return {};
+        const auto pos = getMouseXYRelative().toFloat();
+        for (auto& mark : noteMarks())
+            if (mark.r.expanded (2.0f).contains (pos))
+                if (auto* n = ctx.notes->find (mark.id))
+                {
+                    auto text = (n->author.isNotEmpty() ? n->author.upToFirstOccurrenceOf ("@", false, false) : String ("You")) + ": " + n->text;
+                    if (text.length() > 160)
+                        text = text.substring (0, 157) + "...";
+                    if (! n->replies.empty())
+                        text << "\n(" << (int) n->replies.size() << (n->replies.size() == 1 ? " reply" : " replies") << ". Click to read.)";
+                    return text;
+                }
+        return {};
+    }
+
+    /** Right-click on empty lane space: a note here, or a new track. */
+    void showLaneMenu (std::shared_ptr<Track> track)
+    {
+        PopupMenu m;
+        if (ctx.notes != nullptr)
+        {
+            m.addItem (10, "Add Note Here...");
+            m.addSeparator();
+        }
+        m.addItem (1, "Add audio track");
+        m.addItem (2, "Add MIDI track");
+        m.addItem (3, "Add return track");
+        auto* context = &ctx;
+        const auto beat = clickBeat;
+        const auto area = clickScreen;
+        const int trackId = track->id;
+        m.showMenuAsync (PopupMenu::Options(), [context, beat, area, trackId] (int r)
+        {
+            if (r == 10 && context->notes != nullptr) context->notes->showCompose (trackId, beat, area);
+            if (r == 1) context->edit.addTrack (TrackKind::audio);
+            if (r == 2) context->edit.addTrack (TrackKind::midi);
+            if (r == 3) context->edit.addTrack (TrackKind::bus);
+        });
+    }
+
     void showAddTrackMenu()
     {
         PopupMenu m;
@@ -1052,6 +1171,8 @@ private:
         m.addItem (21, "Paste at Start Marker", owner.canPaste());
         m.addItem (2, "Duplicate");
         m.addItem (22, "Join " + String (jmax (2, numSelected)) + " Clips", numSelected > 1);
+        if (ctx.notes != nullptr)
+            m.addItem (30, "Add Note Here...");
         m.addItem (3, "Split at start marker", ctx.edit.insertMarker > c->start && ctx.edit.insertMarker < c->end());
         if (c->kind == ClipKind::audio)
         {
@@ -1066,6 +1187,8 @@ private:
 
         auto* context = &ctx;
         auto* view = &owner;
+        const auto noteBeat = clickBeat;
+        const auto noteArea = clickScreen;
         Component::SafePointer<Component> safe (this);
         m.showMenuAsync (PopupMenu::Options(), [=] (int r)
         {
@@ -1087,6 +1210,7 @@ private:
             else if (r == 20) view->copySelectedClips();
             else if (r == 21) view->pasteClips();
             else if (r == 22) view->joinSelectedClips();
+            else if (r == 30 && context->notes != nullptr) context->notes->showCompose (track->id, noteBeat, noteArea);
             else if (r == 3) view->splitSelectedClip();
             else if (r == 4) view->deleteSelectedClip();
             else if (r == 11) clip->file.revealToUser();
@@ -1110,6 +1234,8 @@ private:
         std::set<std::pair<int, int>> baseSelection;      // marquee with Cmd/Ctrl or Shift adds to this
     };
     Rectangle<float> marquee;
+    double clickBeat = 0.0;               // where the last click was (for "Add Note Here")
+    Rectangle<int> clickScreen;
 
     ArrangementView& owner;
     AppContext& ctx;
@@ -1282,6 +1408,37 @@ void ArrangementView::tick()
         lanes->repaint (roundToInt (x) - 2, 0, 5, lanes->getHeight());
         lastPlayheadX = x;
     }
+}
+
+void ArrangementView::reveal (int trackId, double beat)
+{
+    const double visibleBeats = lanes->getWidth() / pxPerBeat;
+    if (beat < scrollBeats || beat > scrollBeats + visibleBeats * 0.85)
+        hbar.setCurrentRangeStart (jmax (0.0, beat - visibleBeats * 0.25));
+    for (size_t i = 0; i < ctx.edit.tracks.size() && i < trackTops.size(); ++i)
+    {
+        if (ctx.edit.tracks[i]->id != trackId || trackTops[i] < 0)
+            continue;
+        const int top = trackTops[i];
+        if (top < scrollY || top + theme::trackHeight > scrollY + lanes->getHeight())
+            vbar.setCurrentRangeStart (jmax (0, top - theme::trackHeight));
+    }
+    ctx.selectTrack (trackId);
+    ctx.edit.insertMarker = beat;
+    if (! ctx.engine.isPlaying())
+        ctx.engine.seekTo (beat);
+    ctx.edit.sendChangeMessage();
+    repaint();
+}
+
+Rectangle<int> ArrangementView::screenAreaFor (int trackId, double beat) const
+{
+    int y = 0;
+    for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+        if (ctx.edit.tracks[(size_t) i]->id == trackId)
+            y = jmax (0, trackTop (i)) + 10;
+    const auto x = roundToInt (jlimit (0.0f, (float) lanes->getWidth(), beatToX (beat)));
+    return lanes->localAreaToGlobal (Rectangle<int> (x - 2, y - 2, 4, 4));
 }
 
 void ArrangementView::scrollToPlayhead()

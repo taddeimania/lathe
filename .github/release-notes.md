@@ -3,6 +3,32 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.3
+
+- **Fixed: File > Open Recent opened the wrong project** on the Mac (often the
+  same one, whichever you picked). The menu now opens exactly the file it shows.
+  New from Template and Delete Template had the same problem and are fixed too.
+- **A tidier top bar.** Count-in moved into the metronome's menu: click the
+  arrow next to **Click** (or right-click the record button) to choose Off, 1, 2
+  or 4 bars. When count-in is on, the record button shows the number of bars.
+
+## New in 0.5.2
+
+Notes need the updated Lathe Cloud server (lathe-backend: `terraform apply`).
+
+- **Notes on tracks.** Right-click a track at a moment in the song: **Add Note
+  Here** ("The bass part doesn't sit right here, can you rework it?"). It shows
+  as a speech bubble on the track.
+- **Song notes** for the whole song: the plan so far, what's left, anything
+  useful.
+- **Conversations.** Click a note to reply. Anyone can mark it **Resolved** (or
+  reopen it); authors can edit and delete their own, and the song's owner can
+  delete any.
+- **Notes** in the top bar lists them all and lights up when someone left
+  something new. Show every note on the tracks, hide resolved ones, or hide
+  them all.
+- Shared songs' notes appear for everyone within a minute, no Push needed.
+
 ## New in 0.5.1
 
 - **Count-in.** Turn on **Count-in** next to the record button and pick 1, 2 or

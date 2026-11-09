@@ -9,7 +9,7 @@ namespace menu
         newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, exportTracks, showFolder, quit,
         undo = 100, redo, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
-        toggleView = 300, toggleDetail, zoomIn, zoomOut,
+        toggleView = 300, toggleDetail, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
         settings = 400, scan, metronome, browser, checkUpdates, autoUpdates,
         templateBase = 1000, deleteTemplateBase = 1500, restoreTemplates = 1999, recentBase = 2000
     };
@@ -178,6 +178,16 @@ MainComponent::MainComponent (PropertiesFile& s)
     cloud = std::make_unique<CloudController> (ctx, settings, hooks);
     addAndMakeVisible (cloud->getStatusComponent());
 
+    notes = std::make_unique<NotesController> (ctx, *cloud);
+    ctx.notes = notes.get();
+    notes->reveal = [this] (int trackId, double beat)
+    {
+        if (mixerShown)
+            setMixerShown (false);
+        arrangement.reveal (trackId, beat);
+    };
+    notes->addChangeListener (this);
+
     updateNotice = std::make_unique<UpdateNotice> (settings, [this] { openPatcher(); });
     updateNotice->onShowOrHide = [this] { resized(); };
     addChildComponent (*updateNotice);
@@ -192,6 +202,9 @@ MainComponent::MainComponent (PropertiesFile& s)
 MainComponent::~MainComponent()
 {
     stopTimer();
+    notes->removeChangeListener (this);
+    ctx.notes = nullptr;
+    notes.reset();
     cloud.reset();
     browserWindow.reset();
     store.onChanged = nullptr;
@@ -272,6 +285,7 @@ void MainComponent::deleteTemplate (const File& f)
             const auto rest = safe->templateFiles();
             props.setValue ("defaultTemplate", rest.isEmpty() ? String() : rest[0].getFileNameWithoutExtension());
         }
+        safe->menuItemsChanged();
         safe->setStatus ("Deleted the template \"" + name + "\".");
     });
 }
@@ -460,6 +474,7 @@ void MainComponent::loadProjectFile (const File& file, const File& readFrom)
     settings.setValue ("lastProject", file.getFullPathName());
     recentFiles.addFile (file);
     settings.setValue ("recentProjects", recentFiles.toString());
+    menuItemsChanged();   // the Mac's menu bar rebuilds only when told
     if (cloud != nullptr)
         cloud->projectChanged();
 
@@ -507,6 +522,7 @@ void MainComponent::save (std::function<void (bool)> done)
         settings.setValue ("lastProject", file.getFullPathName());
         recentFiles.addFile (file);
         settings.setValue ("recentProjects", recentFiles.toString());
+        menuItemsChanged();
         setStatus ("Saved " + file.getFullPathName());
         if (cloud != nullptr)
             cloud->projectChanged (false);
@@ -592,7 +608,10 @@ void MainComponent::saveAsTemplate()
         getTemplatesDir().createDirectory();
         const auto f = getTemplatesDir().getChildFile (File::createLegalFileName (name) + kProjectExtension);
         if (f.replaceWithText (JSON::toString (edit.toVar (true))))
+        {
+            menuItemsChanged();
             setStatus ("Saved template \"" + name + "\". Choose it in File > New from Template, or make it the default in Settings.");
+        }
         else
             setStatus ("Couldn't write " + f.getFullPathName());
     });
@@ -678,8 +697,13 @@ void MainComponent::importAudio()
 }
 
 //==============================================================================
-void MainComponent::changeListenerCallback (ChangeBroadcaster*)
+void MainComponent::changeListenerCallback (ChangeBroadcaster* source)
 {
+    if (notes != nullptr && source == notes.get())
+    {
+        arrangement.repaint();   // note markers
+        return;
+    }
     if (edit.needsRebuild)
     {
         edit.needsRebuild = false;
@@ -837,7 +861,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
 
         PopupMenu templates, deleteTemplates;
         int i = 0;
-        for (auto& f : templateFiles())
+        templateMenuFiles = templateFiles();
+        for (auto& f : templateMenuFiles)
         {
             templates.addItem (menu::templateBase + i, f.getFileNameWithoutExtension());
             deleteTemplates.addItem (menu::deleteTemplateBase + i, f.getFileNameWithoutExtension());
@@ -851,7 +876,15 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
 
         item (menu::open, "Open...", cmd + "O");
         PopupMenu recent;
-        recentFiles.createPopupMenuItems (recent, menu::recentBase, true, true);
+        recentMenuFiles.clear();
+        for (int r = 0; r < recentFiles.getNumFiles(); ++r)
+        {
+            const auto f = recentFiles.getFile (r);
+            if (! f.existsAsFile())
+                continue;
+            recent.addItem (menu::recentBase + recentMenuFiles.size(), f.getFullPathName());
+            recentMenuFiles.add (f);
+        }
         m.addSubMenu ("Open Recent", recent, recent.getNumItems() > 0);
         m.addSeparator();
         item (menu::save, "Save", cmd + "S");
@@ -901,11 +934,22 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::ungroupTracks, "Ungroup", cmd + "Shift+G", t != nullptr && t->groupId >= 0);
         m.addSeparator();
         item (menu::deleteTrack, "Delete Selected Track", {}, t != nullptr && ! t->isMaster());
+        m.addSeparator();
+        item (menu::addNote, "Add Note at Start Marker...", cmd + "Alt+N", t != nullptr && t->holdsClips());
+        item (menu::addSongNote, "Add Song Note...", {});
     }
     else if (index == 3)
     {
         item (menu::toggleView, mixerShown ? "Show Arrangement" : "Show Mixer", "Tab");
         item (menu::toggleDetail, "Show Bottom Panel", {}, true, detailShown);
+        m.addSeparator();
+        item (menu::showNotes, "Notes...", cmd + "Shift+N");
+        PopupMenu showOn;
+        const auto show = notes->getShow();
+        showOn.addItem (menu::notesAll, "Every Note", true, show == NotesController::Show::all);
+        showOn.addItem (menu::notesUnresolved, "Unresolved Notes Only", true, show == NotesController::Show::unresolved);
+        showOn.addItem (menu::notesNone, "No Notes", true, show == NotesController::Show::none);
+        m.addSubMenu ("Show on Tracks", showOn);
         m.addSeparator();
         item (menu::zoomIn, "Zoom In", "+");
         item (menu::zoomOut, "Zoom Out", "-");
@@ -938,7 +982,10 @@ void MainComponent::menuItemSelected (int id, int)
 
     if (id >= menu::recentBase)
     {
-        const auto f = recentFiles.getFile (id - menu::recentBase);
+        const int index = id - menu::recentBase;
+        if (! isPositiveAndBelow (index, recentMenuFiles.size()))
+            return;
+        const auto f = recentMenuFiles[index];
         confirmDiscard ([this, f] { openProject (f); });
         return;
     }
@@ -947,26 +994,25 @@ void MainComponent::menuItemSelected (int id, int)
     {
         settings.removeValue ("hiddenTemplates");
         ensureBuiltInTemplates();
+        menuItemsChanged();
         setStatus ("Restored the built-in templates.");
         return;
     }
 
     if (id >= menu::deleteTemplateBase)
     {
-        const auto files = templateFiles();
         const int index = id - menu::deleteTemplateBase;
-        if (index < files.size())
-            deleteTemplate (files[index]);
+        if (isPositiveAndBelow (index, templateMenuFiles.size()))
+            deleteTemplate (templateMenuFiles[index]);
         return;
     }
 
     if (id >= menu::templateBase)
     {
-        const auto files = templateFiles();
         const int index = id - menu::templateBase;
-        if (index < files.size())
+        if (isPositiveAndBelow (index, templateMenuFiles.size()))
         {
-            const auto f = files[index];
+            const auto f = templateMenuFiles[index];
             confirmDiscard ([this, f] { newProject (f); });
         }
         return;
@@ -1034,6 +1080,22 @@ void MainComponent::menuItemSelected (int id, int)
 
         case menu::toggleView:    setMixerShown (! mixerShown); break;
         case menu::toggleDetail:  detailShown = ! detailShown; resized(); break;
+        case menu::showNotes:     notes->showWindow(); break;
+        case menu::notesAll:        notes->setShow (NotesController::Show::all); break;
+        case menu::notesUnresolved: notes->setShow (NotesController::Show::unresolved); break;
+        case menu::notesNone:       notes->setShow (NotesController::Show::none); break;
+        case menu::addNote:
+            if (auto t = edit.findTrack (ctx.selection.trackId); t != nullptr && t->holdsClips())
+            {
+                if (mixerShown)
+                    setMixerShown (false);
+                arrangement.reveal (t->id, edit.insertMarker);
+                notes->showCompose (t->id, edit.insertMarker, arrangement.screenAreaFor (t->id, edit.insertMarker));
+            }
+            break;
+        case menu::addSongNote:
+            notes->showCompose (-1, 0.0, transport.getScreenBounds().withSizeKeepingCentre (10, 10));
+            break;
         case menu::zoomIn:        arrangement.zoom (1.25, 0.0f); break;
         case menu::zoomOut:       arrangement.zoom (0.8, 0.0f); break;
 
@@ -1075,7 +1137,11 @@ bool MainComponent::keyPressed (const KeyPress& k)
         if (is ('y')) { menuItemSelected (menu::redo, 0); return true; }
         if (is ('s')) { menuItemSelected (shift ? menu::saveAs : menu::save, 0); return true; }
         if (is ('o')) { menuItemSelected (menu::open, 0); return true; }
-        if (is ('n')) { menuItemSelected (menu::newProject, 0); return true; }
+        if (is ('n'))
+        {
+            menuItemSelected (shift ? menu::showNotes : k.getModifiers().isAltDown() ? menu::addNote : menu::newProject, 0);
+            return true;
+        }
         if (is ('i')) { menuItemSelected (menu::importAudio, 0); return true; }
         if (is ('e')) { menuItemSelected (shift ? menu::exportAudio : menu::split, 0); return true; }
         if (is ('d')) { menuItemSelected (menu::duplicate, 0); return true; }

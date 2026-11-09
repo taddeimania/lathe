@@ -2,6 +2,7 @@
 
 #include "../Common.h"
 #include "ChannelEq.h"
+#include "Notes.h"
 
 namespace lathe
 {
@@ -270,6 +271,9 @@ public:
     // --- change notification
     /** Call after a change the engine must see (tracks, clips, routing, plug-ins).
         Marks the project dirty; the UI and engine are told asynchronously. */
+    /** Notes on a song that isn't in the cloud (cloud songs keep theirs on the server). */
+    std::vector<SongNote> localNotes;
+
     void changed()  { dirty = true; needsRebuild = true; sendChangeMessage(); }
     /** For changes the engine already reads live (mute, solo, arm, monitor): UI refresh only. */
     void touched()  { dirty = true; sendChangeMessage(); }

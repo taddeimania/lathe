@@ -5,6 +5,7 @@
 #include "DeviceChain.h"
 #include "Dialogs.h"
 #include "Mixer.h"
+#include "Notes.h"
 #include "PianoRoll.h"
 #include "PluginBrowser.h"
 #include "TransportBar.h"
@@ -82,12 +83,17 @@ private:
     std::unique_ptr<PluginBrowserWindow> browserWindow;
     std::unique_ptr<CloudController> cloud;
     std::unique_ptr<UpdateNotice> updateNotice;
+    std::unique_ptr<NotesController> notes;
     bool announcedUpdates = false;
     std::unique_ptr<Divider> divider;
     Label statusLeft, statusRight;
     TooltipWindow tooltips { this, 600 };
 
     RecentlyOpenedFilesList recentFiles;
+    // The files behind the File menu's items, as they were when the menu was built. The Mac
+    // keeps its menu bar between rebuilds, so a click must open what that item showed, not
+    // whatever is at that position in the list now.
+    Array<File> recentMenuFiles, templateMenuFiles;
     std::unique_ptr<FileChooser> chooser;
 
     bool mixerShown = false, pianoRollShown = false, detailShown = true;

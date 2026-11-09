@@ -55,6 +55,20 @@ public:
     /** Forgets this song's cloud link (after losing access, say). The local copy stays. */
     void unlinkSong();
 
+    /** A quick API call on its own thread (doesn't wait behind a push), then done() on
+        the message thread. Notices the server being too old for /v2. */
+    void request (const String& method, const String& path, const var& body,
+                  std::function<void (const var&, const cloud::ApiError&)> done);
+    /** "The server is too old" if an API error says /v2 doesn't exist. */
+    bool isOldServer (const cloud::ApiError&) const;
+
+    /** The open song's cloud id ("" if it isn't in the cloud). */
+    String getSongId() const;
+    /** Signed in, linked, and still allowed to open it: notes can go to the server. */
+    bool canUseServer() const      { return isLinked() && isSignedIn() && ! lostAccess && ! oldServer; }
+    String getEmail() const;
+    /** owner, editor, viewer, or "" while unknown. */
+    String getSongRole() const     { return songRole; }
     bool isLinked() const;
     bool isUnfinishedShare() const;
     bool isSignedIn() const        { return client != nullptr && client->isSignedIn(); }
@@ -86,12 +100,6 @@ private:
     void showNotices (const Array<var>& notices);
     void uploadSong();
 
-    /** A quick API call on its own thread (doesn't wait behind a push), then done() on
-        the message thread. Notices the server being too old for /v2. */
-    void request (const String& method, const String& path, const var& body,
-                  std::function<void (const var&, const cloud::ApiError&)> done);
-    /** "The server is too old" if an API error says /v2 doesn't exist. */
-    bool isOldServer (const cloud::ApiError&) const;
     void refreshWindows();
 
     /** Runs work on the cloud thread, then done() on the message thread. */
