@@ -86,10 +86,18 @@ public:
         int bitDepth = 24;               // 16, 24 or 32 (float)
         File folder;
         String baseName;
+        /** Empty: everything, as you hear it. Otherwise the ids of the tracks to export:
+            only those audio/MIDI tracks play (even if muted or not soloed), and only the
+            tracks and returns/buses listed here get stems. Returns and buses not listed
+            still carry what the listed tracks send them into the mix. If only returns or
+            buses are listed, every track plays and just their stems are limited. */
+        std::set<int> trackIds;
     };
     /** Renders offline. Runs on a background thread; progress returns false to cancel. */
     Result exportAudio (const ExportSettings&, const std::function<bool (double)>& progress, StringArray& writtenFiles);
     bool isExporting() const noexcept   { return exporting.load(); }
+    /** The mix file name for an export of some tracks: "Song - Drums + Bass", "Song (5 tracks)". */
+    static String exportMixName (const String& baseName, const Edit&, const std::set<int>& trackIds);
 
     // --- notifications (message thread)
     std::function<void (const String&)> onStatus;
@@ -150,6 +158,7 @@ private:
     MidiDeviceListConnection midiDeviceConnection;
 
     std::atomic<bool> playing { false }, recording { false }, exporting { false };
+    std::set<int> exportOnly;   // during an export of some tracks: the ids that play (export thread only)
     std::atomic<bool> notesOffRequest { false };
     std::atomic<int64> positionSamples { 0 }, seekRequest { -1 };
     std::atomic<double> deviceRate { 0.0 };

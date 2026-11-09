@@ -6,7 +6,7 @@ namespace menu
 {
     enum
     {
-        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit,
+        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, exportTracks, showFolder, quit,
         undo = 100, redo, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut,
@@ -799,6 +799,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         m.addSeparator();
         item (menu::importAudio, "Import Audio...", cmd + "I");
         item (menu::exportAudio, "Export Mix / Stems...", cmd + "Shift+E");
+        item (menu::exportTracks, ctx.selection.trackIds.size() > 1 ? "Export Selected Tracks..." : "Export Selected Track...", {},
+              ! ctx.selection.trackIds.empty() || ctx.selection.trackId >= 0);
         m.addSeparator();
         item (menu::showFolder, "Show Project Folder", {}, edit.workDir.isDirectory());
        #if ! JUCE_MAC
@@ -917,6 +919,14 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::saveTemplate:  saveAsTemplate(); break;
         case menu::importAudio:   importAudio(); break;
         case menu::exportAudio:   showExportDialog (ctx); break;
+        case menu::exportTracks:
+        {
+            auto ids = ctx.selection.trackIds;
+            if (ids.empty() && ctx.selection.trackId >= 0)
+                ids.insert (ctx.selection.trackId);
+            showExportDialog (ctx, ids);
+            break;
+        }
         case menu::showFolder:    edit.workDir.revealToUser(); break;
         case menu::quit:          JUCEApplication::getInstance()->systemRequestedQuit(); break;
 

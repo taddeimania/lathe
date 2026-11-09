@@ -1,4 +1,5 @@
 #include "Widgets.h"
+#include "Dialogs.h"
 
 namespace lathe
 {
@@ -614,6 +615,7 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
         m.addItem (7, "Remove Group Bus (tracks go straight to the master)");
     }
     m.addSeparator();
+    m.addItem (8, "Export This Group...");
     m.addItem (4, "Ungroup (keep the tracks)");
 
     Component::SafePointer<Component> safeAnchor (&anchor);
@@ -629,6 +631,16 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
         else if (r == 4)   edit.ungroup (group->id);
         else if (r == 5 || r == 6)  showGroupBus (*context, group);
         else if (r == 7)   edit.removeGroupBus (group->id);
+        else if (r == 8)
+        {
+            std::set<int> ids;
+            for (auto& t : edit.tracks)
+                if (t->groupId == group->id)
+                    ids.insert (t->id);
+            if (group->busId >= 0)
+                ids.insert (group->busId);
+            showExportDialog (*context, ids);
+        }
         else if (r >= 100) { group->colour = getTrackPalette()[r - 100]; edit.touched(); }
     });
 }
@@ -683,6 +695,14 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
     m.addItem (2, "Move up");
     m.addItem (3, "Move down");
     m.addSeparator();
+
+    // Export this track, or every selected track if it's one of them.
+    std::set<int> toExport { track->id };
+    if (ctx.selection.trackIds.count (track->id) > 0 && ctx.selection.trackIds.size() > 1)
+        toExport = ctx.selection.trackIds;
+    m.addItem (5, toExport.size() > 1 ? "Export " + String ((int) toExport.size()) + " Selected Tracks..."
+                                      : String ("Export This Track..."));
+    m.addSeparator();
     m.addItem (4, "Delete track");
 
     Component::SafePointer<Component> safeAnchor (&anchor);
@@ -705,6 +725,10 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
         if (r == 1)
         {
             renameTrack (*context, track);
+        }
+        else if (r == 5)
+        {
+            showExportDialog (*context, toExport);
         }
         else if (r == 200)
         {

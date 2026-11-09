@@ -213,6 +213,7 @@ Every track, return and the master has a built-in EQ after its plug-ins and befo
 | Cmd/Ctrl+A | Select all clips |
 | Cmd/Ctrl+C, X, V | Copy / cut the selected clips; paste them at the start marker on the selected track (click an empty spot to put the marker there) |
 | Cmd/Ctrl+D | Duplicate the selected clips |
+| Right-click a track | **Export This Track...**: export just that track (or every selected track): a mix of only those tracks and/or a file per track |
 | Cmd/Ctrl+J | Join the selected clips on each track into one clip (audio is rendered to a new file) |
 | Cmd/Ctrl+E | Split the selected clips at the start marker |
 | Delete | Delete the selected clips (or notes in the piano roll) |

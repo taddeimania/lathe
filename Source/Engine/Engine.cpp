@@ -1483,7 +1483,9 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
 
     const bool groupMuted = rt.group != nullptr && rt.group->mute.load();
     const bool soloed = t.solo.load() || (rt.group != nullptr && rt.group->solo.load());
-    const bool silenced = t.mute.load() || groupMuted || (anySolo && ! soloed);
+    // Exporting some tracks: exactly those play, whatever mute and solo say.
+    const bool silenced = (! realtime && ! exportOnly.empty()) ? exportOnly.count (t.id) == 0
+                                                               : (t.mute.load() || groupMuted || (anySolo && ! soloed));
 
     if (! silenced)
     {
@@ -1652,6 +1654,20 @@ void Engine::renderMetronome (RenderGraph& g, int64 pos, int len)
 //==============================================================================
 // Export
 //==============================================================================
+String Engine::exportMixName (const String& base, const Edit& edit, const std::set<int>& ids)
+{
+    StringArray names;
+    for (auto& t : edit.tracks)
+        if (ids.count (t->id) > 0 && t->holdsClips())
+            names.add (t->name);
+
+    if (names.isEmpty())
+        return base;
+    if (names.size() <= 3)
+        return base + " - " + names.joinIntoString (" + ");
+    return base + " (" + String (names.size()) + " tracks)";
+}
+
 Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (double)>& progress, StringArray& written)
 {
     if (playing || recording)
@@ -1734,9 +1750,17 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
     };
     std::vector<Output> outputs;
 
+    // Limit what plays only if audio/MIDI tracks were picked. Just a return picked:
+    // everything plays into it, and only its file is written.
+    exportOnly.clear();
+    for (auto& t : edit->tracks)
+        if (s.trackIds.count (t->id) > 0)
+            exportOnly = s.trackIds;
+
     if (s.mix)
     {
-        auto f = s.folder.getChildFile (File::createLegalFileName (s.baseName) + ".wav");
+        const auto name = exportOnly.empty() ? s.baseName : exportMixName (s.baseName, *edit, s.trackIds);
+        auto f = s.folder.getChildFile (File::createLegalFileName (name) + ".wav");
         outputs.push_back ({ &g->master.buffer, f, makeWriter (f), mixLatency, 0.0f, false });
     }
 
@@ -1745,7 +1769,10 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
         int index = 1;
         auto addStem = [&] (RenderTrack& rt)
         {
+            // Numbered by position in the whole song, so a track's file name never changes.
             const auto name = String (index++).paddedLeft ('0', 2) + " " + rt.track->name;
+            if (! s.trackIds.empty() && s.trackIds.count (rt.track->id) == 0)
+                return;
             auto f = s.folder.getChildFile (File::createLegalFileName (s.baseName + " - " + name) + ".wav");
             outputs.push_back ({ &rt.buffer, f, makeWriter (f), stemLatency, 0.0f, true });
         };
@@ -1757,6 +1784,7 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
     {
         if (o.writer == nullptr)
         {
+            exportOnly.clear();
             for (auto* p : processors) p->setNonRealtime (false);
             restore();
             return Result::fail ("Couldn't write " + o.file.getFullPathName());
@@ -1821,6 +1849,7 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
     for (auto& rt : g->buses)  rt.align.clear();
 
     playHead.playing = false;
+    exportOnly.clear();
     restore();
 
     return cancelled ? Result::fail ("Export cancelled.") : Result::ok();

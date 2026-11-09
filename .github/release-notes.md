@@ -3,6 +3,17 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.4.5
+
+- **Export specific tracks.** Right-click a track and choose **Export This
+  Track...** (or **Export N Selected Tracks...**, or **Export This Group...** on a
+  group header). There's also **File > Export Selected Tracks...**. The Export
+  window now has a **Tracks** section: all tracks as you hear them, or only the
+  ones you tick. Ticked tracks play even if they're muted or something else is
+  soloed, and reverb returns keep what those tracks send them. The mix is named
+  after what you picked, like "Song - Bass.wav", and each ticked track or return
+  can get its own file too.
+
 ## New in 0.4.4
 
 - **Copy and paste clips.** Select a clip, press Cmd/Ctrl+C, click an empty

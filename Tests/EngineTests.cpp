@@ -532,6 +532,51 @@ int main()
         }
     }
 
+    std::cout << "Export some tracks" << std::endl;
+    {
+        // Mute the first track and solo the second: an export of just the first still plays it.
+        auto first = edit.tracks[0], second = edit.tracks[1];
+        first->mute = true;
+        second->solo = true;
+
+        Engine::ExportSettings s;
+        s.mix = true;
+        s.stems = true;
+        s.startBeat = 0.0;
+        s.endBeat = 2.0;
+        s.tailSeconds = 0.5;
+        s.folder = dir.getChildFile ("Exports one");
+        s.baseName = "Song";
+        s.trackIds = { first->id };
+        StringArray files;
+        auto result = engine.exportAudio (s, [] (double) { return true; }, files);
+        check (result.wasOk() && files.size() == 2, "mix + the one stem (got " + files.joinIntoString (", ") + ")");
+        check (files.size() == 2 && File (files[0]).getFileName() == "Song - " + first->name + ".wav", "mix is named after the track (" + (files.isEmpty() ? String() : File (files[0]).getFileName()) + ")");
+        check (files.size() == 2 && File (files[1]).getFileName().startsWith ("Song - 01 "), "the stem keeps its song number");
+
+        if (files.size() > 0)
+        {
+            AudioFormatManager fm;
+            fm.registerBasicFormats();
+            std::unique_ptr<AudioFormatReader> r (fm.createReaderFor (File (files[0])));
+            AudioBuffer<float> b (2, (int) r->lengthInSamples);
+            r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+            const float peak = b.getMagnitude (0, 0, b.getNumSamples());
+            check (std::abs (peak - 0.5f) < 0.01f, "only that track is in the mix, though it's muted and another is soloed (peak " + String (peak) + ")");
+        }
+
+        // Live playback is untouched afterwards.
+        check (first->mute.load() && second->solo.load(), "mute and solo are left as they were");
+        first->mute = false;
+        second->solo = false;
+
+        s.folder = dir.getChildFile ("Exports both");
+        s.trackIds = { first->id, second->id };
+        files.clear();
+        engine.exportAudio (s, [] (double) { return true; }, files);
+        check (files.size() == 3 && File (files[0]).getFileName() == "Song - " + first->name + " + " + second->name + ".wav", "two tracks: both names in the mix's file name");
+    }
+
     std::cout << "Project file round trip" << std::endl;
     {
         auto text = JSON::toString (edit.toVar (false));

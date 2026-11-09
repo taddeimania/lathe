@@ -211,9 +211,46 @@ private:
 class ExportPanel : public Component
 {
 public:
-    explicit ExportPanel (AppContext& c) : ctx (c)
+    ExportPanel (AppContext& c, const std::set<int>& onlyTracks) : ctx (c)
     {
         auto& edit = ctx.edit;
+
+        // Which tracks: everything, or the ticked ones.
+        which.addItem ("All tracks, as you hear them", 1);
+        which.addItem ("Only the tracks ticked below", 2);
+        which.setSelectedId (onlyTracks.empty() ? 1 : 2, dontSendNotification);
+        which.onChange = [this] { updateTrackList(); };
+        addAndMakeVisible (which);
+
+        auto addRow = [&] (const Track& t, const String& suffix)
+        {
+            auto* b = trackBoxes.add (new ToggleButton (t.name + suffix));
+            b->getProperties().set ("trackId", t.id);
+            b->setToggleState (onlyTracks.empty() || onlyTracks.count (t.id) > 0, dontSendNotification);
+            b->onClick = [this] { updateTrackList(); };
+            trackList.addAndMakeVisible (b);
+        };
+        for (auto& t : edit.tracks)
+            if (t->holdsClips())
+                addRow (*t, t->mute.load() ? "  (muted)" : String());
+        for (auto& t : edit.buses)
+            addRow (*t, "  (return)");
+        trackView.setViewedComponent (&trackList, false);
+        trackView.setScrollBarsShown (true, false);
+        addAndMakeVisible (trackView);
+
+        for (auto* b : { &tickAll, &tickNone })
+        {
+            b->setColour (TextButton::buttonColourId, theme::control);
+            addAndMakeVisible (b);
+        }
+        tickAll.onClick  = [this] { for (auto* b : trackBoxes) b->setToggleState (true, dontSendNotification);  updateTrackList(); };
+        tickNone.onClick = [this] { for (auto* b : trackBoxes) b->setToggleState (false, dontSendNotification); updateTrackList(); };
+
+        trackHint.setFont (theme::font (11.5f));
+        trackHint.setColour (Label::textColourId, theme::textDim);
+        trackHint.setJustificationType (Justification::topLeft);
+        addAndMakeVisible (trackHint);
 
         mix.setButtonText ("Master mix (one stereo file)");
         stems.setButtonText ("Stems (one file per track and return, post-fader)");
@@ -265,7 +302,7 @@ public:
         };
         addAndMakeVisible (chooseFolder);
 
-        for (auto* l : { &rangeLabel, &bitsLabel, &tailLabel, &folderTitle })
+        for (auto* l : { &tracksLabel, &rangeLabel, &bitsLabel, &tailLabel, &folderTitle })
         {
             l->setFont (theme::font (12.5f));
             l->setColour (Label::textColourId, theme::textDim);
@@ -279,16 +316,13 @@ public:
         addAndMakeVisible (exportButton);
         addAndMakeVisible (cancelButton);
 
-        setSize (520, 330);
+        setSize (520, 520);
+        updateTrackList();
     }
 
     void resized() override
     {
         auto r = getLocalBounds().reduced (16);
-        mix.setBounds (r.removeFromTop (26));
-        stems.setBounds (r.removeFromTop (26));
-        r.removeFromTop (12);
-
         auto row = [&] (Label& l, Component& c)
         {
             auto line = r.removeFromTop (26);
@@ -296,6 +330,31 @@ public:
             c.setBounds (line);
             r.removeFromTop (8);
         };
+
+        row (tracksLabel, which);
+        {
+            auto area = r.removeFromTop (150);
+            area.removeFromLeft (90);
+            auto side = area.removeFromRight (64);
+            tickAll.setBounds (side.removeFromTop (24));
+            side.removeFromTop (4);
+            tickNone.setBounds (side.removeFromTop (24));
+            area.removeFromRight (8);
+            trackView.setBounds (area);
+            trackList.setSize (area.getWidth() - trackView.getScrollBarThickness(), jmax (1, trackBoxes.size() * 24));
+            for (int i = 0; i < trackBoxes.size(); ++i)
+                trackBoxes[i]->setBounds (4, i * 24, trackList.getWidth() - 8, 24);
+        }
+        {
+            auto hint = r.removeFromTop (34);
+            hint.removeFromLeft (90);
+            trackHint.setBounds (hint);
+        }
+        r.removeFromTop (6);
+
+        mix.setBounds (r.removeFromTop (26));
+        stems.setBounds (r.removeFromTop (26));
+        r.removeFromTop (12);
         row (rangeLabel, range);
         row (bitsLabel, bits);
         row (tailLabel, tail);
@@ -327,6 +386,12 @@ private:
             ctx.showStatus ("Choose a mix, stems, or both.");
             return;
         }
+        const auto chosen = chosenTracks();
+        if (which.getSelectedId() == 2 && chosen.empty())
+        {
+            ctx.showStatus ("Tick at least one track to export.");
+            return;
+        }
         if (ctx.engine.isPlaying())
             ctx.engine.stop();
 
@@ -337,6 +402,7 @@ private:
         s.tailSeconds = tail.getValue();
         s.folder = folder;
         s.baseName = edit.getName();
+        s.trackIds = chosen;
         if (range.getSelectedId() == 2)
         {
             s.startBeat = edit.loopStart;
@@ -358,7 +424,54 @@ private:
         thread->launchThread();
     }
 
+    /** Empty when exporting everything. */
+    std::set<int> chosenTracks() const
+    {
+        std::set<int> ids;
+        if (which.getSelectedId() != 2)
+            return ids;
+        for (auto* b : trackBoxes)
+            if (b->getToggleState())
+                ids.insert ((int) b->getProperties()["trackId"]);
+        return ids;
+    }
+
+    void updateTrackList()
+    {
+        const bool choosing = which.getSelectedId() == 2;
+        for (auto* c : std::initializer_list<Component*> { &trackView, &tickAll, &tickNone })
+            c->setEnabled (choosing);
+        trackView.setAlpha (choosing ? 1.0f : 0.45f);
+
+        if (! choosing)
+        {
+            trackHint.setText ("Everything plays as it does in the song: mute and solo count.", dontSendNotification);
+            mix.setButtonText ("Master mix (one stereo file)");
+            stems.setButtonText ("Stems (one file per track and return, post-fader)");
+            return;
+        }
+
+        const auto ids = chosenTracks();
+        int tracks = 0;
+        for (auto& t : ctx.edit.tracks)
+            tracks += (t->holdsClips() && ids.count (t->id) > 0) ? 1 : 0;
+        if (tracks == 0 && ! ids.empty())
+            trackHint.setText ("Only returns ticked: every track plays into them, and you get a file for each ticked return.", dontSendNotification);
+        else
+            trackHint.setText ("Only the ticked tracks play, even if muted. Returns pass on what those tracks send them; "
+                               "tick a return to get its own file.", dontSendNotification);
+        mix.setButtonText (tracks == 0 ? String ("Master mix (one stereo file)")
+                                       : "Mix of the ticked tracks: \"" + Engine::exportMixName (ctx.edit.getName(), ctx.edit, ids) + ".wav\"");
+        stems.setButtonText ("A file for each ticked track and return (post-fader)");
+    }
+
     AppContext& ctx;
+    ComboBox which;
+    Component trackList;
+    Viewport trackView;
+    OwnedArray<ToggleButton> trackBoxes;
+    TextButton tickAll { "All" }, tickNone { "None" };
+    Label tracksLabel { {}, "Tracks" }, trackHint;
     ToggleButton mix, stems;
     ComboBox range, bits;
     Slider tail;
@@ -387,8 +500,8 @@ void showSettingsDialog (AppContext& ctx)
     launch (new SettingsPanel (ctx), "Audio / MIDI Settings", true);
 }
 
-void showExportDialog (AppContext& ctx)
+void showExportDialog (AppContext& ctx, const std::set<int>& onlyTracks)
 {
-    launch (new ExportPanel (ctx), "Export", false);
+    launch (new ExportPanel (ctx, onlyTracks), "Export", false);
 }
 } // namespace lathe
