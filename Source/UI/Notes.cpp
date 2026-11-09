@@ -20,6 +20,16 @@ String who (const String& email, const String& me)
     return shortName (email);
 }
 
+/** The error to show, in words that say what to do about it. */
+String explain (CloudController& cloud, const cloud::ApiError& err)
+{
+    if (cloud.isOldServer (err))
+        return "Notes need the updated Lathe Cloud server. Whoever runs it: update lathe-backend and run terraform apply.";
+    if (err.status == 404)
+        return "That note or song isn't there anymore (it may have been deleted or unshared).";
+    return err.message;
+}
+
 void styleSmall (TextButton& b, bool primary = false)
 {
     if (primary)
@@ -161,6 +171,92 @@ void NotesController::saveLocal()
     changed();
 }
 
+//==============================================================================
+// Where a cloud song's notes are kept between runs: the last copy from the server
+// (so they show offline) and the changes not sent yet.
+File NotesController::stateFile() const
+{
+    const auto f = ctx.edit.projectFile;
+    return f == File() ? File() : f.getParentDirectory().getChildFile (".lathe").getChildFile ("notes.json");
+}
+
+void NotesController::loadState()
+{
+    notes.clear();
+    outbox.clear();
+    const auto f = stateFile();
+    if (! f.existsAsFile())
+        return;
+    const auto data = JSON::parse (f);
+    if (data["song"].toString() != songId)
+        return;   // a copy of a different song
+    if (auto* list = data["notes"].getArray())
+        for (auto& v : *list)
+            notes.push_back (SongNote::fromVar (v));
+    if (auto* list = data["outbox"].getArray())
+        for (auto& v : *list)
+            outbox.push_back (v);
+}
+
+void NotesController::saveState()
+{
+    const auto f = stateFile();
+    if (f == File() || ! isCloud())
+        return;
+    DynamicObject::Ptr o = new DynamicObject();
+    o->setProperty ("song", songId);
+    Array<var> list, ops;
+    for (auto& n : notes)
+        list.add (n.toVar());
+    for (auto& op : outbox)
+        ops.add (op);
+    o->setProperty ("notes", list);
+    o->setProperty ("outbox", ops);
+    f.getParentDirectory().createDirectory();
+    f.replaceWithText (JSON::toString (var (o.get())));
+}
+
+SongNote* NotesController::findMutable (const String& id)
+{
+    for (auto& n : notes)
+        if (n.id == id)
+            return &n;
+    return nullptr;
+}
+
+bool NotesController::isConnectionProblem (const cloud::ApiError& err) const
+{
+    // No connection or a timeout (599), the server having a bad moment, a sign-in to renew,
+    // or a server too old for notes: keep the change and try again later.
+    return err.status == 599 || err.status >= 500 || err.status == 401 || err.status == 429 || cloud.isOldServer (err);
+}
+
+String NotesController::offlineMessage (const cloud::ApiError& err) const
+{
+    const int n = (int) outbox.size();
+    const auto kept = n == 0 ? String ("Your notes are kept here")
+                             : String (n) + (n == 1 ? " change is kept here" : " changes are kept here");
+    if (cloud.isOldServer (err))
+        return "Notes aren't syncing: the Lathe Cloud server needs updating (lathe-backend: terraform apply). " + kept + " until then.";
+    if (err.status == 401)
+        return "Notes aren't syncing: sign in again (Cloud > Sign In). " + kept + " until then.";
+    return "Notes aren't syncing: can't reach Lathe Cloud. " + kept + " and sent when it's back.";
+}
+
+void NotesController::setSyncProblem (const String& problem)
+{
+    if (problem == syncProblem)
+        return;
+    const bool wasOk = syncProblem.isEmpty();
+    syncProblem = problem;
+    if (wasOk && problem.isNotEmpty())
+        ctx.showStatus (problem);
+    else if (! wasOk && problem.isEmpty())
+        ctx.showStatus ("Notes are syncing again.");
+    changed();
+}
+
+//==============================================================================
 void NotesController::timerCallback()
 {
     // Which song is open, and where do its notes live?
@@ -168,16 +264,19 @@ void NotesController::timerCallback()
     if (id != songId)
     {
         songId = id;
-        notes.clear();
-        error = {};
+        error = syncProblem = {};
         pollCountdown = 0;
+        flushCountdown = 0;
+        loadState();
         changed();
     }
 
     if (! isCloud())
         return;
-    if (! ctx.edit.localNotes.empty() && cloud.canUseServer() && ! uploading)
+    if (! ctx.edit.localNotes.empty() && ! uploading)
         uploadLocalNotes();
+    if (! outbox.empty() && ! flushing && --flushCountdown <= 0)
+        flush();
     if (--pollCountdown <= 0)
     {
         pollCountdown = 60;   // once a minute
@@ -194,8 +293,7 @@ void NotesController::refresh()
     }
     if (! cloud.isSignedIn())
     {
-        error = "Sign in (Cloud > Sign In) to see this song's notes.";
-        changed();
+        setSyncProblem (offlineMessage ({ 401, {}, {} }));
         return;
     }
     const auto forSong = songId;
@@ -208,10 +306,14 @@ void NotesController::refresh()
             return;
         if (err.status != 0)
         {
-            self->error = self->cloud.isOldServer (err) ? String ("Notes need the updated Lathe Cloud server (lathe-backend: terraform apply).")
-                          : err.status == 404 ? String ("This song isn't shared with you anymore, so its notes can't be loaded.")
-                                              : "Couldn't load notes: " + err.message;
-            self->changed();
+            if (self->isConnectionProblem (err))
+                self->setSyncProblem (self->offlineMessage (err));
+            else
+            {
+                self->error = err.status == 404 ? String ("This song isn't shared with you anymore, so its notes can't be loaded.")
+                                                : "Couldn't load notes: " + err.message;
+                self->changed();
+            }
             return;
         }
         const int before = self->unreadCount();
@@ -219,7 +321,11 @@ void NotesController::refresh()
         if (auto* list = resp["notes"].getArray())
             for (auto& v : *list)
                 self->notes.push_back (SongNote::fromVar (v));
+        self->reapplyUnsent();
         self->error = {};
+        if (self->outbox.empty())
+            self->setSyncProblem ({});
+        self->saveState();
         const int after = self->unreadCount();
         if (after > before)
         {
@@ -244,16 +350,206 @@ void NotesController::refresh()
 void NotesController::apply (const var& serverNote)
 {
     auto n = SongNote::fromVar (serverNote);
-    for (auto& existing : notes)
-        if (existing.id == n.id)
+    if (auto* existing = findMutable (n.id))
+        *existing = n;
+    else
+        notes.push_back (n);
+}
+
+//==============================================================================
+// The outbox. An op is {kind, note, reply?, body?}; "note" may be a temporary id
+// ("pending-...") for a note that hasn't reached the server yet.
+void NotesController::optimistic (const var& op)
+{
+    const auto kind = op["kind"].toString();
+    const auto noteId = op["note"].toString();
+    const auto body = op["body"];
+    const auto now = (int64) op["at"];
+
+    if (kind == "add")
+    {
+        if (findMutable (noteId) != nullptr)
+            return;
+        SongNote n;
+        n.id = noteId;
+        n.text = body["text"].toString();
+        n.track = body["track"].isVoid() ? -1 : (int) body["track"];
+        n.trackName = body["trackName"].toString();
+        n.beat = body["beat"].isVoid() ? 0.0 : (double) body["beat"];
+        n.author = getMe();
+        n.createdAt = n.updatedAt = now;
+        n.pending = true;
+        notes.push_back (n);
+        return;
+    }
+    if (kind == "delete")
+    {
+        notes.erase (std::remove_if (notes.begin(), notes.end(), [&] (const SongNote& n) { return n.id == noteId; }), notes.end());
+        return;
+    }
+    auto* n = findMutable (noteId);
+    if (n == nullptr)
+        return;
+    if (kind == "reply")
+    {
+        const auto replyId = op["reply"].toString();
+        for (auto& r : n->replies)
+            if (r.id == replyId)
+                return;
+        n->replies.push_back ({ replyId, getMe(), {}, body["text"].toString(), now });
+    }
+    else if (kind == "update")
+    {
+        if (body.hasProperty ("resolved"))
         {
-            existing = n;
-            changed();
+            n->resolved = (bool) body["resolved"];
+            n->resolvedBy = n->resolved ? getMe() : String();
+        }
+        if (body.hasProperty ("text"))
+            n->text = body["text"].toString();
+    }
+    else if (kind == "deleteReply")
+    {
+        const auto replyId = op["reply"].toString();
+        n->replies.erase (std::remove_if (n->replies.begin(), n->replies.end(), [&] (const SongNoteReply& r) { return r.id == replyId; }),
+                          n->replies.end());
+    }
+}
+
+void NotesController::reapplyUnsent()
+{
+    for (auto& op : outbox)
+        optimistic (op);
+}
+
+void NotesController::enqueue (const var& op)
+{
+    const auto kind = op["kind"].toString();
+    const auto noteId = op["note"].toString();
+
+    // Undoing something that never left this computer: just drop it.
+    if (noteId.startsWith ("pending-") && kind == "delete")
+    {
+        outbox.erase (std::remove_if (outbox.begin(), outbox.end(), [&] (const var& o) { return o["note"].toString() == noteId; }), outbox.end());
+        optimistic (op);
+    }
+    else if (kind == "deleteReply" && op["reply"].toString().startsWith ("pending-"))
+    {
+        const auto replyId = op["reply"].toString();
+        outbox.erase (std::remove_if (outbox.begin(), outbox.end(), [&] (const var& o) { return o["reply"].toString() == replyId && o["kind"].toString() == "reply"; }),
+                      outbox.end());
+        optimistic (op);
+    }
+    else
+    {
+        outbox.push_back (op);
+        optimistic (op);
+    }
+    saveState();
+    changed();
+    if (! flushing)
+        flush();
+}
+
+void NotesController::flush()
+{
+    if (outbox.empty() || flushing || ! isCloud())
+        return;
+    if (! cloud.isSignedIn())
+    {
+        setSyncProblem (offlineMessage ({ 401, {}, {} }));
+        flushCountdown = 15;
+        return;
+    }
+
+    flushing = true;
+    const auto op = outbox.front();
+    const auto kind = op["kind"].toString();
+    const auto noteId = op["note"].toString();
+    const auto base = "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes";
+    String method = "POST", path = base;
+    var body = op["body"];
+    if (kind == "reply")            path = base + "/" + URL::addEscapeChars (noteId, true) + "/replies";
+    else if (kind == "update")      { method = "PATCH"; path = base + "/" + URL::addEscapeChars (noteId, true); }
+    else if (kind == "delete")      { method = "DELETE"; path = base + "/" + URL::addEscapeChars (noteId, true); body = var(); }
+    else if (kind == "deleteReply") { method = "DELETE"; path = base + "/" + URL::addEscapeChars (noteId, true) + "/replies/"
+                                                                 + URL::addEscapeChars (op["reply"].toString(), true); body = var(); }
+
+    const auto forSong = songId;
+    WeakReference<NotesController> weak (this);
+    cloud.request (method, path, body, [weak, op, kind, noteId, forSong] (const var& resp, const cloud::ApiError& err)
+    {
+        auto* self = weak.get();
+        if (self == nullptr)
+            return;
+        self->flushing = false;
+        if (forSong != self->songId)
+            return;
+
+        if (err.status != 0 && self->isConnectionProblem (err))
+        {
+            self->setSyncProblem (self->offlineMessage (err));
+            self->flushCountdown = 15;   // try again in 15 s
             return;
         }
-    notes.push_back (n);
-    changed();
+
+        // Sent (or refused for good): it leaves the outbox either way.
+        if (! self->outbox.empty() && self->outbox.front()["id"].toString() == op["id"].toString())
+            self->outbox.erase (self->outbox.begin());
+
+        if (err.status != 0)
+        {
+            if (err.status != 404 || kind == "add" || kind == "reply")
+                alert ("A note change couldn't be saved", explain (self->cloud, err));
+            self->pollCountdown = 0;   // show what's really there
+        }
+        else if (kind == "delete")
+        {
+            auto& list = self->notes;
+            list.erase (std::remove_if (list.begin(), list.end(), [&] (const SongNote& n) { return n.id == noteId; }), list.end());
+        }
+        else
+        {
+            // The real note replaces our stand-in. A new note gets its real id: later changes follow it.
+            const auto realId = resp["id"].toString();
+            if (kind == "add")
+            {
+                auto& list = self->notes;
+                list.erase (std::remove_if (list.begin(), list.end(), [&] (const SongNote& n) { return n.id == noteId; }), list.end());
+                for (auto& later : self->outbox)
+                    if (later["note"].toString() == noteId)
+                        if (auto* o = later.getDynamicObject())
+                            o->setProperty ("note", realId);
+            }
+            self->apply (resp);
+            self->reapplyUnsent();
+        }
+
+        if (self->outbox.empty())
+            self->setSyncProblem ({});
+        self->saveState();
+        self->changed();
+        if (! self->outbox.empty())
+            self->flush();
+    });
 }
+
+namespace
+{
+var makeOp (const String& kind, const String& noteId, const var& body, const String& replyId = {})
+{
+    DynamicObject::Ptr o = new DynamicObject();
+    o->setProperty ("id", newLocalId());
+    o->setProperty ("kind", kind);
+    o->setProperty ("note", noteId);
+    if (replyId.isNotEmpty())
+        o->setProperty ("reply", replyId);
+    if (! body.isVoid())
+        o->setProperty ("body", body);
+    o->setProperty ("at", Time::currentTimeMillis());
+    return var (o.get());
+}
+} // namespace
 
 void NotesController::forgetUploadedInFile (const String& noteId)
 {
@@ -275,46 +571,38 @@ void NotesController::forgetUploadedInFile (const String& noteId)
     file.replaceWithText (JSON::toString (data));
 }
 
+
 void NotesController::uploadLocalNotes()
 {
-    // A song just went to the cloud: its notes go with it (one at a time, oldest first).
+    // A song just went to the cloud: its notes go with it, through the outbox (so they
+    // aren't lost if the connection drops), and out of the project file.
     uploading = true;
-    const auto local = ctx.edit.localNotes.front();
-    DynamicObject::Ptr body = new DynamicObject();
-    body->setProperty ("text", local.text);
-    if (! local.isSongNote())
+    for (auto& local : ctx.edit.localNotes)
     {
-        body->setProperty ("track", local.track);
-        body->setProperty ("trackName", local.trackName);
-        body->setProperty ("beat", local.beat);
-    }
-    const auto base = "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes";
-    WeakReference<NotesController> weak (this);
-    cloud.request ("POST", base, var (body.get()), [weak, local, base] (const var& resp, const cloud::ApiError& err)
-    {
-        auto* self = weak.get();
-        if (self == nullptr)
-            return;
-        if (err.status != 0)
+        DynamicObject::Ptr body = new DynamicObject();
+        body->setProperty ("text", local.text);
+        if (! local.isSongNote())
         {
-            self->uploading = false;   // try again next second... but not in a tight loop
-            self->pollCountdown = jmax (self->pollCountdown, 30);
-            return;
+            body->setProperty ("track", local.track);
+            body->setProperty ("trackName", local.trackName);
+            body->setProperty ("beat", local.beat);
         }
-        const auto id = resp["id"].toString();
+        const auto tempId = "pending-" + local.id;
+        outbox.push_back (makeOp ("add", tempId, var (body.get())));
         for (auto& r : local.replies)
         {
             DynamicObject::Ptr rb = new DynamicObject();
             rb->setProperty ("text", r.text);
-            self->cloud.request ("POST", base + "/" + URL::addEscapeChars (id, true) + "/replies", var (rb.get()), {});
+            outbox.push_back (makeOp ("reply", tempId, var (rb.get()), "pending-" + r.id));
         }
-        auto& list = self->ctx.edit.localNotes;
-        list.erase (std::remove_if (list.begin(), list.end(), [&] (const SongNote& n) { return n.id == local.id; }), list.end());
-        self->forgetUploadedInFile (local.id);
-        self->uploading = false;
-        self->pollCountdown = 2;   // see them (and the replies) shortly
-        self->apply (resp);
-    });
+        forgetUploadedInFile (local.id);
+    }
+    ctx.edit.localNotes.clear();
+    reapplyUnsent();
+    saveState();
+    uploading = false;
+    changed();
+    flush();
 }
 
 //==============================================================================
@@ -343,19 +631,8 @@ void NotesController::add (int trackId, const String& trackName, double beat, co
         body->setProperty ("trackName", trackName);
         body->setProperty ("beat", jmax (0.0, beat));
     }
-    WeakReference<NotesController> weak (this);
-    cloud.request ("POST", "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes", var (body.get()),
-                   [weak, done] (const var& resp, const cloud::ApiError& err)
-    {
-        auto* self = weak.get();
-        if (self == nullptr)
-            return;
-        if (err.status != 0)
-            alert ("Couldn't add the note", err.message);
-        else
-            self->apply (resp);
-        if (done) done (err.status == 0);
-    });
+    enqueue (makeOp ("add", "pending-" + newLocalId(), var (body.get())));
+    if (done) done (true);
 }
 
 void NotesController::reply (const String& noteId, const String& text, std::function<void (bool)> done)
@@ -371,19 +648,8 @@ void NotesController::reply (const String& noteId, const String& text, std::func
     }
     DynamicObject::Ptr body = new DynamicObject();
     body->setProperty ("text", text);
-    WeakReference<NotesController> weak (this);
-    cloud.request ("POST", "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes/" + URL::addEscapeChars (noteId, true) + "/replies",
-                   var (body.get()), [weak, done] (const var& resp, const cloud::ApiError& err)
-    {
-        auto* self = weak.get();
-        if (self == nullptr)
-            return;
-        if (err.status != 0)
-            alert ("Couldn't reply", err.message);
-        else
-            self->apply (resp);
-        if (done) done (err.status == 0);
-    });
+    enqueue (makeOp ("reply", noteId, var (body.get()), "pending-" + newLocalId()));
+    if (done) done (true);
 }
 
 void NotesController::setResolved (const String& noteId, bool resolved)
@@ -401,18 +667,7 @@ void NotesController::setResolved (const String& noteId, bool resolved)
     }
     DynamicObject::Ptr body = new DynamicObject();
     body->setProperty ("resolved", resolved);
-    WeakReference<NotesController> weak (this);
-    cloud.request ("PATCH", "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes/" + URL::addEscapeChars (noteId, true),
-                   var (body.get()), [weak] (const var& resp, const cloud::ApiError& err)
-    {
-        if (auto* self = weak.get())
-        {
-            if (err.status != 0)
-                alert ("Couldn't change the note", err.message);
-            else
-                self->apply (resp);
-        }
-    });
+    enqueue (makeOp ("update", noteId, var (body.get())));
 }
 
 void NotesController::editText (const String& noteId, const String& text, std::function<void (bool)> done)
@@ -428,19 +683,8 @@ void NotesController::editText (const String& noteId, const String& text, std::f
     }
     DynamicObject::Ptr body = new DynamicObject();
     body->setProperty ("text", text);
-    WeakReference<NotesController> weak (this);
-    cloud.request ("PATCH", "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes/" + URL::addEscapeChars (noteId, true),
-                   var (body.get()), [weak, done] (const var& resp, const cloud::ApiError& err)
-    {
-        auto* self = weak.get();
-        if (self == nullptr)
-            return;
-        if (err.status != 0)
-            alert ("Couldn't change the note", err.message);
-        else
-            self->apply (resp);
-        if (done) done (err.status == 0);
-    });
+    enqueue (makeOp ("update", noteId, var (body.get())));
+    if (done) done (true);
 }
 
 void NotesController::remove (const String& noteId)
@@ -452,22 +696,7 @@ void NotesController::remove (const String& noteId)
         saveLocal();
         return;
     }
-    WeakReference<NotesController> weak (this);
-    cloud.request ("DELETE", "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes/" + URL::addEscapeChars (noteId, true), {},
-                   [weak, noteId] (const var&, const cloud::ApiError& err)
-    {
-        auto* self = weak.get();
-        if (self == nullptr)
-            return;
-        if (err.status != 0 && err.status != 404)
-        {
-            alert ("Couldn't delete the note", err.message);
-            return;
-        }
-        auto& list = self->notes;
-        list.erase (std::remove_if (list.begin(), list.end(), [&] (const SongNote& n) { return n.id == noteId; }), list.end());
-        self->changed();
-    });
+    enqueue (makeOp ("delete", noteId, {}));
 }
 
 void NotesController::removeReply (const String& noteId, const String& replyId)
@@ -481,19 +710,7 @@ void NotesController::removeReply (const String& noteId, const String& replyId)
         saveLocal();
         return;
     }
-    WeakReference<NotesController> weak (this);
-    cloud.request ("DELETE", "/v2/songs/" + URL::addEscapeChars (songId, true) + "/notes/" + URL::addEscapeChars (noteId, true)
-                                 + "/replies/" + URL::addEscapeChars (replyId, true), {},
-                   [weak] (const var& resp, const cloud::ApiError& err)
-    {
-        if (auto* self = weak.get())
-        {
-            if (err.status != 0)
-                alert ("Couldn't delete the reply", err.message);
-            else
-                self->apply (resp);
-        }
-    });
+    enqueue (makeOp ("deleteReply", noteId, {}, replyId));
 }
 
 //==============================================================================
@@ -687,11 +904,11 @@ private:
         state.setText (n->resolved ? "Resolved" + (n->resolvedBy.isNotEmpty() ? " by " + who (n->resolvedBy, me) : String()) + ". Reopen it to keep talking."
                                    : String(), dontSendNotification);
 
-        auto add = [&] (const String& author, int64 when, const String& text, bool main, std::function<void()> onDelete)
+        auto add = [&] (const String& author, int64 when, const String& text, bool main, std::function<void()> onDelete, bool unsent = false)
         {
             auto* m = items.add (new Message());
             m->author = who (author, me);
-            m->when = when > 0 ? timeAgo (when) : String();
+            m->when = unsent ? String ("not sent yet") : when > 0 ? timeAgo (when) : String();
             m->text = text;
             m->main = main;
             if (onDelete)
@@ -708,13 +925,14 @@ private:
             }
             messages.addAndMakeVisible (m);
         };
-        add (n->author, n->createdAt, n->text, true, {});
+        add (n->author, n->createdAt, n->text, true, {}, n->pending);
         const auto id = noteId;
         for (auto& r : n->replies)
         {
             const auto replyId = r.id;
             add (r.author, r.createdAt, r.text, false,
-                 nc.canDelete (r.author) ? std::function<void()> ([this, id, replyId] { nc.removeReply (id, replyId); }) : nullptr);
+                 nc.canDelete (r.author) ? std::function<void()> ([this, id, replyId] { nc.removeReply (id, replyId); }) : nullptr,
+                 n->pending || replyId.startsWith ("pending-"));
         }
 
         resolve.setButtonText (n->resolved ? "Reopen" : "Resolve");
@@ -932,6 +1150,8 @@ private:
             list.repaint();
 
             String text = nc.getError();
+            if (text.isEmpty())
+                text = nc.getSyncProblem();
             if (text.isEmpty())
                 text = all.empty() ? String ("No notes yet. Right-click a track at a moment in the song: Add Note Here. Or add a song note above.")
                                    : nc.isCloud() ? String ("Everyone this song is shared with sees these. Click one to open the conversation.")

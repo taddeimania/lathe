@@ -67,13 +67,13 @@ Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use
 
 ## Sharing projects (Cloud menu)
 
-Lathe can share a project with collaborators through your own small cloud backend ([lathe-backend](../lathe-backend), deployed with Terraform). It works like git, not like a shared document:
+Lathe can share a project with collaborators through Lathe Cloud. It works like git, not like a shared document:
 - Everyone works offline on their own copy.
 - **Push** sends a revision up. **Pull** brings collaborators' revisions down.
 
 **Getting set up**
-- Release builds come with the cloud settings built in (from the repository variables `LATHE_CLOUD_API_URL`, `LATHE_CLOUD_REGION` and `LATHE_CLOUD_CLIENT_ID`). Otherwise, paste the output of `terraform -chdir=infra output -raw lathe_cloud_json` into **Cloud > Cloud Settings**.
-- **Cloud > Sign In** with the account that `scripts/add-user.sh` made. The first time, Lathe asks you to choose your own password.
+- Release builds are already set up for Lathe Cloud.
+- **Cloud > Sign In** with your Lathe Cloud account. The first time, Lathe asks you to choose your own password.
 
 **Friends, projects and songs**
 - A **song** is one Lathe project file. A **project** is a group of songs: an album, a band, a client.
@@ -90,6 +90,7 @@ Lathe can share a project with collaborators through your own small cloud backen
 - Click a bubble to open the conversation: reply, **Resolve** (or Reopen), **Edit** your own note, **Delete**. You can delete your own notes and replies; the song's owner can delete any. Everyone the song is shared with can write notes, viewers too.
 - **Notes** in the top bar (Cmd/Ctrl+Shift+N) lists every note, song notes first then in time order. Click one to jump there. It lights up when someone left something you haven't read, and the status bar tells you who. **On tracks** (also View > Show on Tracks) shows every note, hides resolved ones, or hides them all; that only changes your screen.
 - A cloud song's notes live on the server: collaborators see them within a minute, with no Push needed and no conflicts. A song that isn't in the cloud keeps its notes in the project file, and they move to the server when you put it in the cloud.
+- **Offline:** when Lathe can't reach the cloud, notes keep working. New notes and changes show at once (faded, "not sent yet") and are sent in order when the cloud is back; Lathe retries every 15 s. The Notes button reads **Notes offline** (its tooltip and the Notes window say why and how many changes are waiting). The last copy of the notes and the unsent changes are kept in the song's `.lathe/notes.json`, so they survive quitting.
 
 **Push**
 - Uploads what you have open as a new revision, with your description and an automatic summary of what changed (faders, pans, mutes, sends, EQ bands, plug-in knobs, clips, new or removed tracks, tempo, monitor mixes).

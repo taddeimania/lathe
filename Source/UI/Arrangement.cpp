@@ -1046,7 +1046,7 @@ private:
     void changeListenerCallback (ChangeBroadcaster*) override   { repaint(); }
 
     // --- notes
-    struct NoteMark { String id; Rectangle<float> r; int messages = 1; bool resolved = false, unread = false; };
+    struct NoteMark { String id; Rectangle<float> r; int messages = 1; bool resolved = false, unread = false, pending = false; };
 
     std::vector<NoteMark> noteMarks() const
     {
@@ -1065,6 +1065,7 @@ private:
                 m.id = n.id;
                 m.messages = 1 + (int) n.replies.size();
                 m.resolved = n.resolved;
+                m.pending = n.pending;
                 m.unread = ctx.notes->isUnread (n);
                 const float w = m.messages > 9 ? 26.0f : 20.0f;
                 m.r = { owner.beatToX (n.beat), (float) owner.trackTop (i) + 3.0f, w, 15.0f };
@@ -1077,7 +1078,8 @@ private:
     void drawNoteMark (Graphics& g, const NoteMark& m)
     {
         // A speech bubble whose tail points down at the moment the note is about.
-        const auto fill = m.resolved ? theme::control : theme::accent;
+        // Faded until the cloud has it (written offline, not sent yet).
+        const auto fill = (m.resolved ? theme::control : theme::accent).withMultipliedAlpha (m.pending ? 0.45f : 1.0f);
         Path p;
         p.addRoundedRectangle (m.r, 3.0f);
         p.addTriangle (m.r.getX(), m.r.getBottom() - 2.0f, m.r.getX() + 6.0f, m.r.getBottom() - 2.0f, m.r.getX(), m.r.getBottom() + 5.0f);

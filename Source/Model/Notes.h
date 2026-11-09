@@ -25,6 +25,7 @@ struct SongNote
     bool resolved = false;
     String resolvedBy;
     std::vector<SongNoteReply> replies;
+    bool pending = false;        // written while Lathe couldn't reach the cloud; not sent yet
 
     bool isSongNote() const noexcept   { return track < 0; }
 
@@ -50,6 +51,8 @@ struct SongNote
         o->setProperty ("updatedAt", updatedAt);
         o->setProperty ("resolved", resolved);
         o->setProperty ("resolvedBy", resolvedBy);
+        if (pending)
+            o->setProperty ("pending", true);
         Array<var> list;
         for (auto& r : replies)
         {
@@ -79,6 +82,7 @@ struct SongNote
         n.updatedAt = (int64) v["updatedAt"];
         n.resolved = (bool) v["resolved"];
         n.resolvedBy = v["resolvedBy"].toString();
+        n.pending = (bool) v["pending"];
         if (auto* list = v["replies"].getArray())
             for (auto& r : *list)
                 n.replies.push_back ({ r["id"].toString(), r["author"].toString(), r["authorId"].toString(),

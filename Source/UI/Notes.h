@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Widgets.h"
+#include "../Cloud/CloudClient.h"
 
 namespace lathe
 {
@@ -30,6 +31,10 @@ public:
     const SongNote* find (const String& id) const;
     bool isCloud() const noexcept     { return songId.isNotEmpty(); }
     String getError() const           { return error; }
+    /** Why notes aren't syncing right now ("" when they are). */
+    String getSyncProblem() const     { return syncProblem; }
+    /** Changes waiting to be sent (made while the cloud couldn't be reached). */
+    int numUnsent() const noexcept    { return (int) outbox.size(); }
     String getMe() const;
 
     bool canEditText (const SongNote&) const;
@@ -73,6 +78,20 @@ private:
     void uploadLocalNotes();
     void forgetUploadedInFile (const String& noteId);
     void apply (const var& serverNote);   // replace (or add) one note from the server's answer
+
+    // Every change to a cloud song's notes goes through the outbox: shown at once,
+    // sent in order, kept (in the song's .lathe/notes.json) until the server has it.
+    void enqueue (const var& op);
+    void flush();
+    void optimistic (const var& op);      // what the change looks like before the server has it
+    void reapplyUnsent();
+    bool isConnectionProblem (const cloud::ApiError&) const;
+    void setSyncProblem (const String&);
+    String offlineMessage (const cloud::ApiError&) const;
+    File stateFile() const;
+    void loadState();
+    void saveState();
+    SongNote* findMutable (const String& id);
     void saveLocal();
     void loadSeen();
     void saveSeen();
@@ -80,7 +99,10 @@ private:
     AppContext& ctx;
     CloudController& cloud;
     std::vector<SongNote> notes;
-    String songId, sourceKey, error;
+    String songId, sourceKey, error, syncProblem;
+    std::vector<var> outbox;
+    bool flushing = false;
+    int flushCountdown = 0;
     var seen;                     // {noteId: last activity seen}
     int pollCountdown = 0;
     bool uploading = false;

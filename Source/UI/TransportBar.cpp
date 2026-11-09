@@ -359,9 +359,14 @@ void TransportBar::refresh()
         // "Notes 3": lit when someone left something you haven't read.
         const int unread = ctx.notes->unreadCount();
         const int total = (int) ctx.notes->getNotes().size();
-        const auto text = unread > 0 ? "Notes " + String (unread) + " new" : total > 0 ? "Notes " + String (total) : String ("Notes");
+        const auto problem = ctx.notes->getSyncProblem();
+        const auto text = problem.isNotEmpty() ? String ("Notes offline")
+                        : unread > 0 ? "Notes " + String (unread) + " new" : total > 0 ? "Notes " + String (total) : String ("Notes");
         if (notesButton.getButtonText() != text)
             notesButton.setButtonText (text);
+        const auto tip = problem.isNotEmpty() ? problem : String ("Notes on this song and its tracks  (Cmd/Ctrl+Shift+N)");
+        if (notesButton.getTooltip() != tip)
+            notesButton.setTooltip (tip);
         notesButton.setToggleState (unread > 0, dontSendNotification);
     }
     loopButton.setToggleState (e.loopEnabled, dontSendNotification);

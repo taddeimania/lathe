@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.4
+
+- **Notes work offline.** No internet (or the cloud is down)? Add notes, reply,
+  resolve, edit and delete as usual. They show at once, faded until they're
+  sent, and go to the cloud by themselves when it's reachable again (Lathe tries
+  every 15 seconds), even if you quit and reopen in between.
+- **You can see when notes aren't syncing.** The Notes button says **Notes
+  offline** (hover it for why), the Notes window says how many changes are
+  waiting, and the status bar tells you when it stops and starts again.
+- A clearer message when the cloud server is too old for notes (it needs
+  lathe-backend's `terraform apply`).
+
 ## New in 0.5.3
 
 - **Fixed: File > Open Recent opened the wrong project** on the Mac (often the
