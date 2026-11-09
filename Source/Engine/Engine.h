@@ -69,6 +69,8 @@ public:
     double getSampleRate() const noexcept   { return deviceRate.load(); }
     int getBlockSize() const noexcept       { return deviceBlock.load(); }
     bool isDeviceOpen() const;
+    /** Switches the interface to this sample rate if it can do it. True if it's running at it now. */
+    bool setDeviceRate (double rate);
     StringArray getInputChannelNames() const;
     StringArray getOutputChannelNames() const;
     StringArray getMidiInputNames() const   { return midiInputNames; }

@@ -152,6 +152,7 @@ Notes:
 
 ## Recording
 
+- **Sample rate**: new projects record at **48 kHz** unless you change **New projects record at** in Options > Audio/MIDI Settings (44.1, 48, 88.2 or 96 kHz, or whatever the interface is set to). 96 kHz files are twice the size, which adds up in the cloud. A project you open always runs at its own rate (Lathe switches the interface to it), and you can still change the rate for the open project in the same window.
 - Arm tracks with the round button. **R** or the record button starts recording from the start marker.
 - If nothing is armed, record arms the selected track.
 - **Count-in**: click the arrow next to **Click** (or right-click the record button) and choose 1, 2 or 4 bars. When it's on, the record button shows the number of bars. Pressing record from a stop then clicks that many bars (accent on each downbeat, whether or not the metronome is on) and records from the downbeat. The counter shows the beats left, and armed inputs are monitored so you can play along. Recording while playing punches in at once. Stop (or record again) during the count-in cancels it.

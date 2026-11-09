@@ -370,6 +370,14 @@ void MainComponent::newProject (const File& templateFile)
         edit.addTrack (TrackKind::midi);
     }
 
+    // New projects record at the chosen rate (Settings; 48 kHz unless changed). An open
+    // project always runs at its own rate, so this only applies here.
+    const double newRate = settings.getDoubleValue ("newProjectRate", 48000.0);
+    String rateNote;
+    if (newRate > 0 && ! engine.setDeviceRate (newRate) && engine.getSampleRate() > 0)
+        rateNote = " (your interface can't run at " + String (newRate / 1000.0, 1) + " kHz, so it uses "
+                   + String (engine.getSampleRate() / 1000.0, 1) + " kHz)";
+
     edit.sampleRate = engine.getSampleRate() > 0 ? engine.getSampleRate() : 48000.0;
     ctx.selection = {};
     if (! edit.tracks.empty())
@@ -384,8 +392,8 @@ void MainComponent::newProject (const File& templateFile)
     if (cloud != nullptr)
         cloud->projectChanged();
 
-    setStatus (missing.isEmpty() ? (templateFile.existsAsFile() ? "New project from template \"" + templateFile.getFileNameWithoutExtension() + "\"" : String ("New project"))
-                                 : "Missing plug-ins: " + missing.joinIntoString (", "));
+    setStatus ((missing.isEmpty() ? (templateFile.existsAsFile() ? "New project from template \"" + templateFile.getFileNameWithoutExtension() + "\"" : String ("New project"))
+                                  : "Missing plug-ins: " + missing.joinIntoString (", ")) + rateNote);
 }
 
 void MainComponent::openProject (const File& file)
@@ -436,16 +444,8 @@ void MainComponent::loadProjectFile (const File& file, const File& readFrom)
 
     // Match the device to the project's sample rate, if the interface can do it.
     const double projectRate = data.hasProperty ("sampleRate") ? (double) data["sampleRate"] : 0.0;
-    if (auto* device = engine.deviceManager.getCurrentAudioDevice(); device != nullptr && projectRate > 0
-        && std::abs (device->getCurrentSampleRate() - projectRate) > 0.5)
-    {
-        if (device->getAvailableSampleRates().contains (projectRate))
-        {
-            auto setup = engine.deviceManager.getAudioDeviceSetup();
-            setup.sampleRate = projectRate;
-            engine.deviceManager.setAudioDeviceSetup (setup, true);
-        }
-    }
+    if (projectRate > 0)
+        engine.setDeviceRate (projectRate);
 
     edit.reset();
     edit.projectFile = file;

@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.6
+
+- **New projects record at 48 kHz.** Before, a new project used whatever rate
+  the interface was last at, often 96 kHz, whose files are twice the size. Change
+  it in Options > Audio/MIDI Settings > **New projects record at**. Projects you
+  already have keep their own rate.
+
 ## New in 0.5.5
 
 - **Record a track into an audio track.** An audio track's input can now be

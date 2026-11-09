@@ -280,6 +280,23 @@ void Engine::saveDeviceSettings()
     props.saveIfNeeded();
 }
 
+bool Engine::setDeviceRate (double rate)
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device == nullptr || rate <= 0.0)
+        return false;
+    if (std::abs (device->getCurrentSampleRate() - rate) <= 0.5)
+        return true;
+    if (! device->getAvailableSampleRates().contains (rate))
+        return false;
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.sampleRate = rate;
+    deviceManager.setAudioDeviceSetup (setup, true);
+    saveDeviceSettings();
+    return deviceManager.getCurrentAudioDevice() != nullptr
+           && std::abs (deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() - rate) <= 0.5;
+}
+
 bool Engine::isDeviceOpen() const
 {
     return deviceManager.getCurrentAudioDevice() != nullptr && deviceManager.getCurrentAudioDevice()->isPlaying();

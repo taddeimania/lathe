@@ -44,6 +44,22 @@ public:
         offset.onValueChange = [this] { ctx.settings.setValue ("recordOffsetMs", offset.getValue()); updateNotes(); };
         addAndMakeVisible (offset);
 
+        // The sample rate new projects record at. 48 kHz is plenty for most music and half
+        // the size of 96 kHz (which matters for cloud storage and uploads).
+        rateLabel = makeNote (*this, labels, "New projects record at");
+        rate.addItem ("44.1 kHz", 44100);
+        rate.addItem ("48 kHz (recommended)", 48000);
+        rate.addItem ("88.2 kHz", 88200);
+        rate.addItem ("96 kHz (twice the size)", 96000);
+        rate.addItem ("Whatever the interface is set to", 1);
+        const double saved = ctx.settings.getDoubleValue ("newProjectRate", 48000.0);
+        rate.setSelectedId (saved <= 0 ? 1 : roundToInt (saved), dontSendNotification);
+        if (rate.getSelectedId() == 0)
+            rate.setSelectedId (48000, dontSendNotification);
+        rate.setTooltip ("Projects you already have keep their own rate. You can still change the interface's rate above for the open project.");
+        rate.onChange = [this] { ctx.settings.setValue ("newProjectRate", rate.getSelectedId() == 1 ? 0.0 : (double) rate.getSelectedId()); };
+        addAndMakeVisible (rate);
+
         pluginHeading = makeHeading (*this, labels, "VST3 plug-ins");
         pluginNote = makeNote (*this, labels, {});
         folders.setText (ctx.host.getExtraFolders().joinIntoString ("; "), false);
@@ -86,7 +102,7 @@ public:
         ctx.engine.deviceManager.addChangeListener (this);
         updateNotes();
         startTimer (500);
-        setSize (640, 790);
+        setSize (640, 820);
     }
 
     ~SettingsPanel() override
@@ -122,6 +138,10 @@ public:
         audioHeading->setBounds (r.removeFromTop (22));
         offsetNote->setBounds (r.removeFromTop (48));
         offset.setBounds (r.removeFromTop (24).withTrimmedLeft (4));
+        r.removeFromTop (6);
+        auto rateRow = r.removeFromTop (24);
+        rateLabel->setBounds (rateRow.removeFromLeft (160));
+        rate.setBounds (rateRow.removeFromLeft (260));
         r.removeFromTop (14);
 
         pluginHeading->setBounds (r.removeFromTop (22));
@@ -150,11 +170,11 @@ private:
     AppContext& ctx;
     AudioDeviceSelectorComponent devices;
     OwnedArray<Label> labels;
-    Label *audioHeading {}, *offsetNote {}, *pluginHeading {}, *pluginNote {}, *startupHeading {};
+    Label *audioHeading {}, *offsetNote {}, *pluginHeading {}, *pluginNote {}, *startupHeading {}, *rateLabel {};
     Slider offset;
     TextEditor folders;
     TextButton scan { "Scan for new plug-ins" }, rescan { "Clear list and rescan all" }, retry { "Retry skipped plug-ins" };
-    ComboBox startup, templateBox;
+    ComboBox startup, templateBox, rate;
 };
 
 //==============================================================================
