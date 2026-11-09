@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.7
+
+- **Fixed: New Project could crash on the Mac** when your audio input and output
+  are different devices (for example the interface's inputs and the Mac's
+  speakers). Switching the sample rate (new projects use 48 kHz, and opening a
+  project uses its own rate) now closes the audio device and opens it again at
+  the new rate, instead of changing it while it runs.
+
 ## New in 0.5.6
 
 - **New projects record at 48 kHz.** Before, a new project used whatever rate

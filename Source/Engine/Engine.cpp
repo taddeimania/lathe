@@ -291,8 +291,12 @@ bool Engine::setDeviceRate (double rate)
         return false;
     auto setup = deviceManager.getAudioDeviceSetup();
     setup.sampleRate = rate;
+    // Close the device completely, then open it again at the new rate. Changing the rate
+    // of a running device in place races on macOS when input and output are different
+    // devices: JUCE's combined device restarts itself from a Core Audio notification
+    // thread while the message thread is reopening it, and crashes.
+    deviceManager.closeAudioDevice();
     deviceManager.setAudioDeviceSetup (setup, true);
-    saveDeviceSettings();
     return deviceManager.getCurrentAudioDevice() != nullptr
            && std::abs (deviceManager.getCurrentAudioDevice()->getCurrentSampleRate() - rate) <= 0.5;
 }
