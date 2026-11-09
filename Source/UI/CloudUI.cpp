@@ -276,7 +276,13 @@ private:
             pushButton.setButtonText ("Push...");
             pushButton.setTooltip ("Share what you have open as a new revision");
             pushButton.onClick = [this] { owner.push(); };
-            for (auto* b : { &openButton, &pullButton, &pushButton })
+            keepButton.onClick = [this]
+            {
+                const int row = list.getSelectedRow();
+                if (isPositiveAndBelow (row, (int) revisions.size()))
+                    owner.setPinned (revisions[(size_t) row].id, ! revisions[(size_t) row].pinned);
+            };
+            for (auto* b : { &openButton, &pullButton, &pushButton, &keepButton })
                 addAndMakeVisible (b);
 
             note.setFont (theme::font (12.0f));
@@ -325,6 +331,8 @@ private:
             pullButton.setBounds (bottom.removeFromRight (80));
             bottom.removeFromRight (6);
             openButton.setBounds (bottom.removeFromRight (160));
+            bottom.removeFromRight (6);
+            keepButton.setBounds (bottom.removeFromRight (120));
             bottom.removeFromRight (10);
             note.setBounds (bottom);
             r.removeFromBottom (10);
@@ -358,6 +366,8 @@ private:
             g.setFont (theme::font (11.5f));
             String sub = shortName (r.author) + "  ·  " + timeAgo (r.createdAt);
             if (r.local)  sub << "  ·  not pushed";
+            if (r.pinned) sub << "  ·  kept";
+            if (! r.local && ! r.inCloud) sub << "  ·  only on this computer";
             if (isBase)   sub << "  ·  you started from this";
             g.drawText (sub, 64, 22, w - 74, 16, Justification::centredLeft, true);
 
@@ -372,6 +382,13 @@ private:
         {
             const int row = list.getSelectedRow();
             openButton.setEnabled (isPositiveAndBelow (row, (int) revisions.size()) && ! owner.isBusy());
+            const bool pushed = isPositiveAndBelow (row, (int) revisions.size()) && ! revisions[(size_t) row].local
+                                && revisions[(size_t) row].inCloud;
+            keepButton.setEnabled (pushed && owner.isSignedIn() && ! owner.isBusy());
+            keepButton.setButtonText (pushed && revisions[(size_t) row].pinned ? "Don't Keep" : "Keep");
+            const int n = owner.getRevisionsKept();
+            keepButton.setTooltip ("The cloud keeps each song's newest " + (n > 0 ? String (n) : String ("few"))
+                                   + " revisions. Keep one (a mix you sent, say) and it stays however many come after.");
             if (! isPositiveAndBelow (row, (int) revisions.size()))
             {
                 details.setText (revisions.empty() ? "No revisions yet. Push to make the first one." : String(), false);
@@ -380,7 +397,9 @@ private:
 
             const auto& r = revisions[(size_t) row];
             String text;
-            text << r.label() << (r.local ? "  (kept on this computer, not pushed)" : String()) << "\n"
+            text << r.label() << (r.local ? "  (kept on this computer, not pushed)" : String())
+                 << (! r.local && ! r.inCloud ? "  (no longer in the cloud: only on this computer)" : String())
+                 << (r.pinned ? "  (kept in the cloud)" : String()) << "\n"
                  << r.author << ",  " << Time (r.createdAt).formatted ("%d %b %Y %H:%M") << "\n";
             if (r.message.isNotEmpty())
                 text << "\n" << r.message << "\n";
@@ -416,7 +435,7 @@ private:
         var current;
         ListBox list;
         TextEditor details;
-        TextButton openButton, pullButton, pushButton;
+        TextButton openButton, pullButton, pushButton, keepButton { "Keep" };
         Label note;
     };
 
@@ -567,7 +586,8 @@ void CloudController::addMenuItems (PopupMenu& m)
 
     if (signedIn)
     {
-        m.addItem (PopupMenu::Item ("Signed in as " + client->getSession().email).setEnabled (false));
+        m.addItem (PopupMenu::Item ("Signed in as " + client->getSession().email
+                                    + (planName.isNotEmpty() ? "  (" + planName + ")" : String())).setEnabled (false));
         m.addItem (signOutId, "Sign Out", idle);
     }
     else
@@ -1198,8 +1218,42 @@ bool CloudController::isOldServer (const cloud::ApiError& err) const
     return err.status == 404 && err.message == "Not found.";
 }
 
+void CloudController::setPinned (const String& revisionId, bool pinned)
+{
+    if (! isLinked())
+        return;
+    ensureReady ([this, revisionId, pinned]
+    {
+        auto c = client;
+        auto s = store;
+        auto result = std::make_shared<Result> (Result::ok());
+        run (pinned ? "Keeping the revision" : "Letting the revision go", [c, s, result, revisionId, pinned]
+        {
+            *result = cloud::setPinned (*c, *s, revisionId, pinned);
+        },
+        [this, result, pinned]
+        {
+            if (result->failed())
+                alert (pinned ? "Couldn't keep it" : "Couldn't change it", result->getErrorMessage());
+            else
+                hooks.setStatus (pinned ? "Kept: the cloud keeps this revision however many come after it."
+                                        : "The cloud will let this revision go once newer ones replace it.");
+            if (history != nullptr)
+                if (auto* w = dynamic_cast<HistoryWindow*> (history.getComponent()))
+                    w->refresh();
+        });
+    });
+}
+
 void CloudController::pollAccount()
 {
+    request ("GET", "/me", {}, [this] (const var& resp, const cloud::ApiError& err)
+    {
+        if (err.status != 0)
+            return;
+        planName = resp["planName"].toString();
+        revisionsKept = (int) resp["limits"]["revisions"];
+    });
     request ("GET", "/v2/friends", {}, [this] (const var& resp, const cloud::ApiError& err)
     {
         if (err.status != 0)

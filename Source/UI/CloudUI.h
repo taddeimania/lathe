@@ -43,6 +43,11 @@ public:
     void push();
     void pull();
     void showHistory();
+    /** Keeps (pins) a pushed revision in the cloud, or lets it go. */
+    void setPinned (const String& revisionId, bool pinned);
+    /** "Starter", "Pro", "Free" ("" until known). */
+    String getPlanName() const   { return planName; }
+    int getRevisionsKept() const { return revisionsKept; }
     void openSharedProject();
     void openRevision (const cloud::Revision&);
     /** Cloud > Projects: your projects and songs, sharing, moving, deleting. */
@@ -124,6 +129,8 @@ private:
     bool lostAccess = false;             // the server says we can't open this song anymore
     bool oldServer = false;              // a Lathe Cloud server without /v2 (projects, friends)
     int friendRequests = 0;
+    String planName;
+    int revisionsKept = 0;
     bool showingNotices = false;
     int pollCountdown = 0;
 

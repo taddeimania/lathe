@@ -94,7 +94,8 @@ public:
         int64 size() const         { return file != File() ? file.getSize() : (int64) data.getSize(); }
     };
 
-    /** Uploads whichever items the server doesn't have yet. progress: 0..1. */
+    /** Uploads whichever items the server doesn't have yet, takes compressed losslessly
+        (see Packing.h). progress: 0..1 (the first quarter is compressing). */
     Result upload (const String& projectId, const std::vector<UploadItem>& items,
                    const std::function<bool (double)>& progress, int& uploadedCount);
     /** How many files (or pieces of a big file) move at once, up and down. Default 4. */
@@ -106,6 +107,11 @@ public:
                      const std::function<bool (double)>& progress);
 
 private:
+    /** Asks which items the server is missing; those go in toSend, takes packed (FLAC)
+        into temp files where that makes them smaller. */
+    Result packForUpload (const String& projectId, const std::vector<UploadItem>& items,
+                          std::vector<UploadItem>& toSend, std::vector<File>& tempFiles,
+                          const std::function<bool (double)>& progress);
     Result cognito (const String& target, const var& payload, var& response);
     Result applyAuthResult (const var& authResult, const String& email);
 

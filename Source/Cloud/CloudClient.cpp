@@ -1,4 +1,6 @@
 #include "CloudClient.h"
+#include "Packing.h"
+#include <set>
 #include <thread>
 
 // Lathe Cloud is the only service Lathe talks to: there's no setting to point it
@@ -535,12 +537,118 @@ HttpResult withRetries (const std::function<HttpResult()>& attempt, const std::a
 }
 } // namespace
 
-Result Client::upload (const String& projectId, const std::vector<UploadItem>& items,
+Result Client::packForUpload (const String& projectId, const std::vector<UploadItem>& items,
+                              std::vector<UploadItem>& toSend, std::vector<File>& tempFiles,
+                              const std::function<bool (double)>& progress)
+{
+    // Which files does the server still need?
+    std::set<String> missing;
+    bool knowMissing = true;
+    StringArray hashes;
+    for (auto& it : items)
+        hashes.addIfNotAlreadyThere (it.hash);
+    for (int i = 0; i < hashes.size() && knowMissing; i += 400)
+    {
+        Array<var> batch;
+        for (int j = i; j < jmin (hashes.size(), i + 400); ++j)
+            batch.add (hashes[j]);
+        DynamicObject::Ptr req = new DynamicObject();
+        req->setProperty ("hashes", batch);
+        ApiError err;
+        const auto resp = call ("POST", "/projects/" + projectId + "/blobs/missing", var (req.get()), err);
+        if (err.status == 404 && err.message == "Not found.")
+            knowMissing = false;   // an older server: upload everything as it is, as before
+        else if (err.status != 0)
+            return Result::fail (err.message);
+        else if (auto* m = resp["missing"].getArray())
+            for (auto& h : *m)
+                missing.insert (h.toString());
+    }
+    if (! knowMissing)
+    {
+        toSend = items;
+        return Result::ok();
+    }
+
+    std::set<String> queued;
+    for (auto& it : items)
+    {
+        if (missing.count (it.hash) == 0 || queued.count (it.hash) != 0)
+            continue;
+        queued.insert (it.hash);
+        toSend.push_back (it);
+    }
+
+    // Pack on several threads; each file is packed into the temp folder or left as it is.
+    std::vector<size_t> indices;
+    for (size_t i = 0; i < toSend.size(); ++i)
+        if (toSend[i].file != File())
+            indices.push_back (i);
+
+    int64 totalBytes = 0;
+    for (auto i : indices)
+        totalBytes += toSend[i].file.getSize();
+    std::vector<std::atomic<float>> fraction (indices.size());
+    for (auto& f : fraction)
+        f = 0.0f;
+    const auto tempDir = File::getSpecialLocation (File::tempDirectory).getChildFile ("Lathe packing");
+    std::vector<File> packedFiles (indices.size());
+
+    auto r = runParallel ((int) indices.size(), jmax (1, SystemStats::getNumCpus() - 1), [&] (int k, const std::atomic<bool>& stop)
+    {
+        auto& item = toSend[indices[(size_t) k]];
+        const auto dest = tempDir.getChildFile (item.hash + "-" + String::toHexString (Random::getSystemRandom().nextInt()) + ".lflac");
+        if (packAudio (item.file, dest, [&] (double p) { fraction[(size_t) k] = (float) p; return ! stop.load(); }))
+            packedFiles[(size_t) k] = dest;
+        fraction[(size_t) k] = 1.0f;
+        return stop.load() ? Result::fail ("Cancelled.") : Result::ok();
+    },
+    [&]
+    {
+        if (progress == nullptr || totalBytes <= 0)
+            return true;
+        double sum = 0.0;
+        for (size_t k = 0; k < indices.size(); ++k)
+            sum += fraction[k].load() * (double) toSend[indices[k]].file.getSize();
+        return progress (sum / (double) totalBytes);
+    });
+
+    for (size_t k = 0; k < indices.size(); ++k)
+        if (packedFiles[k] != File())
+        {
+            tempFiles.push_back (packedFiles[k]);
+            toSend[indices[k]].file = packedFiles[k];   // same hash (the original WAV's), smaller file
+        }
+    return r;
+}
+
+Result Client::upload (const String& projectId, const std::vector<UploadItem>& allItems,
                        const std::function<bool (double)>& progress, int& uploadedCount)
 {
     uploadedCount = 0;
-    if (items.empty())
+    if (allItems.empty())
         return Result::ok();
+
+    // Takes go up compressed (lossless, see Packing.h): ask which files the server is
+    // missing, pack just those, and upload the packed versions. A server without the
+    // "missing" call gets the files as they are.
+    std::vector<UploadItem> items;
+    std::vector<File> tempFiles;
+    struct DeleteTemps
+    {
+        std::vector<File>& files;
+        ~DeleteTemps() { for (auto& f : files) f.deleteFile(); }
+    } deleteTemps { tempFiles };
+    const auto packShare = [&] (double p) { return progress == nullptr || progress (0.25 * p); };
+    if (auto r = packForUpload (projectId, allItems, items, tempFiles, packShare); r.failed())
+        return r;
+    if (items.empty())
+    {
+        if (progress)
+            progress (1.0);
+        return Result::ok();
+    }
+    const auto uploadShare = [&] (double p) { return progress == nullptr || progress (0.25 + 0.75 * p); };
 
     std::map<String, const UploadItem*> byHash;
     Array<var> list;
@@ -663,7 +771,7 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& i
         done += piece.length;
         return Result::ok();
     },
-    [&] { return progress == nullptr || total <= 0 || progress ((double) done.load() / (double) total); });
+    [&] { return total <= 0 || uploadShare ((double) done.load() / (double) total); });
 
     if (r.failed())
         return r;
@@ -744,16 +852,44 @@ Result Client::download (const String& projectId, const std::vector<std::pair<St
                 continue;
             }
 
-            last = httpDownload (urls[(size_t) index], dest, [&] (double p)
+            // Into a temporary file next to it; a packed take is then unpacked into place.
+            const auto incoming = dest.getSiblingFile (dest.getFileName() + ".download");
+            last = httpDownload (urls[(size_t) index], incoming, [&] (double p)
             {
-                fraction[(size_t) index] = (float) p;
+                fraction[(size_t) index] = (float) (0.9 * p);
                 return ! stop.load();
             });
             if (last.failed())
             {
+                incoming.deleteFile();
                 if (stop.load())
                     return last;
                 continue;   // dropped connection: try again
+            }
+            if (isPacked (incoming))
+            {
+                last = unpackAudio (incoming, dest, [&] (double p)
+                {
+                    fraction[(size_t) index] = (float) (0.9 + 0.1 * p);
+                    return ! stop.load();
+                });
+                incoming.deleteFile();
+                if (last.failed())
+                {
+                    dest.deleteFile();
+                    if (stop.load())
+                        return last;
+                    continue;
+                }
+            }
+            else
+            {
+                dest.deleteFile();
+                if (! incoming.moveFileTo (dest))
+                {
+                    incoming.deleteFile();
+                    return Result::fail ("Couldn't save " + dest.getFullPathName());
+                }
             }
             if (sha256OfFile (dest) == hash)
             {

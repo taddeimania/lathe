@@ -31,6 +31,8 @@ struct Revision
     StringArray blobs;  // every file the revision needs (snapshot + audio)
     int64 createdAt = 0;
     bool local = false;
+    bool pinned = false;    // kept in the cloud however many newer revisions come
+    bool inCloud = true;    // false once the cloud no longer keeps it (it keeps the newest few)
 
     var toVar() const;
     static Revision fromVar (const var&);
@@ -135,6 +137,9 @@ PullOutcome pull (Client&, LocalStore&, const Progress&);
 /** The revision's project, ready to save as the working copy: audio paths point at
     local files, downloading any that are missing (client may be null if offline). */
 Result prepareRevision (Client*, LocalStore&, const Revision&, var& projectOut, const Progress&);
+
+/** Pins (keeps) or unpins a pushed revision in the cloud, and remembers it here. */
+Result setPinned (Client&, LocalStore&, const String& revisionId, bool pinned);
 
 /** Records the working copy as a local revision, unless an existing revision already
     has exactly this content. Returns the revision it matches or made. */

@@ -3,6 +3,21 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.6.0
+
+Everyone sharing songs should update: songs pushed from 0.6.0 can't be pulled by
+older versions of Lathe.
+
+- **Takes go up compressed**, losslessly (FLAC): about half the size, so pushes
+  and pulls take about half as long. What you pull back is identical, byte for
+  byte, to what was recorded, and every download is checked.
+- **Plans.** Free accounts can join songs shared with them (and push, as
+  editors). Starter: your own songs in the cloud, up to 5 GB each, 50 GB in all.
+  Pro: 25 GB songs, 250 GB in all. Your plan shows in the Cloud menu.
+- **The cloud keeps each song's newest 5 revisions** (20 on Pro). In History,
+  **Keep** a revision (a mix you sent, say) and it stays however many come after.
+  Revisions the cloud let go stay in History on your computer.
+
 ## New in 0.5.7
 
 - **Fixed: New Project could crash on the Mac** when your audio input and output

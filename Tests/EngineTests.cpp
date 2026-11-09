@@ -7,6 +7,7 @@
 #include "Patcher/Updater.h"
 #include "Cloud/ProjectDiff.h"
 #include "Cloud/Revisions.h"
+#include "Cloud/Packing.h"
 #if ! JUCE_WINDOWS
  #include <unistd.h>
 #endif
@@ -1396,6 +1397,86 @@ int main()
         };
         const auto knob = cloud::summariseChanges (plug ("2.1 s"), plug ("3.4 s"));
         check (knob == "\"Vox\": Nave: Decay 2.1 s -> 3.4 s", "names the plug-in knob that moved (got " + knob + ")");
+    }
+
+    std::cout << "Cloud: packed (FLAC) storage of takes" << std::endl;
+    {
+        // A take-like signal: a few harmonics with a slow wobble and a little noise.
+        auto writeTake = [&] (const File& f, int channels, int bits, double rate, int64 frames, bool noise, bool floatData,
+                              const std::unordered_map<String, String>& meta)
+        {
+            f.deleteFile();
+            std::unique_ptr<OutputStream> stream (f.createOutputStream().release());
+            WavAudioFormat wav;
+            auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (channels)
+                                                      .withBitsPerSample (bits).withMetadataValues (meta)
+                                                      .withSampleFormat (floatData ? AudioFormatWriterOptions::SampleFormat::floatingPoint
+                                                                                   : AudioFormatWriterOptions::SampleFormat::integral));
+            jassert (w != nullptr);
+            Random rng (7);
+            AudioBuffer<float> b (channels, 4096);
+            for (int64 done = 0; done < frames;)
+            {
+                const int n = (int) jmin<int64> (4096, frames - done);
+                for (int c = 0; c < channels; ++c)
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const double t = (double) (done + i) / rate;
+                        const double v = noise ? rng.nextFloat() * 2.0 - 1.0
+                                               : 0.4 * std::sin (2 * MathConstants<double>::pi * 110.0 * t * (1.0 + 0.002 * std::sin (t)))
+                                                 + 0.15 * std::sin (2 * MathConstants<double>::pi * 330.0 * t + c)
+                                                 + 0.002 * (rng.nextFloat() - 0.5);
+                        b.setSample (c, i, (float) v);
+                    }
+                w->writeFromAudioSampleBuffer (b, 0, n);
+                done += n;
+            }
+            w.reset();
+            return f;
+        };
+
+        const std::unordered_map<String, String> none, bwav { { WavAudioFormat::bwavDescription, "A take with a broadcast-wave chunk" },
+                                                              { WavAudioFormat::bwavOriginator, "Lathe tests" } };
+        struct Case { const char* name; int channels, bits; double rate; int64 frames; bool noise, floatData, withMeta, expectPacked; };
+        const Case cases[] = {
+            { "24-bit mono 96k",            1, 24, 96000, 96000 * 4, false, false, false, true },
+            { "16-bit stereo 44.1k",        2, 16, 44100, 44100 * 3, false, false, false, true },
+            { "24-bit mono, odd length",    1, 24, 48000, 48001,     false, false, false, true },
+            { "24-bit with extra chunks",   2, 24, 48000, 48000 * 2, false, false, true,  true },
+            { "white noise (no gain)",      1, 24, 48000, 48000,     true,  false, false, false },
+            { "32-bit float (not FLAC-able)", 1, 32, 48000, 48000,   false, true,  false, false },
+        };
+        for (auto& c : cases)
+        {
+            const auto wavFile = writeTake (dir.getChildFile (String ("pack-") + c.name + ".wav"), c.channels, c.bits, c.rate,
+                                            c.frames, c.noise, c.floatData, c.withMeta ? bwav : none);
+            const auto hash = cloud::sha256OfFile (wavFile);
+            const auto packedFile = dir.getChildFile (String ("pack-") + c.name + ".lflac");
+            const bool packed = cloud::packAudio (wavFile, packedFile);
+            check (packed == c.expectPacked, String (c.name) + (c.expectPacked ? ": packed" : ": left as WAV"));
+            if (! packed)
+                continue;
+            check (cloud::isPacked (packedFile) && ! cloud::isPacked (wavFile), String (c.name) + ": packed files are recognised");
+            const auto back = dir.getChildFile (String ("pack-") + c.name + "-back.wav");
+            const auto r = cloud::unpackAudio (packedFile, back);
+            check (r.wasOk() && cloud::sha256OfFile (back) == hash,
+                   String (c.name) + ": unpacking gives back the identical file (" + String (100.0 * (double) packedFile.getSize() / (double) wavFile.getSize(), 0) + "% of the size)");
+        }
+
+        // Speed: a minute of 24-bit mono at 96 kHz (the heaviest common case).
+        const auto big = writeTake (dir.getChildFile ("pack-speed.wav"), 1, 24, 96000, 96000 * 60, false, false, none);
+        const auto packedBig = dir.getChildFile ("pack-speed.lflac");
+        auto t0 = Time::getMillisecondCounterHiRes();
+        check (cloud::packAudio (big, packedBig), "a minute of 96 kHz audio packs");
+        const double encodeMs = Time::getMillisecondCounterHiRes() - t0;
+        t0 = Time::getMillisecondCounterHiRes();
+        check (cloud::unpackAudio (packedBig, dir.getChildFile ("pack-speed-back.wav")).wasOk(), "and unpacks");
+        const double decodeMs = Time::getMillisecondCounterHiRes() - t0;
+        std::cout << "    1 min 96k/24 mono: pack " << String (encodeMs, 0) << " ms (" << String (60000.0 / encodeMs, 0)
+                  << "x real time), unpack " << String (decodeMs, 0) << " ms (" << String (60000.0 / decodeMs, 0) << "x), "
+                  << String (100.0 * (double) packedBig.getSize() / (double) big.getSize(), 0) << "% of the size" << std::endl;
+        check (! cloud::packAudio (big, packedBig, [] (double p) { return p < 0.3; }) && ! packedBig.exists(),
+               "packing can be cancelled, leaving nothing behind");
     }
 
     std::cout << "Cloud: hashing" << std::endl;

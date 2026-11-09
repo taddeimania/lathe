@@ -49,6 +49,10 @@ var Revision::toVar() const
     o->setProperty ("blobs", b);
     o->setProperty ("createdAt", createdAt);
     o->setProperty ("local", local);
+    if (pinned)
+        o->setProperty ("pinned", true);
+    if (! inCloud)
+        o->setProperty ("gone", true);
     return var (o.get());
 }
 
@@ -67,6 +71,8 @@ Revision Revision::fromVar (const var& v)
             r.blobs.add (h.toString());
     r.createdAt = (int64) (double) v["createdAt"];
     r.local = (bool) v["local"];
+    r.pinned = (bool) v["pinned"];
+    r.inCloud = ! (bool) v["gone"];
     return r;
 }
 
@@ -426,7 +432,10 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
     }
 
     int uploaded = 0;
-    auto r = client.upload (projectId, items, [&] (double p) { return report (progress, "Uploading", 0.3 + 0.65 * p); }, uploaded);
+    auto r = client.upload (projectId, items, [&] (double p)
+    {
+        return report (progress, p < 0.25 ? "Compressing audio" : "Uploading", 0.3 + 0.65 * p);
+    }, uploaded);
     if (r.failed())
     {
         out.result = r;
@@ -495,8 +504,11 @@ PullOutcome pull (Client& client, LocalStore& store, const Progress& progress)
     if (out.head.isEmpty())
         return out;
 
-    // Walk back through history until we reach revisions we already have.
+    // Walk back through history until we reach revisions we already have. The first page
+    // also says which revisions the cloud still keeps (it keeps the newest few, and pinned ones).
     String before;
+    std::map<String, bool> inCloud;   // id -> pinned
+    bool listIsComplete = false;
     for (int page = 0; page < 20; ++page)
     {
         const auto list = client.call ("GET", "/projects/" + projectId + "/revisions?limit=50"
@@ -509,6 +521,12 @@ PullOutcome pull (Client& client, LocalStore& store, const Progress& progress)
         const auto* revs = list["revisions"].getArray();
         if (revs == nullptr || revs->isEmpty())
             break;
+        if (page == 0)
+        {
+            for (auto& v : *revs)
+                inCloud[v["id"].toString()] = (bool) v["pinned"];
+            listIsComplete = revs->size() < 50;
+        }
 
         bool reachedKnown = false;
         for (auto& v : *revs)
@@ -546,6 +564,22 @@ PullOutcome pull (Client& client, LocalStore& store, const Progress& progress)
     }
     for (auto& r : out.newRevisions)
         store.putRevision (r);
+
+    // Mark what the cloud still keeps (and which are pinned).
+    if (listIsComplete)
+        for (auto r : store.getRevisions())
+        {
+            if (r.local)
+                continue;
+            const auto it = inCloud.find (r.id);
+            const bool kept = it != inCloud.end(), pinned = kept && it->second;
+            if (kept != r.inCloud || pinned != r.pinned)
+            {
+                r.inCloud = kept;
+                r.pinned = pinned;
+                store.putRevision (r);
+            }
+        }
 
     // And the newest revision's audio, so it opens straight away (even offline later).
     if (auto head = store.getRevision (out.head))
@@ -629,6 +663,25 @@ Result prepareRevision (Client* client, LocalStore& store, const Revision& rev, 
 
     // Read back as a plain project (the extra fields are harmless to Lathe).
     projectOut = project;
+    return Result::ok();
+}
+
+Result setPinned (Client& client, LocalStore& store, const String& revisionId, bool pinned)
+{
+    DynamicObject::Ptr body = new DynamicObject();
+    body->setProperty ("pinned", pinned);
+    ApiError err;
+    client.call ("PATCH", "/v2/songs/" + URL::addEscapeChars (store.getProjectId(), true) + "/revisions/"
+                              + URL::addEscapeChars (revisionId, true), var (body.get()), err);
+    if (err.status != 0)
+        return Result::fail (err.status == 404 && err.message == "Not found." ? String ("Keeping revisions needs the updated Lathe Cloud server.")
+                                                                               : err.message);
+    if (auto r = store.getRevision (revisionId))
+    {
+        auto copy = *r;
+        copy.pinned = pinned;
+        store.putRevision (copy);
+    }
     return Result::ok();
 }
 

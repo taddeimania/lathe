@@ -95,6 +95,7 @@ Lathe can share a project with collaborators through Lathe Cloud. It works like 
 **Push**
 - Uploads what you have open as a new revision, with your description and an automatic summary of what changed (faders, pans, mutes, sends, EQ bands, plug-in knobs, clips, new or removed tracks, tempo, monitor mixes).
 - Audio files are stored once under their content hash, so a take is never uploaded twice.
+- Takes are compressed before they go up, losslessly (FLAC): a recorded take is typically about half the size, and the file you pull back is identical, byte for byte, to the one that was recorded (every download is checked). Compressing runs several hundred times faster than real time, so it saves more upload time than it takes. Files FLAC can't hold (32-bit float) go up as they are.
 - Up to 4 files (or 64 MB pieces of a big file) move at once, in both directions, and a dropped connection is retried. Change this under **Cloud > Transfers at Once**: 1 sends one file at a time, which is gentler on a slow connection.
 
 **Pull**
@@ -105,6 +106,13 @@ Lathe can share a project with collaborators through Lathe Cloud. It works like 
 - Lists every revision: pushed, pulled, and **Local** ones (kept on this computer, not pushed).
 - Select one to see what it changed and what opening it would change.
 - **Open This Revision** first keeps what you have open as a Local revision, so switching never loses work.
+- The cloud keeps each song's newest 5 revisions (20 on Pro). **Keep** a revision (a mix you sent, say) and it stays however many come after. Revisions the cloud let go stay in History on your computer ("only on this computer").
+
+**Plans**
+- **Free**: join songs friends share with you, pull them, leave notes, and push if they made you an editor.
+- **Starter**: your own songs and projects in the cloud, shared with friends. Each song up to 5 GB (its current version), 50 GB for all your songs together, 2 free accounts can edit your songs (any number can view).
+- **Pro**: songs up to 25 GB, 250 GB in all, 20 revisions kept, any number of free editors.
+- Your plan shows in the Cloud menu next to your email. When something doesn't fit, Lathe says what and why before anything uploads.
 
 **If someone pushed first**
 - Lathe refuses to overwrite their revision and asks you to choose:
