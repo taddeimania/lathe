@@ -371,6 +371,19 @@ Result createCloudProject (Client& client, LocalStore& store, const String& name
     return Result::ok();
 }
 
+Result createCloudSong (Client& client, LocalStore& store, const String& name, const String& projectId)
+{
+    DynamicObject::Ptr body = new DynamicObject();
+    body->setProperty ("name", name);
+    body->setProperty ("project", projectId);
+    ApiError err;
+    const auto resp = client.call ("POST", "/v2/songs", var (body.get()), err);
+    if (err.status != 0)
+        return Result::fail (err.message);
+    store.link (resp["id"].toString(), resp["name"].toString());
+    return Result::ok();
+}
+
 PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const String& parent,
                   const String& message, const Progress& progress)
 {

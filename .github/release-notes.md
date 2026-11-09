@@ -3,6 +3,30 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.0
+
+Needs the updated Lathe Cloud server (lathe-backend: `terraform apply`). Until
+then, Projects and Friends say the server needs updating; push and pull keep working.
+
+- **Friends.** Cloud > Friends: send a request to someone's email. Once they
+  accept, you can share with each other. You can only share with friends.
+- **Projects hold songs.** A project is a group of songs (an album, a band).
+  Cloud > Projects shows your projects, their songs, and songs shared with you.
+  Songs you shared before 0.5 each become a project of their own, still shared
+  with the same people.
+- **Share a project or one song**, with each friend able to **edit** (push) or
+  only **view** (pull). Viewers can still change their own copy; they just
+  can't push.
+- **The owner manages it:** stop sharing (with one person or everyone), change
+  someone's access, rename (shares stay), move a song to another project (people
+  who only had it through the old project lose it), or delete from the cloud.
+  Anyone can leave.
+- **Notices.** When you're given access, lose it, or become a viewer, Lathe
+  tells you. Your copy on your computer is never touched.
+- **Delete templates**, built-in ones too: File > New from Template > Delete
+  Template. Restore Built-in Templates brings those back.
+- Cloud > Put This Song in the Cloud replaces Share This Project.
+
 ## New in 0.4.5
 
 - **Export specific tracks.** Right-click a track and choose **Export This

@@ -58,6 +58,8 @@ private:
     Edit::PluginFactory makePluginFactory (StringArray& missing);
     void reloadMissingPlugins();
     void ensureBuiltInTemplates();
+    Array<File> templateFiles();
+    void deleteTemplate (const File&);
     void importAudio();
     void openPluginBrowser();
     void openPatcher();

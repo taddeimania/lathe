@@ -11,7 +11,7 @@ namespace menu
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut,
         settings = 400, scan, metronome, browser, checkUpdates, autoUpdates,
-        templateBase = 1000, recentBase = 2000
+        templateBase = 1000, deleteTemplateBase = 1500, restoreTemplates = 1999, recentBase = 2000
     };
 }
 
@@ -225,14 +225,67 @@ void MainComponent::startup (const String& commandLine)
     newProject (getTemplatesDir().getChildFile (settings.getValue ("defaultTemplate", "Basic") + kProjectExtension));
 }
 
+Array<File> MainComponent::templateFiles()
+{
+    auto files = getTemplatesDir().findChildFiles (File::findFiles, false, "*" + String (kProjectExtension));
+    files.sort();
+    return files;
+}
+
+void MainComponent::deleteTemplate (const File& f)
+{
+    const auto name = f.getFileNameWithoutExtension();
+    Component::SafePointer<MainComponent> safe (this);
+    AlertWindow::showAsync (MessageBoxOptions()
+                                .withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Delete the template \"" + name + "\"?")
+                                .withMessage (String ("It goes to the ")
+                                             #if JUCE_WINDOWS
+                                              + "Recycle Bin"
+                                             #else
+                                              + "Trash"
+                                             #endif
+                                              + ". Projects you made from it aren't affected.")
+                                .withButton ("Delete")
+                                .withButton ("Cancel"),
+                            [safe, f, name] (int button)
+    {
+        if (safe == nullptr || button != 1)
+            return;
+        auto& props = safe->settings;
+        if (! f.moveToTrash() && ! f.deleteFile())
+        {
+            safe->setStatus ("Couldn't delete " + f.getFullPathName());
+            return;
+        }
+        // Keep a deleted built-in from coming back next time Lathe starts.
+        if (name == "Basic" || name == "UMC1820 Tracking")
+        {
+            auto hidden = StringArray::fromLines (props.getValue ("hiddenTemplates"));
+            hidden.addIfNotAlreadyThere (name);
+            hidden.removeEmptyStrings();
+            props.setValue ("hiddenTemplates", hidden.joinIntoString ("\n"));
+        }
+        // New Project used it: fall back to another template (or a blank project).
+        if (props.getValue ("defaultTemplate", "Basic") == name)
+        {
+            const auto rest = safe->templateFiles();
+            props.setValue ("defaultTemplate", rest.isEmpty() ? String() : rest[0].getFileNameWithoutExtension());
+        }
+        safe->setStatus ("Deleted the template \"" + name + "\".");
+    });
+}
+
 void MainComponent::ensureBuiltInTemplates()
 {
     getTemplatesDir().createDirectory();
 
-    auto writeTemplate = [] (const String& name, std::function<void (Edit&)> build)
+    // Built-in templates you deleted stay deleted (File > New from Template > Restore brings them back).
+    const auto hidden = StringArray::fromLines (settings.getValue ("hiddenTemplates"));
+    auto writeTemplate = [hidden] (const String& name, std::function<void (Edit&)> build)
     {
         auto f = getTemplatesDir().getChildFile (name + kProjectExtension);
-        if (f.existsAsFile())
+        if (f.existsAsFile() || hidden.contains (name))
             return;
         Edit e;
         build (e);
@@ -782,11 +835,19 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
     {
         item (menu::newProject, "New Project", cmd + "N");
 
-        PopupMenu templates;
+        PopupMenu templates, deleteTemplates;
         int i = 0;
-        for (auto& f : getTemplatesDir().findChildFiles (File::findFiles, false, "*.lathe"))
-            templates.addItem (menu::templateBase + i++, f.getFileNameWithoutExtension());
-        m.addSubMenu ("New from Template", templates, i > 0);
+        for (auto& f : templateFiles())
+        {
+            templates.addItem (menu::templateBase + i, f.getFileNameWithoutExtension());
+            deleteTemplates.addItem (menu::deleteTemplateBase + i, f.getFileNameWithoutExtension());
+            ++i;
+        }
+        if (i > 0)
+            templates.addSeparator();
+        templates.addSubMenu ("Delete Template", deleteTemplates, i > 0);
+        templates.addItem (menu::restoreTemplates, "Restore Built-in Templates", settings.getValue ("hiddenTemplates").isNotEmpty());
+        m.addSubMenu ("New from Template", templates);
 
         item (menu::open, "Open...", cmd + "O");
         PopupMenu recent;
@@ -882,9 +943,26 @@ void MainComponent::menuItemSelected (int id, int)
         return;
     }
 
+    if (id == menu::restoreTemplates)
+    {
+        settings.removeValue ("hiddenTemplates");
+        ensureBuiltInTemplates();
+        setStatus ("Restored the built-in templates.");
+        return;
+    }
+
+    if (id >= menu::deleteTemplateBase)
+    {
+        const auto files = templateFiles();
+        const int index = id - menu::deleteTemplateBase;
+        if (index < files.size())
+            deleteTemplate (files[index]);
+        return;
+    }
+
     if (id >= menu::templateBase)
     {
-        auto files = getTemplatesDir().findChildFiles (File::findFiles, false, "*.lathe");
+        const auto files = templateFiles();
         const int index = id - menu::templateBase;
         if (index < files.size())
         {

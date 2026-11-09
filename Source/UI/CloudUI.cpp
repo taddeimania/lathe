@@ -1,47 +1,22 @@
 #include "CloudUI.h"
 #include "../Cloud/ProjectDiff.h"
+#include "CloudUIHelpers.h"
 
 namespace lathe
 {
+using namespace cloudui;
+
 namespace
 {
 enum MenuIds
 {
     signInId = CloudController::menuBase, signOutId, openSharedId, shareId, inviteId,
-    pushId, pullId, historyId, settingsId,
+    pushId, pullId, historyId, settingsId, libraryId, friendsId, unlinkId, uploadId,
     parallelBase = CloudController::menuBase + 20   // + 1, 2, 4, 6, 8
 };
 
 constexpr int parallelChoices[] = { 1, 2, 4, 6, 8 };
 
-String timeAgo (int64 ms)
-{
-    const auto seconds = (Time::currentTimeMillis() - ms) / 1000;
-    if (seconds < 60)       return "just now";
-    if (seconds < 3600)     return String (seconds / 60) + " min ago";
-    if (seconds < 86400)    return String (seconds / 3600) + " h ago";
-    if (seconds < 7 * 86400) return String (seconds / 86400) + " days ago";
-    return Time (ms).formatted ("%d %b %Y");
-}
-
-String shortName (const String& email)
-{
-    return email.upToFirstOccurrenceOf ("@", false, false);
-}
-
-void styleEditor (TextEditor& e, bool password = false)
-{
-    e.setFont (theme::font (14.0f));
-    e.setIndents (8, 6);
-    if (password)
-        e.setPasswordCharacter ((juce_wchar) 0x2022);
-}
-
-void alert (const String& title, const String& message)
-{
-    AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::NoIcon)
-                                .withTitle (title).withMessage (message).withButton ("OK"), nullptr);
-}
 } // namespace
 
 //==============================================================================
@@ -254,95 +229,6 @@ private:
 
 //==============================================================================
 /** Lists the cloud projects you're in; double-click or Open picks one. */
-class CloudController::ProjectPicker : public Component, private ListBoxModel
-{
-public:
-    ProjectPicker (Array<var> p, std::function<void (const var&)> onPick)
-        : projects (std::move (p)), pick (std::move (onPick))
-    {
-        heading.setText ("Shared projects you're in", dontSendNotification);
-        heading.setFont (theme::font (15.0f, true));
-        addAndMakeVisible (heading);
-
-        list.setModel (this);
-        list.setRowHeight (40);
-        list.setColour (ListBox::backgroundColourId, theme::lane);
-        addAndMakeVisible (list);
-        if (! projects.isEmpty())
-            list.selectRow (0);
-
-        open.setButtonText ("Open...");
-        open.onClick = [this] { choose (list.getSelectedRow()); };
-        cancel.setButtonText ("Cancel");
-        cancel.onClick = [this] { close(); };
-        addAndMakeVisible (open);
-        addAndMakeVisible (cancel);
-        setSize (520, 380);
-    }
-
-    void paint (Graphics& g) override   { g.fillAll (theme::panel); }
-
-    void resized() override
-    {
-        auto r = getLocalBounds().reduced (16);
-        heading.setBounds (r.removeFromTop (24));
-        r.removeFromTop (8);
-        auto buttons = r.removeFromBottom (30);
-        cancel.setBounds (buttons.removeFromRight (90));
-        buttons.removeFromRight (8);
-        open.setBounds (buttons.removeFromRight (110));
-        r.removeFromBottom (10);
-        list.setBounds (r);
-    }
-
-private:
-    int getNumRows() override   { return projects.size(); }
-
-    void paintListBoxItem (int row, Graphics& g, int w, int h, bool selected) override
-    {
-        if (! isPositiveAndBelow (row, projects.size()))
-            return;
-        const auto& p = projects.getReference (row);
-        if (selected)
-            g.fillAll (theme::headerSel);
-        g.setColour (theme::text);
-        g.setFont (theme::font (14.0f, true));
-        g.drawText (p["name"].toString(), 10, 3, w - 20, 18, Justification::centredLeft, true);
-        g.setColour (theme::textDim);
-        g.setFont (theme::font (12.0f));
-        const int seq = (int) p["seq"];
-        g.drawText ((seq > 0 ? "r" + String (seq) : String ("no revisions yet")) + "   ·   owner " + p["owner"].toString(),
-                    10, 21, w - 20, 16, Justification::centredLeft, true);
-        g.setColour (theme::border);
-        g.drawHorizontalLine (h - 1, 0.0f, (float) w);
-    }
-
-    void listBoxItemDoubleClicked (int row, const MouseEvent&) override   { choose (row); }
-
-    void choose (int row)
-    {
-        if (! isPositiveAndBelow (row, projects.size()))
-            return;
-        const auto p = projects[row];
-        auto callback = pick;
-        close();
-        if (callback)
-            callback (p);
-    }
-
-    void close()
-    {
-        if (auto* w = findParentComponentOfClass<DialogWindow>())
-            w->exitModalState (0);
-    }
-
-    Array<var> projects;
-    std::function<void (const var&)> pick;
-    Label heading;
-    ListBox list;
-    TextButton open, cancel;
-};
-
 //==============================================================================
 /** The project's revisions: pushed, pulled and local. Select one to see what it
     changed and what opening it would change; open any of them. */
@@ -614,6 +500,11 @@ void CloudController::projectChanged (bool force)
     if (moved)
         store = file != File() ? std::make_shared<cloud::LocalStore> (file) : nullptr;
     waitingHead = waitingText = {};
+    if (moved || force)
+    {
+        songRole = songProjectName = {};
+        lostAccess = false;
+    }
     pollCountdown = 2;   // check for news shortly after opening
     updateStatus();
     if (history != nullptr)
@@ -639,14 +530,21 @@ void CloudController::updateStatus()
             text << "  ·  not uploaded yet";
         if (! isSignedIn())
             text << "  (sign in)";
+        else if (lostAccess)
+            text << "  ·  not shared with you anymore";
         else if (waitingHead.isNotEmpty())
             text << "  ·  new revision waiting";
+        else if (songRole == "viewer")
+            text << "  ·  view only";
     }
-    const bool attention = busy || waitingHead.isNotEmpty() || (isLinked() && isUnfinishedShare());
+    const bool attention = busy || waitingHead.isNotEmpty() || (isLinked() && (isUnfinishedShare() || lostAccess));
     status->setText (text, dontSendNotification);
     status->setColour (Label::textColourId, attention ? theme::accent : theme::textDim);
     status->setTooltip (busy ? String ("Working... Keep Lathe open until this finishes.")
+                             : isLinked() && lostAccess ? String ("The owner stopped sharing this song with you, moved it or deleted it. Your copy here is "
+                                                                  "yours: keep working on it, or choose Cloud > Disconnect This Song.")
                              : isLinked() && isUnfinishedShare() ? String ("Sharing didn't finish. Cloud > Push uploads the rest; files already sent aren't sent again.")
+                             : songRole == "viewer" ? String ("You can pull new versions of this song but not push: the owner shared it view-only.")
                              : waitingText.isNotEmpty() ? waitingText : String ("Click for the project's history"));
 }
 
@@ -667,15 +565,24 @@ void CloudController::addMenuItems (PopupMenu& m)
         m.addItem (signInId, "Sign In...", configured && idle);
     }
     m.addSeparator();
-    m.addItem (openSharedId, "Open Shared Project...", configured && idle);
-    if (linked)
-        m.addItem (inviteId, "Invite Someone to \"" + store->getCloudName() + "\"...", signedIn && idle);
-    else
-        m.addItem (shareId, "Share This Project...", configured && idle);
+    m.addItem (libraryId, "Projects...", configured);
+    m.addItem (friendsId, friendRequests > 0 ? "Friends (" + String (friendRequests) + (friendRequests == 1 ? " request)..." : " requests)...")
+                                             : String ("Friends..."), configured);
     m.addSeparator();
-    m.addItem (pushId, linked && isUnfinishedShare() ? "Push (finish sharing)..." : "Push...", linked && signedIn && idle);
-    m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle);
+    if (! linked)
+        m.addItem (uploadId, "Put This Song in the Cloud...", configured && idle);
+    else if (lostAccess)
+        m.addItem (PopupMenu::Item ("\"" + store->getCloudName() + "\" isn't shared with you anymore").setEnabled (false));
+    else if (songRole == "owner")
+        m.addItem (shareId, "Share \"" + store->getCloudName() + "\"...", signedIn);
+    const bool viewer = songRole == "viewer";
+    m.addItem (pushId, viewer ? String ("Push (you can only view this song)")
+                              : linked && isUnfinishedShare() ? "Push (finish sharing)..." : "Push...",
+               linked && signedIn && idle && ! viewer && ! lostAccess);
+    m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle && ! lostAccess);
     m.addItem (historyId, "History...", linked);
+    if (linked)
+        m.addItem (unlinkId, "Disconnect This Song from the Cloud...", idle);
     m.addSeparator();
     PopupMenu parallel;
     for (int n : parallelChoices)
@@ -691,7 +598,11 @@ bool CloudController::handleMenuItem (int id)
     {
         case signInId:      showSignIn(); return true;
         case signOutId:     signOut(); return true;
-        case openSharedId:  openSharedProject(); return true;
+        case openSharedId:  showLibrary(); return true;
+        case libraryId:     showLibrary(); return true;
+        case friendsId:     showFriends(); return true;
+        case unlinkId:      unlinkSong(); return true;
+        case uploadId:      uploadSong(); return true;
         case shareId:       shareProject(); return true;
         case inviteId:      invite(); return true;
         case pushId:        push(); return true;
@@ -846,79 +757,141 @@ void CloudController::showSettings()
 
 void CloudController::shareProject()
 {
-    if (isLinked())
-    {
-        invite();
-        return;
-    }
-    ensureReady ([this]
-    {
-        askForText ("Share this project",
-                    "Name it in the cloud. You can then invite people, and push and pull revisions.",
-                    ctx.edit.getName(), [this] (const String& entered)
-        {
-            const auto name = entered.trim();
-            if (name.isEmpty())
-                return;
-            auto snapshot = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (ctx.edit));
-            auto result = std::make_shared<Result> (Result::ok());
-            auto outcome = std::make_shared<cloud::PushOutcome>();
-            auto c = client;
-            auto s = store;
-            auto progress = progressReporter();
-
-            hooks.setStatus ("Sharing \"" + name + "\". Keep Lathe open until it finishes; large projects take a while.");
-            run ("Sharing", [c, s, name, snapshot, result, outcome, progress]
-            {
-                *result = cloud::createCloudProject (*c, *s, name);
-                if (result->wasOk())
-                    *outcome = cloud::push (*c, *s, *snapshot, {}, "First version", progress);
-            },
-            [this, result, outcome, name]
-            {
-                if (result->failed() || outcome->result.failed())
-                {
-                    alert ("Couldn't share the project", result->failed() ? result->getErrorMessage() : outcome->result.getErrorMessage());
-                    return;
-                }
-                hooks.setStatus ("Shared \"" + name + "\" (r1). Invite people from the Cloud menu.");
-                updateStatus();
-                invite();
-            });
-        });
-    });
+    if (! isLinked())
+        uploadSong();
+    else
+        showLibrary (store->getProjectId());
 }
 
 void CloudController::invite()
 {
+    shareProject();
+}
+
+void CloudController::uploadSong()
+{
+    if (isLinked())
+    {
+        showLibrary (store->getProjectId());
+        return;
+    }
+    ensureReady ([this]
+    {
+        // Which of your projects does it go in? (Ask the server for them first.)
+        request ("GET", "/v2/library", {}, [this] (const var& lib, const cloud::ApiError& err)
+        {
+            if (err.status != 0)
+            {
+                alert ("Couldn't reach Lathe Cloud", isOldServer (err) ? String ("The Lathe Cloud server needs updating for projects and friends "
+                                                                                 "(lathe-backend: terraform apply).") : err.message);
+                return;
+            }
+            Array<var> mine;
+            if (auto* a = lib["projects"].getArray())
+                for (auto& p : *a)
+                    if (p["role"].toString() == "owner")
+                        mine.add (p);
+
+            auto* w = new AlertWindow ("Put this song in the cloud",
+                                       "It goes in one of your projects. Share the project (or just this song) with friends "
+                                       "from Cloud > Projects.", MessageBoxIconType::NoIcon);
+            w->addTextEditor ("name", ctx.edit.getName(), "Song name");
+            StringArray names;
+            for (auto& p : mine)
+                names.add (p["name"].toString());
+            names.add ("New project...");
+            w->addComboBox ("project", names, "Project");
+            if (auto* box = w->getComboBoxComponent ("project"))
+                box->setSelectedItemIndex (0, dontSendNotification);
+            w->addTextEditor ("newName", ctx.edit.getName(), "New project's name (if new)");
+            w->addButton ("Upload", 1, KeyPress (KeyPress::returnKey));
+            w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+
+            WeakReference<CloudController> weak (this);
+            w->enterModalState (true, ModalCallbackFunction::create ([weak, w, mine] (int r)
+            {
+                const auto name = w->getTextEditorContents ("name").trim();
+                const int index = w->getComboBoxComponent ("project")->getSelectedItemIndex();
+                const auto newName = w->getTextEditorContents ("newName").trim();
+                w->setVisible (false);
+                MessageManager::callAsync ([w] { delete w; });
+                auto* self = weak.get();
+                if (self == nullptr || r != 1)
+                    return;
+                const bool makeNew = index >= mine.size();
+                if (name.isEmpty() || (makeNew && newName.isEmpty()))
+                    return;
+                const auto projectId = makeNew ? String() : mine[index]["id"].toString();
+
+                auto snapshot = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (self->ctx.edit));
+                auto result = std::make_shared<Result> (Result::ok());
+                auto outcome = std::make_shared<cloud::PushOutcome>();
+                auto c = self->client;
+                auto s = self->store;
+                auto progress = self->progressReporter();
+
+                self->hooks.setStatus ("Uploading \"" + name + "\". Keep Lathe open until it finishes; large songs take a while.");
+                self->run ("Uploading", [c, s, name, projectId, newName, snapshot, result, outcome, progress]
+                {
+                    auto folder = projectId;
+                    if (folder.isEmpty())
+                    {
+                        DynamicObject::Ptr body = new DynamicObject();
+                        body->setProperty ("name", newName);
+                        cloud::ApiError e;
+                        folder = c->call ("POST", "/v2/projects", var (body.get()), e)["id"].toString();
+                        if (e.status != 0)
+                        {
+                            *result = Result::fail (e.message);
+                            return;
+                        }
+                    }
+                    *result = cloud::createCloudSong (*c, *s, name, folder);
+                    if (result->wasOk())
+                        *outcome = cloud::push (*c, *s, *snapshot, {}, "First version", progress);
+                },
+                [weak, result, outcome, name]
+                {
+                    auto* me = weak.get();
+                    if (me == nullptr)
+                        return;
+                    if (result->failed() || outcome->result.failed())
+                    {
+                        alert ("Couldn't upload the song", result->failed() ? result->getErrorMessage() : outcome->result.getErrorMessage());
+                        return;
+                    }
+                    me->songRole = "owner";
+                    me->hooks.setStatus ("\"" + name + "\" is in the cloud (r1). Share it from Cloud > Projects.");
+                    me->updateStatus();
+                    me->refreshWindows();
+                    me->showLibrary (me->store->getProjectId());
+                });
+            }), false);
+        });
+    });
+}
+
+void CloudController::unlinkSong()
+{
     if (! isLinked())
         return;
-    askForText ("Invite someone to \"" + store->getCloudName() + "\"",
-                "Their email. If they don't have a Lathe cloud account yet, the project shows up for them "
-                "after they first sign in.", {}, [this] (const String& email)
+    const auto name = store->getCloudName();
+    WeakReference<CloudController> weak (this);
+    AlertWindow::showAsync (MessageBoxOptions()
+                                .withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Disconnect \"" + name + "\" from the cloud?")
+                                .withMessage ("This copy stops pulling and pushing. Nothing is deleted: not this project, not its "
+                                              "History, and not the song in the cloud.")
+                                .withButton ("Disconnect")
+                                .withButton ("Cancel"),
+                            [weak, name] (int button)
     {
-        if (email.trim().isEmpty())
+        auto* self = weak.get();
+        if (self == nullptr || button != 1 || self->store == nullptr)
             return;
-        auto err = std::make_shared<cloud::ApiError>();
-        auto resp = std::make_shared<var>();
-        auto c = client;
-        const auto path = "/projects/" + store->getProjectId() + "/members";
-        const auto address = email.trim();
-        run ("Inviting " + address, [c, path, address, err, resp]
-        {
-            DynamicObject::Ptr body = new DynamicObject();
-            body->setProperty ("email", address);
-            *resp = c->call ("POST", path, var (body.get()), *err);
-        },
-        [this, err, resp, address]
-        {
-            if (err->status != 0)
-                alert ("Couldn't invite " + address, err->message);
-            else
-                hooks.setStatus ((*resp)["status"].toString() == "added"
-                                     ? address + " can now open this project (Cloud > Open Shared Project)."
-                                     : address + " is invited: it'll appear once they sign in for the first time.");
-        });
+        self->store->unlink();
+        self->projectChanged();
+        self->hooks.setStatus ("\"" + name + "\" is no longer linked to the cloud. Your project is unchanged.");
     });
 }
 
@@ -926,7 +899,18 @@ void CloudController::push()
 {
     if (! isLinked())
     {
-        shareProject();
+        uploadSong();
+        return;
+    }
+    if (lostAccess)
+    {
+        alert ("Can't push", "\"" + store->getCloudName() + "\" isn't shared with you anymore. Your copy here is yours to keep.");
+        return;
+    }
+    if (songRole == "viewer")
+    {
+        alert ("Can't push", "The owner shared \"" + store->getCloudName() + "\" with you view-only: you can pull new versions, "
+                             "but not push. Ask them to make you an editor.");
         return;
     }
     ensureReady ([this]
@@ -1125,112 +1109,73 @@ void CloudController::showHistory()
 
 void CloudController::openSharedProject()
 {
-    if (! client->getConfig().isValid())
-    {
-        showSettings();
-        return;
-    }
-    if (! isSignedIn())
-    {
-        showSignIn ([this] { openSharedProject(); });
-        return;
-    }
+    showLibrary();
+}
 
-    auto err = std::make_shared<cloud::ApiError>();
-    auto resp = std::make_shared<var>();
-    auto c = client;
-    run ("Looking up your shared projects", [c, err, resp] { *resp = c->call ("GET", "/projects", {}, *err); },
-         [this, err, resp]
+void CloudController::openCloudSong (const var& song)
+{
+    WeakReference<CloudController> weak (this);
+    hooks.confirmDiscard ([weak, p = song]
     {
-        if (err->status != 0)
-        {
-            alert ("Couldn't list shared projects", err->message);
+        auto* self = weak.get();
+        if (self == nullptr)
             return;
-        }
-        Array<var> projects;
-        if (auto* a = (*resp)["projects"].getArray())
-            projects = *a;
-        if (projects.isEmpty())
+        const auto id = p["id"].toString();
+        const auto name = p["name"].toString();
+        const auto folder = self->hooks.projectsDir().getChildFile (File::createLegalFileName (name));
+
+        // Already here? Just open it.
+        const auto file = folder.getChildFile (File::createLegalFileName (name) + ".lathe");
+        if (file.existsAsFile() && cloud::LocalStore (file).getProjectId() == id)
         {
-            alert ("No shared projects yet", "Nobody has shared a project with you yet. To share one of yours, open it and "
-                                             "choose Cloud > Share This Project.");
+            self->hooks.openProject (file);
+            self->projectChanged();
+            self->pull();
             return;
         }
 
-        DialogWindow::LaunchOptions o;
-        WeakReference<CloudController> weak (this);
-        o.content.setOwned (new ProjectPicker (projects, [weak] (const var& picked)
-        {
-          if (auto* first = weak.get())
-            first->hooks.confirmDiscard ([weak, p = picked]
-          {
-            auto* self = weak.get();
-            if (self == nullptr)
-                return;
-            const auto id = p["id"].toString();
-            const auto name = p["name"].toString();
-            const auto folder = self->hooks.projectsDir().getChildFile (File::createLegalFileName (name));
+        const auto dest = folder.exists() ? folder.getNonexistentSibling (true) : folder;
+        const auto projectFile = dest.getChildFile (dest.getFileName() + ".lathe");
+        auto store = std::make_shared<cloud::LocalStore> (projectFile);
+        auto outcome = std::make_shared<cloud::PullOutcome>();
+        auto project = std::make_shared<var>();
+        auto result = std::make_shared<Result> (Result::ok());
+        auto c = self->client;
+        auto progress = self->progressReporter();
 
-            // Already here? Just open it.
-            const auto file = folder.getChildFile (File::createLegalFileName (name) + ".lathe");
-            if (file.existsAsFile() && cloud::LocalStore (file).getProjectId() == id)
+        self->run ("Downloading \"" + name + "\"", [c, store, dest, id, name, outcome, project, result, progress]
+        {
+            dest.getChildFile ("Audio").createDirectory();
+            store->link (id, name);
+            *outcome = cloud::pull (*c, *store, progress);
+            if (outcome->result.failed())
             {
-                self->hooks.openProject (file);
-                self->projectChanged();
-                self->pull();
+                *result = outcome->result;
                 return;
             }
-
-            const auto dest = folder.exists() ? folder.getNonexistentSibling (true) : folder;
-            const auto projectFile = dest.getChildFile (dest.getFileName() + ".lathe");
-            auto store = std::make_shared<cloud::LocalStore> (projectFile);
-            auto outcome = std::make_shared<cloud::PullOutcome>();
-            auto project = std::make_shared<var>();
-            auto result = std::make_shared<Result> (Result::ok());
-            auto c = self->client;
-            auto progress = self->progressReporter();
-
-            self->run ("Downloading \"" + name + "\"", [c, store, dest, id, name, outcome, project, result, progress]
+            if (auto head = store->getRevision (outcome->head))
+                *result = cloud::prepareRevision (c.get(), *store, *head, *project, progress);
+            else
+                *result = Result::fail ("\"" + name + "\" has no revisions yet. Ask its owner to push one.");
+        },
+        [weak, store, outcome, project, result, projectFile, dest, name]
+        {
+            auto* me = weak.get();
+            if (me == nullptr)
+                return;
+            if (result->failed())
             {
-                dest.getChildFile ("Audio").createDirectory();
-                store->link (id, name);
-                *outcome = cloud::pull (*c, *store, progress);
-                if (outcome->result.failed())
-                {
-                    *result = outcome->result;
-                    return;
-                }
-                if (auto head = store->getRevision (outcome->head))
-                    *result = cloud::prepareRevision (c.get(), *store, *head, *project, progress);
-                else
-                    *result = Result::fail ("\"" + name + "\" has no revisions yet. Ask its owner to push one.");
-            },
-            [weak, store, outcome, project, result, projectFile, dest, name]
-            {
-                auto* me = weak.get();
-                if (me == nullptr)
-                    return;
-                if (result->failed())
-                {
-                    if (! project->isObject())
-                        dest.deleteRecursively();
-                    alert ("Couldn't open \"" + name + "\"", result->getErrorMessage());
-                    return;
-                }
-                projectFile.replaceWithText (JSON::toString (*project));
-                store->setBase (outcome->head);
-                me->hooks.openProject (projectFile);
-                me->projectChanged();
-                me->hooks.setStatus ("Opened \"" + name + "\" from the cloud, in " + dest.getFullPathName());
-            });
-          });
-        }));
-        o.dialogTitle = "Open Shared Project";
-        o.dialogBackgroundColour = theme::panel;
-        o.useNativeTitleBar = true;
-        o.resizable = false;
-        o.escapeKeyTriggersCloseButton = true;
-        o.launchAsync();
+                if (! project->isObject())
+                    dest.deleteRecursively();
+                alert ("Couldn't open \"" + name + "\"", result->getErrorMessage());
+                return;
+            }
+            projectFile.replaceWithText (JSON::toString (*project));
+            store->setBase (outcome->head);
+            me->hooks.openProject (projectFile);
+            me->projectChanged();
+            me->hooks.setStatus ("Opened \"" + name + "\" from the cloud, in " + dest.getFullPathName());
+        });
     });
 }
 
@@ -1241,9 +1186,91 @@ void CloudController::timerCallback()
     if (--pollCountdown > 0)
         return;
     pollCountdown = 120;
+    if (isSignedIn())
+        pollAccount();
     if (isLinked() && isSignedIn() && ! busy)
         poll();
 }
+
+void CloudController::request (const String& method, const String& path, const var& body,
+                               std::function<void (const var&, const cloud::ApiError&)> done)
+{
+    auto c = client;
+    WeakReference<CloudController> weak (this);
+    apiWorker.addJob ([c, method, path, body, weak, done = std::move (done)]() mutable
+    {
+        cloud::ApiError err;
+        // An empty POST still sends a body, so every platform's HTTP stack treats it as a POST.
+        const auto sendBody = body.isVoid() && method != "GET" && method != "DELETE" ? var (new DynamicObject()) : body;
+        auto resp = c->call (method, path, sendBody, err);
+        MessageManager::callAsync ([weak, resp, err, done = std::move (done)]
+        {
+            auto* self = weak.get();
+            if (self == nullptr)
+                return;
+            if (self->isOldServer (err))
+                self->oldServer = true;
+            else if (err.status == 0)
+                self->oldServer = false;
+            if (done)
+                done (resp, err);
+        });
+    });
+}
+
+bool CloudController::isOldServer (const cloud::ApiError& err) const
+{
+    // The old server answers "Not found." for routes it doesn't have (missing things say "No such ...").
+    return err.status == 404 && err.message == "Not found.";
+}
+
+void CloudController::pollAccount()
+{
+    request ("GET", "/v2/friends", {}, [this] (const var& resp, const cloud::ApiError& err)
+    {
+        if (err.status != 0)
+            return;
+        const int before = friendRequests;
+        const auto* incoming = resp["incoming"].getArray();
+        friendRequests = incoming != nullptr ? incoming->size() : 0;
+        if (friendRequests > before && incoming != nullptr)
+            hooks.setStatus ("Friend request from " + incoming->getLast()["email"].toString() + ". See Cloud > Friends.");
+    });
+    request ("GET", "/v2/notices", {}, [this] (const var& resp, const cloud::ApiError& err)
+    {
+        if (err.status == 0)
+            if (auto* a = resp["notices"].getArray(); a != nullptr && ! a->isEmpty())
+            {
+                showNotices (*a);
+                refreshWindows();   // what we can see may have changed
+            }
+    });
+}
+
+void CloudController::showNotices (const Array<var>& notices)
+{
+    if (showingNotices)
+        return;
+    showingNotices = true;
+
+    String text;
+    for (auto& n : notices)
+    {
+        text << (text.isEmpty() ? "" : "\n\n") << n["text"].toString();
+        // Seen: the server can forget it.
+        request ("DELETE", "/v2/notices/" + URL::addEscapeChars (n["id"].toString(), true), {}, {});
+    }
+    hooks.setStatus (notices.getFirst()["text"].toString());
+
+    WeakReference<CloudController> weak (this);
+    AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Lathe Cloud").withMessage (text).withButton ("OK"),
+                            [weak] (int) { if (auto* self = weak.get()) self->showingNotices = false; });
+
+    if (isLinked() && isSignedIn() && ! busy)
+        poll();   // our access to the open song may have changed
+}
+
 
 void CloudController::poll()
 {
@@ -1252,18 +1279,47 @@ void CloudController::poll()
     auto latest = std::make_shared<var>();
     auto err = std::make_shared<cloud::ApiError>();
 
+    auto song = std::make_shared<var>();
+    auto songErr = std::make_shared<cloud::ApiError>();
+
     busy = true;
     WeakReference<CloudController> weak (this);
-    worker.addJob ([c, id, latest, err, weak]
+    worker.addJob ([c, id, latest, err, song, songErr, weak]
     {
+        // Our role (and whether we still have the song at all), then the newest revision.
+        *song = c->call ("GET", "/v2/songs/" + id, {}, *songErr);
         *latest = c->call ("GET", "/projects/" + id + "/revisions?limit=1", {}, *err);
-        MessageManager::callAsync ([weak, latest, err]
+        MessageManager::callAsync ([weak, latest, err, song, songErr]
         {
             auto* self = weak.get();
             if (self == nullptr)
                 return;
             self->busy = false;
-            if (err->status != 0 || self->store == nullptr)
+            if (self->store == nullptr)
+                return;
+
+            if (songErr->status == 0)
+            {
+                self->songRole = (*song)["role"].toString();
+                self->songProjectName = (*song)["projectName"].toString();
+                self->lostAccess = false;
+            }
+            else if (self->isOldServer (*songErr))
+            {
+                self->oldServer = true;
+                self->songRole = {};
+            }
+            else if (songErr->status == 404 && err->status == 404)
+            {
+                const bool news = ! self->lostAccess;
+                self->lostAccess = true;
+                self->waitingHead = self->waitingText = {};
+                if (news)
+                    self->hooks.setStatus ("\"" + self->store->getCloudName() + "\" isn't shared with you anymore. "
+                                           "Your copy here is yours to keep.");
+            }
+
+            if (err->status != 0)
             {
                 self->updateStatus();
                 return;

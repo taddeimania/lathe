@@ -75,10 +75,14 @@ Lathe can share a project with collaborators through your own small cloud backen
 - Release builds come with the cloud settings built in (from the repository variables `LATHE_CLOUD_API_URL`, `LATHE_CLOUD_REGION` and `LATHE_CLOUD_CLIENT_ID`). Otherwise, paste the output of `terraform -chdir=infra output -raw lathe_cloud_json` into **Cloud > Cloud Settings**.
 - **Cloud > Sign In** with the account that `scripts/add-user.sh` made. The first time, Lathe asks you to choose your own password.
 
-**Sharing and joining**
-- **Share This Project** uploads the open project as revision r1.
-- **Invite Someone** adds people by email.
-- Collaborators use **Open Shared Project**. It downloads the project, audio included, into `Documents/Lathe/Projects/<name>`.
+**Friends, projects and songs**
+- A **song** is one Lathe project file. A **project** is a group of songs: an album, a band, a client.
+- You share with **friends** only. **Cloud > Friends** sends a request to someone's email; once they accept (in their Lathe), you can share with each other. Removing a friend doesn't unshare anything.
+- **Cloud > Put This Song in the Cloud** uploads the open song (r1) into one of your projects, or a new one.
+- **Cloud > Projects** lists your projects and their songs, and songs shared with you on their own. Select one to see who has it. **Open** downloads a song, audio included, into `Documents/Lathe/Projects/<name>`.
+- Share a whole **project** (friends get every song in it, including ones added later) or a single **song**. Each person **can edit** (pull and push) or **can view** (pull only; they can still change their own copy, but can't push).
+- Only the owner manages a project or song: share, change someone's access, **Stop Sharing** (with one person or everyone), **Rename** (shares stay), **Move to Project** (a song; people who had it only through its old project, or shared on its own, lose it), and **Delete from Cloud**. Anyone can **Leave**.
+- When you lose access to something or become a viewer, Lathe tells you. Your copy on your computer is never touched: you just can't pull or push it anymore. **Cloud > Disconnect This Song** stops it asking.
 
 **Push**
 - Uploads what you have open as a new revision, with your description and an automatic summary of what changed (faders, pans, mutes, sends, EQ bands, plug-in knobs, clips, new or removed tracks, tempo, monitor mixes).
@@ -101,7 +105,7 @@ Lathe can share a project with collaborators through your own small cloud backen
 - There's no automatic merging of changes yet. The change summaries show what each side did.
 
 **Other things to know**
-- While a shared project is open, Lathe checks every two minutes for new revisions, and the status bar tells you when one is waiting.
+- While a shared song is open, Lathe checks every two minutes for new revisions, friend requests and notices, and the status bar tells you when something is waiting.
 - The history lives in a hidden `.lathe` folder inside the project folder, next to `Audio/`. Copying the folder copies the history.
 
 ## Updating (Lathe Patcher)
@@ -218,6 +222,7 @@ Every track, return and the master has a built-in EQ after its plug-ins and befo
 | Cmd/Ctrl+E | Split the selected clips at the start marker |
 | Delete | Delete the selected clips (or notes in the piano roll) |
 | Cmd/Ctrl+Z, Shift+Z | Undo / redo for clip and note edits |
+| File > New from Template > Delete Template | Delete any template, built-in ones too (**Restore Built-in Templates** brings those back) |
 | Cmd/Ctrl+scroll | Zoom. Shift+scroll scrolls sideways. Hold Alt while dragging to ignore the grid. |
 | Piano roll | Double-click to add or delete a note, drag to move, drag a note's end to resize, drag on empty space to select, ↑↓ to transpose (Shift moves an octave), Q to quantize |
 

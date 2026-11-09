@@ -113,8 +113,11 @@ struct PushOutcome
     String theirHead;           // the revision that's newest on the server now
 };
 
-/** Creates the cloud project and links this folder to it (no revision yet). */
+/** Creates the cloud project and links this folder to it (no revision yet). Old servers. */
 Result createCloudProject (Client&, LocalStore&, const String& name);
+
+/** Creates a song in one of your cloud projects and links this folder to it (no revision yet). */
+Result createCloudSong (Client&, LocalStore&, const String& name, const String& projectId);
 
 /** Pushes the snapshot as a new revision on top of parent ("" for the first). */
 PushOutcome push (Client&, LocalStore&, Snapshot&, const String& parent, const String& message, const Progress&);

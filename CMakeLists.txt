@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.4.5 LANGUAGES C CXX)
+project(Lathe VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -80,6 +80,7 @@ target_sources(Lathe PRIVATE
     Source/UI/DeviceChain.cpp
     Source/UI/EqEditor.cpp
     Source/UI/CloudUI.cpp
+    Source/UI/CloudLibrary.cpp
     Source/UI/UpdateNotice.cpp
     Source/Patcher/Updater.cpp
     Source/UI/PianoRoll.cpp
