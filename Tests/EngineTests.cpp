@@ -428,6 +428,76 @@ int main()
         engine.rebuild();
     }
 
+    std::cout << "Recording another track (an instrument into an audio track)" << std::endl;
+    {
+        std::vector<std::pair<Track*, bool>> wasMuted;
+        for (auto& t : edit.tracks)
+        {
+            wasMuted.push_back ({ t.get(), t->mute.load() });
+            t->mute = true;
+        }
+
+        // The "instrument": a track playing an impulse at sample 13000 of the song.
+        auto synth = edit.addTrack (TrackKind::audio, "Synth");
+        synth->input.channel = -1;
+        Clip c;
+        c.id = edit.newId();
+        c.kind = ClipKind::audio;
+        c.file = writeImpulseWav (dir.getChildFile ("synth.wav"), 48000, 1000);
+        c.start = 0.5;
+        c.length = 1.0;
+        synth->clips.push_back (c);
+
+        auto rec = edit.addTrack (TrackKind::audio, "Resample");
+        rec->input.track = synth->id;
+        rec->arm = true;
+        rec->monitor = (int) Monitor::automatic;
+        engine.rebuild();
+
+        edit.insertMarker = 0.0;
+        engine.toggleRecord();
+        const auto out = runCallbacks (engine, 60);
+        engine.stop();
+
+        // Heard once (through the recording track), not twice.
+        float peak = 0.0f;
+        for (auto v : out) peak = jmax (peak, std::abs (v));
+        check (std::abs (peak - 0.5f) < 0.01f, "the source is heard once while the recording track monitors it (peak " + String (peak) + ")");
+
+        check (rec->clips.size() == 1, "the receiving track got a take");
+        if (! rec->clips.empty())
+        {
+            const auto& take = rec->clips[0];
+            const int want = 200 + engine.getGraphLatency();   // like a live MIDI performance: output + graph latency
+            check (take.sourceOffset == want, "take from a track skips output + graph latency (" + String (take.sourceOffset) + ", want " + String (want) + ")");
+            auto src = pool.get (take.file);
+            check (src != nullptr && src->numChannels == 2, "take from a track is stereo");
+            if (src != nullptr)
+            {
+                std::vector<float> buf ((size_t) src->lengthInSamples);
+                float* chans[1] = { buf.data() };
+                src->reader->read (chans, 1, 0, (int) buf.size());
+                int p = -1;
+                for (size_t k = 0; k < buf.size(); ++k)
+                    if (std::abs (buf[k]) > 0.4f) p = (int) k;
+                check (p == 13000, "the source's sound is in the take where it played (got " + String (p) + ", want 13000)");
+            }
+        }
+
+        // Saved and loaded; deleting the source clears the input.
+        Edit copy;
+        copy.loadFrom (edit.toVar (false), dir, [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        const auto loaded = copy.findTrack (rec->id);
+        check (loaded != nullptr && loaded->input.track == synth->id, "the input track is saved with the project");
+        rec->arm = false;
+        edit.removeTrack (synth->id);
+        check (rec->input.track == -1, "deleting the source track clears the input");
+        edit.removeTrack (rec->id);
+        for (auto& [t, m] : wasMuted)
+            t->mute = m;
+        engine.rebuild();
+    }
+
     std::cout << "Count-in" << std::endl;
     {
         auto rec = edit.addTrack (TrackKind::audio, "Rec");

@@ -152,6 +152,8 @@ void Edit::removeTrack (int trackId)
         if (t.output.kind == OutputRoute::Kind::bus && t.output.busId == trackId)
             t.output = {};
         t.sends.erase (std::remove_if (t.sends.begin(), t.sends.end(), [trackId] (auto& s) { return s->busId == trackId; }), t.sends.end());
+        if (t.input.track == trackId)
+            t.input.track = -1;   // took its input from the deleted track
     };
 
     for (auto& t : tracks) fixRouting (*t);
@@ -787,6 +789,8 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
         DynamicObject::Ptr in = new DynamicObject();
         in->setProperty ("channel", t.input.channel);
         in->setProperty ("stereo", t.input.stereo);
+        if (t.input.isTrack())
+            in->setProperty ("track", t.input.track);
         o->setProperty ("input", var (in.get()));
     }
 
@@ -868,6 +872,7 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
     {
         t->input.channel = (int) in["channel"];
         t->input.stereo = (bool) in["stereo"];
+        t->input.track = in.hasProperty ("track") ? (int) in["track"] : -1;
     }
 
     t->groupId = v.hasProperty ("group") ? (int) v["group"] : -1;

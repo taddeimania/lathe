@@ -90,6 +90,9 @@ struct RenderTrack
 
     int inputChannel = -1;
     bool inputStereo = false;
+    int inputTrack = -1;           // index in RenderGraph::tracks: record/monitor what that track plays
+    std::vector<int> receivers;    // tracks taking their input from this one
+    AudioBuffer<float> tap;        // this block's sound after plug-ins and EQ (when someone listens)
     int midiInput = -1;            // -1 = all devices, -2 = none, else device index
     MidiOutput* midiOut = nullptr;
     int midiChannel = 1;
@@ -132,6 +135,7 @@ struct RenderGraph
     int64 loopStart = 0, loopEnd = 0;
 
     std::vector<RenderTrack> tracks, buses;
+    std::vector<size_t> order;     // processing order of tracks: a track's input source comes first
     RenderTrack master;
     int trackLatency = 0, busLatency = 0, masterLatency = 0;
 
@@ -149,6 +153,7 @@ struct RecordTake
     std::unique_ptr<AudioFormatWriter::ThreadedWriter> writer;
     int channel = 0;
     bool stereo = false;
+    int offset = 0;              // samples to skip at the start (latency)
     int64 startSample = -1, numSamples = 0;
     bool overflow = false;
 };
@@ -708,6 +713,54 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
         });
     }
 
+    // --- tracks taking another track as their input. Sources are processed first; a
+    // loop (A from B, B from A) is cut where it closes.
+    {
+        std::map<int, size_t> indexOf;
+        for (size_t i = 0; i < g->tracks.size(); ++i)
+            indexOf[g->tracks[i].track->id] = i;
+        for (size_t i = 0; i < g->tracks.size(); ++i)
+        {
+            auto& rt = g->tracks[i];
+            if (! rt.track->isAudio() || ! rt.track->input.isTrack())
+                continue;
+            if (auto it = indexOf.find (rt.track->input.track); it != indexOf.end() && it->second != i)
+                rt.inputTrack = (int) it->second;
+        }
+
+        std::vector<int> state (g->tracks.size(), 0);   // 0 new, 1 visiting, 2 placed
+        std::function<void (size_t)> place = [&] (size_t i)
+        {
+            if (state[i] != 0)
+                return;
+            state[i] = 1;
+            auto& rt = g->tracks[i];
+            if (rt.inputTrack >= 0)
+            {
+                if (state[(size_t) rt.inputTrack] == 1)
+                    rt.inputTrack = -1;                  // closes a loop
+                else
+                    place ((size_t) rt.inputTrack);
+            }
+            state[i] = 2;
+            g->order.push_back (i);
+        };
+        for (size_t i = 0; i < g->tracks.size(); ++i)
+            place (i);
+
+        for (size_t i = 0; i < g->tracks.size(); ++i)
+            if (const int src = g->tracks[i].inputTrack; src >= 0)
+            {
+                auto& s = g->tracks[(size_t) src];
+                s.receivers.push_back ((int) i);
+                if (s.tap.getNumSamples() == 0)
+                {
+                    s.tap.setSize (2, bs);
+                    s.tap.clear();
+                }
+            }
+    }
+
     // --- plug-in delay compensation
     for (auto& rt : g->tracks) g->trackLatency = jmax (g->trackLatency, rt.latency);
     for (auto& rt : g->buses)  g->busLatency = jmax (g->busLatency, rt.latency);
@@ -935,16 +988,37 @@ void Engine::startRecording()
 
         if (t->isAudio())
         {
-            if (t->input.channel < 0 || t->input.channel >= numDeviceInputs)
-            {
-                status (t->name + " has no input selected, so it won't record.");
-                continue;
-            }
-
             auto take = std::make_unique<RecordTake>();
             take->track = t;
-            take->channel = t->input.channel;
-            take->stereo = t->input.stereo && t->input.channel + 1 < numDeviceInputs;
+
+            if (t->input.isTrack())
+            {
+                // Another track's sound, taken inside Lathe: no interface latency. Line it up
+                // the way a live MIDI performance is (you play to what you hear), plus the
+                // source's own plug-in latency.
+                const RenderTrack* src = nullptr;
+                for (auto& rt : graph->tracks)
+                    if (rt.track->id == t->input.track)
+                        src = &rt;
+                if (src == nullptr)
+                {
+                    status (t->name + " takes its input from a track that isn't there anymore, so it won't record.");
+                    continue;
+                }
+                take->stereo = true;
+                take->offset = session->midiOffset + src->latency;
+            }
+            else
+            {
+                if (t->input.channel < 0 || t->input.channel >= numDeviceInputs)
+                {
+                    status (t->name + " has no input selected, so it won't record.");
+                    continue;
+                }
+                take->channel = t->input.channel;
+                take->stereo = t->input.stereo && t->input.channel + 1 < numDeviceInputs;
+                take->offset = session->audioOffset;
+            }
 
             int takeNumber = 1;
             for (auto& c : t->clips)
@@ -1038,7 +1112,7 @@ void Engine::finishRecording()
     {
         take->writer.reset();   // flushes to disk
 
-        const int64 usable = take->numSamples - session->audioOffset;
+        const int64 usable = take->numSamples - take->offset;
         if (take->startSample < 0 || usable <= 0)
         {
             take->file.deleteFile();
@@ -1053,7 +1127,7 @@ void Engine::finishRecording()
         c.kind = ClipKind::audio;
         c.name = take->file.getFileNameWithoutExtension();
         c.file = take->file;
-        c.sourceOffset = session->audioOffset;
+        c.sourceOffset = take->offset;
         c.start = (double) take->startSample / spb;
         c.length = (double) usable / spb;
 
@@ -1269,8 +1343,8 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
             c.sum.clear (0, len);
         }
 
-    for (auto& rt : g.tracks)
-        processTrack (g, rt, pos, len, offset, rolling, inDev, numIn, outDev, numOut, realtime, notesOff, anySoloTrack);
+    for (auto i : g.order)
+        processTrack (g, g.tracks[i], pos, len, offset, rolling, inDev, numIn, outDev, numOut, realtime, notesOff, anySoloTrack);
 
     if (realtime)
         for (auto& c : g.cues)
@@ -1432,17 +1506,45 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
 
     const bool recordingHere = realtime && rolling && recording.load() && (rt.take != nullptr || rt.midiTake != nullptr);
     const int mon = t.monitor.load();
-    const bool monitorInput = realtime && (mon == (int) Monitor::in || (mon == (int) Monitor::automatic && t.arm.load()));
+    bool monitorInput = realtime && (mon == (int) Monitor::in || (mon == (int) Monitor::automatic && t.arm.load()));
+    // Feeding an armed track (an audio track taking this one as its input): play live, as if
+    // armed, so you can perform into the recording without also recording here.
+    // While a receiving track monitors this one you hear it there, so it's silent here
+    // (otherwise it would play twice).
+    bool heardElsewhere = false;
+    if (realtime)
+        for (int r : rt.receivers)
+        {
+            auto& rcv = *g.tracks[(size_t) r].track;
+            const int rmon = rcv.monitor.load();
+            if (rmon == (int) Monitor::in || (rmon == (int) Monitor::automatic && rcv.arm.load()))
+                heardElsewhere = true;
+            if (rcv.arm.load() || rmon == (int) Monitor::in)
+                monitorInput = monitorInput || mon == (int) Monitor::automatic;
+        }
 
     if (rt.kind == TrackKind::audio)
     {
         if (rolling && ! recordingHere)
             renderClips (g, rt, pos, len);
 
-        if (realtime && (monitorInput || recordingHere) && rt.inputChannel >= 0)
+        if (realtime && (monitorInput || recordingHere) && (rt.inputChannel >= 0 || rt.inputTrack >= 0))
         {
-            const float* left = rt.inputChannel < numIn ? inDev[rt.inputChannel] : nullptr;
-            const float* right = rt.inputStereo ? (rt.inputChannel + 1 < numIn ? inDev[rt.inputChannel + 1] : nullptr) : left;
+            // From another track (already processed this block), or from the interface.
+            const float* left = nullptr;
+            const float* right = nullptr;
+            if (rt.inputTrack >= 0)
+            {
+                const auto& src = g.tracks[(size_t) rt.inputTrack].tap;
+                left = src.getReadPointer (0);
+                right = src.getReadPointer (1);
+            }
+            else
+            {
+                left = rt.inputChannel < numIn && inDev[rt.inputChannel] != nullptr ? inDev[rt.inputChannel] + offset : nullptr;
+                right = rt.inputStereo ? (rt.inputChannel + 1 < numIn && inDev[rt.inputChannel + 1] != nullptr ? inDev[rt.inputChannel + 1] + offset : nullptr)
+                                       : left;
+            }
 
             if (recordingHere && rt.take != nullptr && rt.take->writer != nullptr)
             {
@@ -1450,8 +1552,8 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
                 if (take->startSample < 0)
                     take->startSample = pos;
 
-                const float* data[2] = { left != nullptr ? left + offset : zeros.get(),
-                                         right != nullptr ? right + offset : zeros.get() };
+                const float* data[2] = { left != nullptr ? left : zeros.get(),
+                                         right != nullptr ? right : zeros.get() };
                 if (! take->writer->write (data, len))
                     take->overflow = true;
                 take->numSamples += len;
@@ -1459,8 +1561,8 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
 
             if (monitorInput)
             {
-                if (left != nullptr)  buf.addFrom (0, 0, left + offset, len);
-                if (right != nullptr) buf.addFrom (1, 0, right + offset, len);
+                if (left != nullptr)  buf.addFrom (0, 0, left, len);
+                if (right != nullptr) buf.addFrom (1, 0, right, len);
             }
         }
     }
@@ -1534,6 +1636,9 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
     }
 
     t.rtEq.process (t.eq, buf, len, g.sampleRate);
+    if (! rt.receivers.empty())
+        for (int ch = 0; ch < 2; ++ch)
+            rt.tap.copyFrom (ch, 0, buf, ch, 0, len);
     rt.align.process (buf, len);
 
     if (realtime && ! g.cues.empty())
@@ -1545,10 +1650,11 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
     }
 
     const bool groupMuted = rt.group != nullptr && rt.group->mute.load();
-    const bool soloed = t.solo.load() || (rt.group != nullptr && rt.group->solo.load());
+    const bool soloed = t.solo.load() || (rt.group != nullptr && rt.group->solo.load())
+                        || (rt.inputTrack >= 0 && g.tracks[(size_t) rt.inputTrack].track->solo.load());   // solo the source: hear it here
     // Exporting some tracks: exactly those play, whatever mute and solo say.
     const bool silenced = (! realtime && ! exportOnly.empty()) ? exportOnly.count (t.id) == 0
-                                                               : (t.mute.load() || groupMuted || (anySolo && ! soloed));
+                                                               : (t.mute.load() || groupMuted || (anySolo && ! soloed) || heardElsewhere);
 
     if (! silenced)
     {

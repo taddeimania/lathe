@@ -158,6 +158,12 @@ Notes:
 - Takes are shifted by the round-trip latency the driver reports, plus any plug-in latency, so they land in time. If your setup still lands early or late, adjust **Recording offset** in Settings. To measure it, record a click through a cable from an output back into an input.
 - A new take replaces whatever was underneath it on that track. Undo (Cmd/Ctrl+Z) brings the old material back.
 - MIDI tracks record notes, CC, and pitch bend from any MIDI input (or the one you pick). To play hardware from a MIDI track, set **MIDI to** in the mixer, for example to the UMC's MIDI OUT.
+- **Recording one track into another** (an instrument with its effects, played live, as audio):
+  1. Put the instrument and any effects on a MIDI track. Leave it unarmed; it doesn't need clips (a generator that plays by itself works too).
+  2. On an audio track, open the input box and pick that track under **From a track** (e.g. "From MIDI 1").
+  3. Arm the audio track. The MIDI track now plays your keyboard live, and you hear it through the audio track (not twice), so the audio track's fader sets how loud it is.
+  4. Record. The audio track gets what the instrument played after its plug-ins and EQ (before its fader, mute and solo), in stereo, lined up the way a MIDI recording is.
+  Arm the MIDI track too if you also want the notes. Any audio or MIDI track can be the source, so you can resample an audio track through its effects the same way.
 
 ## Track groups
 
@@ -174,7 +180,7 @@ Double-click any track or group name to rename it in place (Return keeps, Escape
 
 ## Routing
 
-- **Inputs**: any mono input (In 1…18) or stereo pair. On the UMC1820, 1–8 are the preamps, 9–10 are S/PDIF, and 11–18 are ADAT (at 44.1 or 48 kHz).
+- **Inputs**: any mono input (In 1…18) or stereo pair, or **another track** (see Recording). On the UMC1820, 1–8 are the preamps, 9–10 are S/PDIF, and 11–18 are ADAT (at 44.1 or 48 kHz).
 - **Outputs**: each track goes to Master, to a return, or straight to an interface output. On the UMC1820, outputs 1/2 are MAIN OUT and 3–10 are the line outs, which work for re-amping or outboard gear. The master goes to whichever output pair you choose (1/2 by default).
 - **Sends**: every audio and MIDI track has one send knob per return track (A, B, …), post-fader by default.
 - **Plug-in delay compensation** is automatic, including in exports.

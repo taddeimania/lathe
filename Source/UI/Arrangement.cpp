@@ -41,7 +41,7 @@ public:
         for (auto* b : { &arm, &solo, &mute })
             addAndMakeVisible (b);
 
-        input.setTooltip (track->isMidi() ? "MIDI input" : "Audio input from your interface");
+        input.setTooltip (track->isMidi() ? "MIDI input" : "Audio input: your interface, or another track (to record an instrument with its effects)");
         input.onChange = [this]
         {
             if (track->isMidi())
@@ -85,14 +85,14 @@ public:
 
         // Refill the input list only when the choices could have changed.
         const auto key = track->isMidi() ? ctx.engine.getMidiInputNames().joinIntoString ("|") + track->midiInput
-                                         : String (ctx.engine.getInputChannelNames().size()) + ":" + String (track->input.channel) + (track->input.stereo ? "s" : "m");
+                                         : audioInputKey (ctx.edit, *track, ctx.engine.getInputChannelNames().size());
         if (key != inputKey)
         {
             inputKey = key;
             if (track->isMidi())
                 fillMidiInputs (input, *track, ctx.engine.getMidiInputNames());
             else
-                fillAudioInputs (input, *track, ctx.engine.getInputChannelNames().size());
+                fillAudioInputs (input, ctx.edit, *track, ctx.engine.getInputChannelNames().size());
         }
         repaint();
     }
@@ -1349,7 +1349,6 @@ void ArrangementView::refresh()
             headerHolder.addChildComponent (headers.add (new Header (*this, t)));
         for (auto& g : ctx.edit.groups)
             headerHolder.addChildComponent (groupHeaders.add (new GroupHeader (*this, g)));
-        resized();
     }
 
     layoutRows();
@@ -1536,6 +1535,9 @@ void ArrangementView::resized()
     vbar.setBounds (r.removeFromRight (10));
     auto left = r.removeFromLeft (theme::headerWidth);
     lanes->setBounds (r);
+    // Clamp the scroll position to this content first: after switching to a shorter
+    // project the old position would put every header out of sight.
+    updateScrollBars();
 
     auto buttons = left.removeFromBottom (32).reduced (8, 5);
     addAudioButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 2));

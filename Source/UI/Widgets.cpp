@@ -113,21 +113,66 @@ void LevelMeter::paint (Graphics& g)
 }
 
 //==============================================================================
-String describeInput (const Track& t)
+namespace
+{
+constexpr int kFromTrackBase = 1000000;   // + track id
+
+const Track* findAnyTrack (const Edit& edit, int id)
+{
+    for (auto& t : edit.tracks)
+        if (t->id == id)
+            return t.get();
+    return nullptr;
+}
+
+bool canFeed (const Track& source, const Track& to)
+{
+    return source.id != to.id && source.holdsClips();
+}
+} // namespace
+
+String describeInput (const Track& t, const Edit* edit)
 {
     if (t.isMidi())
         return t.midiInput == "All" ? String ("All MIDI") : t.midiInput == "None" ? String ("No MIDI") : t.midiInput;
 
+    if (t.input.isTrack())
+    {
+        const auto* src = edit != nullptr ? findAnyTrack (*edit, t.input.track) : nullptr;
+        return src != nullptr ? "From " + src->name : String ("From a track");
+    }
     if (t.input.channel < 0)
         return "No input";
     return t.input.stereo ? "In " + String (t.input.channel + 1) + "/" + String (t.input.channel + 2)
                           : "In " + String (t.input.channel + 1);
 }
 
-void fillAudioInputs (ComboBox& box, const Track& t, int numInputs)
+String audioInputKey (const Edit& edit, const Track& t, int numInputs)
+{
+    String key;
+    key << numInputs << ":" << t.input.channel << (t.input.stereo ? "s" : "m") << t.input.track << "|";
+    for (auto& o : edit.tracks)
+        if (canFeed (*o, t))
+            key << o->id << "=" << o->name << ",";
+    return key;
+}
+
+void fillAudioInputs (ComboBox& box, const Edit& edit, const Track& t, int numInputs)
 {
     box.clear (dontSendNotification);
     box.addItem ("No input", 1);
+
+    // Another track's sound (an instrument with its effects, say), taken inside Lathe.
+    bool anyTrack = false;
+    for (auto& o : edit.tracks)
+    {
+        if (! canFeed (*o, t))
+            continue;
+        if (! anyTrack)
+            box.addSectionHeading ("From a track");
+        anyTrack = true;
+        box.addItem ("From " + o->name, kFromTrackBase + o->id);
+    }
 
     if (numInputs > 0)
     {
@@ -144,7 +189,13 @@ void fillAudioInputs (ComboBox& box, const Track& t, int numInputs)
     }
 
     int selected = 1;
-    if (t.input.channel >= 0)
+    if (t.input.isTrack())
+    {
+        selected = kFromTrackBase + t.input.track;
+        if (box.indexOfItemId (selected) < 0)
+            box.addItem ("From a deleted track", selected);
+    }
+    else if (t.input.channel >= 0)
     {
         selected = (t.input.stereo ? 1000 : 100) + t.input.channel;
         if (box.indexOfItemId (selected) < 0)
@@ -156,6 +207,8 @@ void fillAudioInputs (ComboBox& box, const Track& t, int numInputs)
 void applyAudioInput (ComboBox& box, Track& t)
 {
     const int id = box.getSelectedId();
+    if (id >= kFromTrackBase) { t.input.track = id - kFromTrackBase; return; }   // keeps the interface input for later
+    t.input.track = -1;
     if (id == 1)          { t.input.channel = -1; t.input.stereo = false; }
     else if (id >= 1000)  { t.input.channel = id - 1000; t.input.stereo = true; }
     else if (id >= 100)   { t.input.channel = id - 100; t.input.stereo = false; }

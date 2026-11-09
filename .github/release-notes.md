@@ -3,6 +3,19 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.5.5
+
+- **Record a track into an audio track.** An audio track's input can now be
+  another track (**From a track**, at the top of the input box). Put an
+  instrument and its effects on a MIDI track, pick it as an audio track's input,
+  arm the audio track and play: you record the instrument's sound, live, as
+  audio. The instrument plays your keyboard without being armed itself, and you
+  hear it once, through the audio track.
+- Fixed: after **New Project** from a big, scrolled-down project, the new
+  project's track names didn't show until you clicked somewhere.
+- Lathe now connects only to Lathe Cloud: **Cloud > Cloud Settings** is gone.
+- Clearer messages when something isn't available on Lathe Cloud yet.
+
 ## New in 0.5.4
 
 - **Notes work offline.** No internet (or the cloud is down)? Add notes, reply,
@@ -12,8 +25,6 @@ a mix and stems. It doesn't try to do everything else.
 - **You can see when notes aren't syncing.** The Notes button says **Notes
   offline** (hover it for why), the Notes window says how many changes are
   waiting, and the status bar tells you when it stops and starts again.
-- Clearer messages when something isn't available on Lathe Cloud yet.
-- Lathe now connects only to Lathe Cloud: **Cloud > Cloud Settings** is gone.
 
 ## New in 0.5.3
 

@@ -215,6 +215,8 @@ public:
         for (auto& b : ctx.edit.buses)
             key << b->id << b->name << ",";
         key << (cueMaster ? "cue" + String (cue->channel.load()) : String()) << "|";
+        if (track->isAudio())
+            key << audioInputKey (ctx.edit, *track, ctx.engine.getInputChannelNames().size());
         key << track->input.channel << (track->input.stereo ? 1 : 0) << track->midiInput << track->midiOutput
             << (int) track->output.kind << track->output.busId << track->output.channel << (track->output.stereo ? 1 : 0);
 
@@ -228,7 +230,7 @@ public:
             }
             else if (track->isAudio())
             {
-                fillAudioInputs (input, *track, ctx.engine.getInputChannelNames().size());
+                fillAudioInputs (input, ctx.edit, *track, ctx.engine.getInputChannelNames().size());
             }
             if (cueMaster)
             {

@@ -169,8 +169,11 @@ private:
 
 //==============================================================================
 // Routing selectors. Item ids encode the choice; apply*() writes it to the track.
-void fillAudioInputs (ComboBox&, const Track&, int numDeviceInputs);
+/** Device inputs, then "From a track": the other audio/MIDI tracks (record what they play). */
+void fillAudioInputs (ComboBox&, const Edit&, const Track&, int numDeviceInputs);
 void applyAudioInput (ComboBox&, Track&);
+/** Changes whenever the audio input choices or the current one could have. */
+String audioInputKey (const Edit&, const Track&, int numDeviceInputs);
 void fillOutputs (ComboBox&, const Edit&, const Track&, int numDeviceOutputs);
 void applyOutput (ComboBox&, Track&, const Edit&);
 void fillMidiInputs (ComboBox&, const Track&, const StringArray& deviceNames);
@@ -178,8 +181,8 @@ void applyMidiInput (ComboBox&, Track&, const StringArray& deviceNames);
 void fillMidiOutputs (ComboBox&, const Track&, const StringArray& deviceNames);
 void applyMidiOutput (ComboBox&, Track&, const StringArray& deviceNames);
 
-/** Short label for a track's input, e.g. "In 3" or "In 1/2". */
-String describeInput (const Track&);
+/** Short label for a track's input, e.g. "In 3", "In 1/2" or "From Synth". */
+String describeInput (const Track&, const Edit* = nullptr);
 
 //==============================================================================
 // Plug-in actions shared by the mixer and the device chain.
