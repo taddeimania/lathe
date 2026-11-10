@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.7.1
+
+- **Lathe picks your audio interface on first run**, whichever brand it is: the
+  device with the most inputs (ASIO on Windows, Core Audio on the Mac), with all
+  its channels on. Before, it only looked for one maker's interfaces.
+- The eight-input tracking template is now called **8-Input Tracking**.
+
 ## New in 0.7.0
 
 - **AI assistant connection (MCP).** Let an AI app on your computer, like Claude
@@ -260,8 +267,7 @@ notarized, so the first time, right-click it and choose **Open** (or run
 access when asked, or nothing will record.
 
 **Windows**: unzip anywhere and keep `Lathe.exe` and `LatheScanner.exe`
-together in the same folder. For the Behringer UMC1820, install its driver from
-behringer.com first and choose the ASIO driver in **Options > Audio / MIDI
-Settings**. SmartScreen may warn the first time: **More info > Run anyway**.
+together in the same folder. Install your audio interface's driver from its
+maker first and choose its ASIO driver in **Options > Audio / MIDI Settings**. SmartScreen may warn the first time: **More info > Run anyway**.
 
 **Linux**: unpack and run `./Lathe`, keeping `LatheScanner` next to it.

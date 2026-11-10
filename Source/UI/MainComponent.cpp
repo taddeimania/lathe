@@ -277,7 +277,7 @@ void MainComponent::deleteTemplate (const File& f)
             return;
         }
         // Keep a deleted built-in from coming back next time Lathe starts.
-        if (name == "Basic" || name == "UMC1820 Tracking")
+        if (name == "Basic" || name == "8-Input Tracking")
         {
             auto hidden = StringArray::fromLines (props.getValue ("hiddenTemplates"));
             hidden.addIfNotAlreadyThere (name);
@@ -322,9 +322,9 @@ void MainComponent::ensureBuiltInTemplates()
         e.addTrack (TrackKind::bus, "B Delay");
     });
 
-    // All eight UMC1820 preamps on their own tracks, monitored through the
-    // interface's MONITORING knob (zero latency) rather than through Lathe.
-    writeTemplate ("UMC1820 Tracking", [] (Edit& e)
+    // Eight inputs on their own tracks, monitored through the interface's own
+    // direct monitoring (zero latency) rather than through Lathe.
+    writeTemplate ("8-Input Tracking", [] (Edit& e)
     {
         for (int i = 0; i < 8; ++i)
         {

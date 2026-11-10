@@ -23,7 +23,7 @@ The first configure downloads JUCE, which takes a minute. macOS asks for microph
 
 ### Windows
 
-You need Visual Studio 2022 (with "Desktop development with C++") and CMake. Install the **Behringer UMC1820 driver** from behringer.com first, since its ASIO driver is what gives low latency.
+You need Visual Studio 2022 (with "Desktop development with C++") and CMake. Install your audio interface's driver from its maker first, since its ASIO driver is what gives low latency.
 
 ```bat
 cd lathe
@@ -57,11 +57,11 @@ These are headless engine checks that run a fake audio device through the real a
 
 ## First run
 
-1. **Audio device.** On first launch Lathe looks for a UMC or Behringer device and selects it: ASIO on Windows, CoreAudio on Mac, 128-sample buffer, all channels on. If it picks the wrong thing, click the device name at the top right (or **Options > Audio / MIDI Settings**). Your choice is saved and restored on every launch. If the interface is unplugged while Lathe runs, Lathe keeps trying to reconnect to it.
+1. **Audio device.** On first launch Lathe picks your audio interface (the device with the most inputs) and selects it: ASIO on Windows, CoreAudio on Mac, 128-sample buffer, all channels on. If it picks the wrong thing, click the device name at the top right (or **Options > Audio / MIDI Settings**). Your choice is saved and restored on every launch. If the interface is unplugged while Lathe runs, Lathe keeps trying to reconnect to it.
 2. **Plug-ins.** On first launch Lathe scans the standard VST3 folders in the background, and you can keep working while it does. Each plug-in is opened by a small helper program, `LatheScanner`, which the build places next to Lathe. If a plug-in crashes or hangs (more than a minute) while it's being checked, only the helper dies: Lathe skips that plug-in and says so in the status bar. Settings lists the skipped plug-ins and has **Retry skipped plug-ins** for after you update one. VCV Rack 2's VST3 is a known example: it crashes when unloaded straight after loading.
 3. **Templates.** Two templates are created in `Documents/Lathe/Templates`:
    - **Basic**: two audio tracks (inputs 1 and 2), one MIDI track, two returns.
-   - **UMC1820 Tracking**: eight mono tracks on preamps 1–8, a MIDI track, and two returns. Monitoring is **Off** on these tracks, so you hear yourself through the UMC's **MONITORING** knob with zero latency (set it toward IN or MIX).
+   - **8-Input Tracking**: eight mono tracks on inputs 1–8, a MIDI track, and two returns. Monitoring is **Off** on these tracks, so you hear yourself through your interface's direct monitoring with zero latency.
 
 Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use **File > Save as Template**. In Settings you can choose to open the last project or start from your default template on launch.
 
@@ -166,7 +166,7 @@ Notes:
 - **Count-in**: click the arrow next to **Click** (or right-click the record button) and choose 1, 2 or 4 bars. When it's on, the record button shows the number of bars. Pressing record from a stop then clicks that many bars (accent on each downbeat, whether or not the metronome is on) and records from the downbeat. The counter shows the beats left, and armed inputs are monitored so you can play along. Recording while playing punches in at once. Stop (or record again) during the count-in cancels it.
 - Takes are shifted by the round-trip latency the driver reports, plus any plug-in latency, so they land in time. If your setup still lands early or late, adjust **Recording offset** in Settings. To measure it, record a click through a cable from an output back into an input.
 - A new take replaces whatever was underneath it on that track. Undo (Cmd/Ctrl+Z) brings the old material back.
-- MIDI tracks record notes, CC, and pitch bend from any MIDI input (or the one you pick). To play hardware from a MIDI track, set **MIDI to** in the mixer, for example to the UMC's MIDI OUT.
+- MIDI tracks record notes, CC, and pitch bend from any MIDI input (or the one you pick). To play hardware from a MIDI track, set **MIDI to** in the mixer, for example to your interface's MIDI OUT.
 - **Recording one track into another** (an instrument with its effects, played live, as audio):
   1. Put the instrument and any effects on a MIDI track. Leave it unarmed; it doesn't need clips (a generator that plays by itself works too).
   2. On an audio track, open the input box and pick that track under **From a track** (e.g. "From MIDI 1").
@@ -192,8 +192,8 @@ Double-click any track or group name to rename it in place (Return keeps, Escape
 
 ## Routing
 
-- **Inputs**: any mono input (In 1…18) or stereo pair, or **another track** (see Recording). On the UMC1820, 1–8 are the preamps, 9–10 are S/PDIF, and 11–18 are ADAT (at 44.1 or 48 kHz).
-- **Outputs**: each track goes to Master, to a return, or straight to an interface output. On the UMC1820, outputs 1/2 are MAIN OUT and 3–10 are the line outs, which work for re-amping or outboard gear. The master goes to whichever output pair you choose (1/2 by default).
+- **Inputs**: any mono input (In 1, In 2, …) or stereo pair your interface has, or **another track** (see Recording).
+- **Outputs**: each track goes to Master, to a return, or straight to an interface output, which works for re-amping or outboard gear. The master goes to whichever output pair you choose (1/2 by default).
 - **Sends**: every audio and MIDI track has one send knob per return track (A, B, …), post-fader by default.
 - **Plug-in delay compensation** is automatic, including in exports.
 
@@ -201,7 +201,7 @@ Double-click any track or group name to rename it in place (Return keeps, Escape
 
 A monitor mix is a second mix of the same channels, on its own pair of outputs. For example, you can have hi-hats on the left in your in-ears while they sit on the right in the main mix.
 
-- In the mixer, click **+ Monitor mix**. It starts as a copy of the main mix and goes to the first free output pair (3/4 on the UMC1820, the line outs your in-ear or headphone amp plugs into).
+- In the mixer, click **+ Monitor mix**. It starts as a copy of the main mix and goes to the first free output pair (3/4 on most interfaces, where your in-ear or headphone amp plugs in).
 - Switch between **Main** and your monitor mixes with the tabs above the strips. In a monitor mix:
   - The faders, pans and mute buttons set that mix's own levels. The faders and the strip edges turn the mix's colour so you know which mix you're editing.
   - The master strip becomes the mix's volume, output pair and mute.

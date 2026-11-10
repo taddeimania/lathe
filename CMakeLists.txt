@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.7.0 LANGUAGES C CXX)
+project(Lathe VERSION 0.7.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +30,7 @@ else()
 endif()
 
 # --- ASIO (Windows) -------------------------------------------------------------
-# The UMC1820's low-latency Windows driver is ASIO. Steinberg's ASIO SDK is
+# Most audio interfaces' low-latency Windows driver is ASIO. Steinberg's ASIO SDK is
 # GPLv3 since Oct 2025; it is fetched automatically. To use your own copy:
 #   -DLATHE_ASIO_SDK_DIR=C:/path/to/asiosdk   (the folder that holds common/)
 # To build without ASIO (WASAPI / DirectSound only): -DLATHE_ASIO=OFF

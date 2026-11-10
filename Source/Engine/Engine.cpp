@@ -244,35 +244,39 @@ void Engine::openDevice()
 
     if (saved == nullptr)
     {
-        // First run: look for the UMC (or any Behringer) interface and use it,
-        // preferring ASIO on Windows.
-        auto& types = deviceManager.getAvailableDeviceTypes();
-        for (int pass = 0; pass < 2; ++pass)
+        // First run: pick the audio interface, meaning the device (ASIO on Windows, Core Audio
+        // on the Mac) with the most inputs, if it has more than a laptop's built-in mic. Use all
+        // its channels at a 128-sample buffer. Otherwise keep the system default.
+        String bestType, bestName;
+        int bestInputs = 2;
+        for (auto* type : deviceManager.getAvailableDeviceTypes())
         {
-            for (auto* type : types)
+            if (type->getTypeName() != "ASIO" && type->getTypeName() != "CoreAudio")
+                continue;
+            type->scanForDevices();
+            for (auto& name : type->getDeviceNames (true))
             {
-                if (pass == 0 && type->getTypeName() != "ASIO" && type->getTypeName() != "CoreAudio")
-                    continue;
-
-                type->scanForDevices();
-                for (auto& name : type->getDeviceNames())
+                std::unique_ptr<AudioIODevice> probe (type->createDevice (name, name));
+                const int inputs = probe != nullptr ? probe->getInputChannelNames().size() : 0;
+                if (inputs > bestInputs)
                 {
-                    if (name.containsIgnoreCase ("UMC") || name.containsIgnoreCase ("BEHRINGER"))
-                    {
-                        deviceManager.setCurrentAudioDeviceType (type->getTypeName(), true);
-                        auto setup = deviceManager.getAudioDeviceSetup();
-                        setup.inputDeviceName = setup.outputDeviceName = name;
-                        setup.useDefaultInputChannels = setup.useDefaultOutputChannels = false;
-                        setup.inputChannels.setRange (0, 256, true);
-                        setup.outputChannels.setRange (0, 256, true);
-                        setup.bufferSize = 128;
-                        deviceManager.setAudioDeviceSetup (setup, true);
-                        pass = 2;
-                        break;
-                    }
+                    bestInputs = inputs;
+                    bestType = type->getTypeName();
+                    bestName = name;
                 }
-                if (pass == 2) break;
             }
+        }
+
+        if (bestName.isNotEmpty())
+        {
+            deviceManager.setCurrentAudioDeviceType (bestType, true);
+            auto setup = deviceManager.getAudioDeviceSetup();
+            setup.inputDeviceName = setup.outputDeviceName = bestName;
+            setup.useDefaultInputChannels = setup.useDefaultOutputChannels = false;
+            setup.inputChannels.setRange (0, 256, true);
+            setup.outputChannels.setRange (0, 256, true);
+            setup.bufferSize = 128;
+            deviceManager.setAudioDeviceSetup (setup, true);
         }
     }
 

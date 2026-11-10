@@ -36,7 +36,7 @@ public:
 
     AudioDeviceManager deviceManager;
 
-    /** Opens the saved audio device, or looks for a UMC interface on first run. */
+    /** Opens the saved audio device, or on first run the interface with the most inputs. */
     void openDevice();
     void saveDeviceSettings();
 

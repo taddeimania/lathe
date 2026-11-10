@@ -95,7 +95,7 @@ public:
         if (track->isMidi())
         {
             midiOut.onChange = [this] { applyMidiOutput (midiOut, *track, ctx.engine.getMidiOutputNames()); ctx.edit.changed(); };
-            midiOut.setTooltip ("Send this track's MIDI to a hardware port (e.g. the UMC's MIDI OUT)");
+            midiOut.setTooltip ("Send this track's MIDI to a hardware port (e.g. your interface's MIDI OUT)");
             addAndMakeVisible (midiOut);
         }
 

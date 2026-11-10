@@ -74,7 +74,7 @@ jobs:
             libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
             libxinerama-dev libxrandr-dev libxrender-dev libcurl4-openssl-dev
 
-      # Windows: the ASIO SDK (for the UMC1820's ASIO driver) is fetched by CMake.
+      # Windows: the ASIO SDK (for audio interfaces' ASIO drivers) is fetched by CMake.
       - name: Configure
         run: |
           extra=()
