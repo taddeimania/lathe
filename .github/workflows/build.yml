@@ -97,10 +97,56 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      # macOS: sign with a Developer ID and notarize, so the app opens with a double-click
+      # (no "unidentified developer" warning, no xattr). Skipped until the secrets exist:
+      # MACOS_CERT_P12 (base64 .p12), MACOS_CERT_PASSWORD, MACOS_SIGN_IDENTITY,
+      # NOTARY_KEY_P8 (base64 .p8), NOTARY_KEY_ID, NOTARY_ISSUER_ID.
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then
+            echo "No signing secrets: leaving the ad-hoc signature (users must right-click > Open the first time)."
+            exit 0
+          fi
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          kpass="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kpass" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$kpass" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kpass" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          app=build/Lathe_artefacts/Release/Lathe.app
+          ents=Resources/Lathe.entitlements
+          sign() { codesign --force --timestamp --options runtime --sign "$MACOS_SIGN_IDENTITY" "$@"; }
+          # Inside out: helpers first, then the app around them.
+          sign "$app/Contents/Helpers/LathePatcher.app"
+          sign "$app/Contents/MacOS/LatheMCP"
+          sign --entitlements "$ents" "$app/Contents/MacOS/LatheScanner"
+          sign --entitlements "$ents" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+          xcrun stapler staple "$app"
+          spctl --assess --type execute --verbose "$app"
+
       # Package the app ourselves so file permissions and the macOS signature
       # survive the download. LatheScanner (the plug-in scan helper), LatheMCP
       # (the AI assistant bridge) and LathePatcher (the updater) must ship with
-      # Lathe, so check they're there.
+      # Lathe, so check they're there. docs/ (the user guide) goes in beside them.
       - name: Package
         run: |
           version=$(sed -n 's/^project(Lathe VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
@@ -122,6 +168,7 @@ jobs:
               cp "$art/Lathe" "$art/LatheScanner" "$art/LatheMCP" "$art/LathePatcher" "$stage/" ;;
           esac
           cp README.md LICENSE "$stage/"
+          cp -R docs "$stage/docs"   # the user guide (Markdown), until it's on getlathe.app
           case "$RUNNER_OS" in
             macOS)
               ditto -c -k --sequesterRsrc --keepParent "$stage" "$GITHUB_WORKSPACE/$name.zip"
