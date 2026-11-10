@@ -13,5 +13,7 @@ How to use Lathe, and how it's put together. Start with **Getting started**.
 | [Updating Lathe](updating.md) | Lathe Patcher and the automatic update check |
 | [Project files](project-files.md) | What's in a project folder, saves, autosave and recovery |
 | [Code map](code-map.md) | For contributors: where things live in `Source/`, and the audio-thread rules |
+| [Follow-up: explicit state machines](state-machines.md) | For contributors: a planned refactor, not started |
+| [Plan: multi-core audio](multicore.md) | For contributors: spreading tracks over the CPU cores |
 
 These pages live with the code: a change that alters how Lathe behaves updates its page in the same commit.
