@@ -76,6 +76,8 @@ var Tools::call (const String& name, const var& args, String& status)
         return play (args, status);
     if (name == "stop")
         return stop (status);
+    if (name == "set_loop")
+        return setLoop (args, status);
 
     return toolText ("Unknown tool: " + name, true);
 }
@@ -207,6 +209,10 @@ var Tools::describeSession() const
     set (loop, "from_bar", rounded (toBar (edit.loopStart), 0.01));
     set (loop, "to_bar", rounded (toBar (edit.loopEnd), 0.01));
     set (transport, "loop", loop);
+    if (const double at = engine.getAutoStopBeats(); at >= 0.0)
+        set (transport, "stops_at_bar", rounded (toBar (at), 0.01));
+    if (const int passes = engine.getLoopPassesLeft(); passes > 0)
+        set (transport, "loop_passes_left", passes);
     set (o, "transport", transport);
 
     var device = obj();
@@ -472,37 +478,135 @@ var Tools::getNotes (const var& args) const
     return toolText (JSON::toString (o, true));
 }
 
+String Tools::barText (double beats) const
+{
+    return String (toBar (beats), 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+}
+
 var Tools::play (const var& args, String& status)
 {
     if (engine.isRecording() || engine.isCountingIn())
         return toolText ("Lathe is recording. Stop first (the stop tool keeps the take).", true);
 
-    const bool jump = args.hasProperty ("from_bar") && ! args["from_bar"].isVoid();
-    if (jump)
+    auto given = [&args] (const char* k) { return args.hasProperty (k) && ! args[k].isVoid(); };
+    const bool hasFrom = given ("from_bar"), hasTo = given ("to_bar"), hasTimes = given ("loop_times");
+    const bool loopOn = edit.loopEnabled && edit.loopEnd > edit.loopStart;
+    const auto loopText = "bars " + barText (edit.loopStart) + " to " + barText (edit.loopEnd);
+
+    if (hasTo && hasTimes)
+        return toolText ("Use to_bar or loop_times, not both.", true);
+
+    double startBeats = engine.isPlaying() ? engine.getPlayheadBeats() : edit.insertMarker;
+    if (hasFrom)
     {
         const double bar = (double) args["from_bar"];
         if (! (bar >= 1.0) || bar > 100000.0)
             return toolText ("from_bar must be 1 or more.", true);
-        const double beats = toBeats (bar);
-        edit.insertMarker = beats;
+        startBeats = toBeats (bar);
+    }
+
+    int times = 0;
+    if (hasTimes)
+    {
+        times = (int) args["loop_times"];
+        if (times < 1 || times > 1000)
+            return toolText ("loop_times must be 1 to 1000.", true);
+        if (! loopOn)
+            return toolText ("The loop is off. Turn it on with set_loop (from_bar and to_bar) first.", true);
+        if (! hasFrom)
+            startBeats = edit.loopStart;
+        else if (startBeats < edit.loopStart - 1.0e-9 || startBeats >= edit.loopEnd)
+            return toolText ("from_bar must be inside the loop (" + loopText + ").", true);
+    }
+
+    double stopBeats = -1.0;
+    if (hasTo)
+    {
+        const double bar = (double) args["to_bar"];
+        if (! (bar >= 1.0) || bar > 100000.0)
+            return toolText ("to_bar must be 1 or more.", true);
+        stopBeats = toBeats (bar);
+        if (stopBeats <= startBeats + 1.0e-9)
+            return toolText ("to_bar must be after where playback starts (bar " + barText (startBeats) + ").", true);
+        if (loopOn && startBeats < edit.loopEnd && stopBeats > edit.loopEnd + 1.0e-9)
+            return toolText ("The loop is on (" + loopText + "), so playback never gets to bar " + barText (stopBeats)
+                             + ". Use loop_times to play the loop a number of times, turn the loop off with set_loop, "
+                               "or pick a to_bar inside the loop.", true);
+    }
+
+    if (engine.isPlaying() && ! hasFrom && ! hasTimes && ! hasTo)
+        return toolText ("Already playing, at bar " + barText (engine.getPlayheadBeats()) + ".");
+
+    if (hasFrom || hasTimes)
+    {
+        edit.insertMarker = startBeats;
         if (engine.isPlaying())
-            engine.seekTo (beats);
+            engine.seekTo (startBeats);
         edit.sendChangeMessage();
     }
-    else if (engine.isPlaying())
-    {
-        return toolText ("Already playing, at bar " + String (toBar (engine.getPlayheadBeats()), 2) + ".");
-    }
-
     if (! engine.isPlaying())
         engine.play();
+    engine.setAutoStop (stopBeats, times);   // after play(): starting or seeking cancels any earlier one
 
-    const auto where = String (toBar (edit.insertMarker), 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
-    status = "AI assistant: playing from bar " + where;
-    String text = "Playing from bar " + where + " at " + String (edit.tempo, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + " bpm.";
+    const auto tempo = String (edit.tempo, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+    String text;
+    if (hasTimes)
+    {
+        text = "Playing the loop (" + loopText + ") " + (times == 1 ? String ("once") : String (times) + " times")
+             + " at " + tempo + " bpm, then stopping at bar " + barText (edit.loopEnd) + ".";
+        status = "AI assistant: playing the loop " + (times == 1 ? String ("once") : String (times) + " times");
+    }
+    else if (hasTo)
+    {
+        text = "Playing from bar " + barText (startBeats) + " at " + tempo + " bpm. Lathe stops by itself at bar "
+             + barText (stopBeats) + ".";
+        status = "AI assistant: playing bars " + barText (startBeats) + " to " + barText (stopBeats);
+    }
+    else
+    {
+        text = "Playing from bar " + barText (startBeats) + " at " + tempo + " bpm.";
+        if (loopOn && startBeats < edit.loopEnd)
+            text << " The loop is on (" << loopText << "), so it repeats until stopped.";
+        status = "AI assistant: playing from bar " + barText (startBeats);
+    }
+    text << " Afterwards the playhead goes back to bar " << barText (edit.insertMarker) << ".";
     if (engine.getSampleRate() <= 0.0)
         text << " Note: no audio device is running, so nothing will be heard.";
     return toolText (text);
+}
+
+var Tools::setLoop (const var& args, String& status)
+{
+    auto given = [&args] (const char* k) { return args.hasProperty (k) && ! args[k].isVoid(); };
+    const bool hasFrom = given ("from_bar"), hasTo = given ("to_bar");
+    const bool on = given ("on") ? (bool) args["on"] : true;
+
+    if (hasFrom != hasTo)
+        return toolText ("Give both from_bar and to_bar (or neither, to just turn the loop on or off).", true);
+
+    if (hasFrom)
+    {
+        const double from = (double) args["from_bar"], to = (double) args["to_bar"];
+        if (! (from >= 1.0) || ! (to > from) || to > 100000.0)
+            return toolText ("from_bar must be 1 or more, and to_bar after it.", true);
+        edit.loopStart = toBeats (from);
+        edit.loopEnd = toBeats (to);
+    }
+    else if (on && ! (edit.loopEnd > edit.loopStart))
+        return toolText ("There's no loop region yet: give from_bar and to_bar.", true);
+
+    const bool wasOn = edit.loopEnabled;
+    edit.loopEnabled = on;
+    edit.changed();   // the engine picks up the new loop; the project is marked as changed
+
+    const auto region = "bars " + barText (edit.loopStart) + " to " + barText (edit.loopEnd);
+    const double bars = (edit.loopEnd - edit.loopStart) / edit.beatsPerBar();
+    const auto length = String (bars, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".");
+    status = on ? "AI assistant: loop " + region : String ("AI assistant: loop off");
+    if (on)
+        return toolText ("Loop on: " + region + " (" + length + (bars == 1.0 ? " bar" : " bars") + "). "
+                         + (engine.isPlaying() ? "Playback loops there now." : "play with loop_times plays it a number of times."));
+    return toolText (String (wasOn ? "Loop off" : "The loop was already off") + " (the region stays at " + region + ").");
 }
 
 var Tools::stop (String& status)

@@ -306,9 +306,23 @@ var toolDefinitions()
                              { "track" }),
                      true));
     tools.add (tool ("play", "Play",
-                     "Starts playback, from the given bar or from Lathe's insert marker. Does nothing if Lathe is "
-                     "already playing (unless from_bar is given, which jumps there).",
-                     schema ({ { "from_bar", prop ("number", "Bar to start from (1-based)") } }), false));
+                     "Starts playback, from the given bar or from Lathe's insert marker. With to_bar, Lathe stops by "
+                     "itself exactly when the playhead gets there. With loop_times, it plays the loop that many times "
+                     "and stops at the loop end (the loop must be on: see set_loop). When it stops, the playhead goes "
+                     "back to the insert marker, as with Stop. Without from_bar or to_bar it does nothing if Lathe is "
+                     "already playing; from_bar jumps there, to_bar alone sets where the current playback stops.",
+                     schema ({ { "from_bar", prop ("number", "Bar to start from (1-based)") },
+                               { "to_bar", prop ("number", "Stop when the playhead reaches this bar (1-based; 5 = the start of bar 5)") },
+                               { "loop_times", prop ("integer", "Play the loop this many times, then stop at its end. Starts at the loop start unless from_bar is inside the loop") } }),
+                     false));
+    tools.add (tool ("set_loop", "Set the loop",
+                     "Sets the loop region and turns looping on, or turns it off. The loop is saved with the "
+                     "project, like moving the loop brackets in Lathe. Bars are 1-based: from_bar 1 to_bar 5 loops "
+                     "the first four bars.",
+                     schema ({ { "from_bar", prop ("number", "Loop start (1-based)") },
+                               { "to_bar", prop ("number", "Loop end: the bar it jumps back from") },
+                               { "on", prop ("boolean", "false turns the loop off (the region is kept). Default true") } }),
+                     false));
     tools.add (tool ("stop", "Stop",
                      "Stops playback, like pressing Stop. If Lathe is recording, this finishes the recording and "
                      "keeps the take, exactly as the Stop button does.",

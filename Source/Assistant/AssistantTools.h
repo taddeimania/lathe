@@ -36,6 +36,8 @@ private:
     var getNotes (const var& args) const;
     var play (const var& args, String& status);
     var stop (String& status);
+    var setLoop (const var& args, String& status);
+    String barText (double beats) const;
 
     Edit& edit;
     Engine& engine;

@@ -65,6 +65,18 @@ public:
     /** Where the current (or last) recording started, in beats. */
     std::atomic<double> recordStartBeats { 0.0 };
 
+    /** Lets playback stop by itself, exactly on the sample (message thread; call after play()):
+        when the playhead reaches `stopAtBeats` (negative: no stop point), or at the loop end
+        once the loop has played `loopPasses` times (0: loop as long as it plays; counts the
+        first pass from wherever playback is). Stop, record and any seek cancel it. When it
+        stops, the playhead goes back to the insert marker, as Stop does. */
+    void setAutoStop (double stopAtBeats, int loopPasses);
+    void clearAutoStop() noexcept           { stopAtSamples = -1; loopPassesLeft = 0; }
+    /** Where playback will stop by itself, in beats (negative: it won't). */
+    double getAutoStopBeats() const;
+    /** Loop passes left (this one included) before playback stops at the loop end; 0 = no limit. */
+    int getLoopPassesLeft() const noexcept  { return loopPassesLeft.load(); }
+
     // --- device info
     double getSampleRate() const noexcept   { return deviceRate.load(); }
     int getBlockSize() const noexcept       { return deviceBlock.load(); }
@@ -168,6 +180,10 @@ private:
     std::atomic<bool> playing { false }, recording { false }, exporting { false };
     std::set<int> exportOnly;   // during an export of some tracks: the ids that play (export thread only)
     std::atomic<bool> notesOffRequest { false };
+    // auto-stop (setAutoStop): set on the message thread, reached and cleared by the audio thread
+    std::atomic<int64> stopAtSamples { -1 };
+    std::atomic<int> loopPassesLeft { 0 };
+    std::atomic<bool> autoStopped { false };   // the audio thread stopped; the timer moves the playhead back
     std::atomic<int64> positionSamples { 0 }, seekRequest { -1 };
     std::atomic<double> deviceRate { 0.0 };
     std::atomic<int> deviceBlock { 0 };

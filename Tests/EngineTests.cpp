@@ -441,6 +441,45 @@ int main()
         engine.rebuild();
     }
 
+    std::cout << "Auto-stop (play to a bar, play the loop N times)" << std::endl;
+    {
+        edit.insertMarker = 0.0;
+        engine.play();
+        engine.setAutoStop (0.5, 0);   // 12000 samples: not a block boundary
+        check (std::abs (engine.getAutoStopBeats() - 0.5) < 1.0e-9, "the stop point reads back in beats");
+        runCallbacks (engine, 100);
+        check (! engine.isPlaying() && std::abs (engine.getPlayheadBeats() - 0.5) < 1.0e-9 && engine.getAutoStopBeats() < 0.0,
+               "stops by itself exactly on the stop sample, mid-block (at " + String (engine.getPlayheadBeats(), 6) + " beats)");
+
+        engine.play();
+        engine.setAutoStop (0.5, 0);
+        engine.stop();
+        check (engine.getAutoStopBeats() < 0.0 && engine.getLoopPassesLeft() == 0, "Stop cancels a pending auto-stop");
+        engine.play();
+        engine.setAutoStop (0.5, 0);
+        engine.seekTo (0.25);
+        check (engine.getAutoStopBeats() < 0.0, "a seek cancels it too");
+        engine.stop();
+
+        edit.loopEnabled = true;
+        edit.loopStart = 0.0;
+        edit.loopEnd = 1.0;   // 24000 samples
+        engine.rebuild();
+        edit.insertMarker = 0.0;
+        engine.play();
+        engine.setAutoStop (-1.0, 2);
+        auto out = runCallbacks (engine, 300);   // 76800 samples: room for three passes
+        int hits = 0;
+        for (size_t i = 1; i < out.size(); ++i)
+            if (std::abs (out[i]) > 0.9f)
+                ++hits;
+        check (hits == 2 && ! engine.isPlaying() && std::abs (engine.getPlayheadBeats() - 1.0) < 1.0e-9 && engine.getLoopPassesLeft() == 0,
+               "loop_times 2: two passes, then stops at the loop end (hits " + String (hits) + ", at " + String (engine.getPlayheadBeats(), 6) + ")");
+        edit.loopEnabled = false;
+        engine.rebuild();
+        engine.stop();
+    }
+
     std::cout << "Recording" << std::endl;
     {
         auto rec = edit.addTrack (TrackKind::audio, "Rec");
@@ -2089,6 +2128,52 @@ int main()
         check (tools.call ("stop", var (new DynamicObject()), status)["content"][0]["text"].toString().contains ("wasn't playing")
                && std::abs (e.insertMarker - 8.0) < 1.0e-9, "stop while stopped does nothing (doesn't rewind)");
 
+        auto args2 = [] (std::initializer_list<std::pair<const char*, var>> kv)
+        {
+            auto o = var (new DynamicObject());
+            for (auto& [k, v] : kv)
+                o.getDynamicObject()->setProperty (k, v);
+            return o;
+        };
+        auto text = [] (const var& r) { return r["content"][0]["text"].toString(); };
+
+        status = {};
+        auto r = tools.call ("play", args2 ({ { "from_bar", 1 }, { "to_bar", 2 } }), status);
+        check (! (bool) r["isError"] && engine.isPlaying() && std::abs (engine.getAutoStopBeats() - 4.0) < 1.0e-6
+               && text (r).contains ("stops by itself at bar 2") && status.contains ("bars 1 to 2"),
+               "play to_bar: Lathe gets the stop point (and says so)");
+        check ((double) JSON::parse (text (tools.call ("describe_session", var (new DynamicObject()), status)))["transport"]["stops_at_bar"] == 2.0,
+               "describe_session shows where playback will stop");
+        runCallbacks (engine, 400);   // 102400 samples; bar 2 is 96000 in
+        check (! engine.isPlaying() && std::abs (engine.getPlayheadBeats() - 4.0) < 1.0e-6, "...and stops exactly at bar 2");
+        engine.stop();
+
+        check (text (tools.call ("play", args2 ({ { "loop_times", 2 } }), status)).contains ("loop is off"),
+               "loop_times with the loop off says to set it first");
+        check ((bool) tools.call ("play", args2 ({ { "from_bar", 3 }, { "to_bar", 2 } }), status)["isError"],
+               "to_bar before the start is an error");
+
+        r = tools.call ("set_loop", args2 ({ { "from_bar", 1 }, { "to_bar", 2 } }), status);
+        check (! (bool) r["isError"] && e.loopEnabled && e.loopStart == 0.0 && e.loopEnd == 4.0 && e.dirty
+               && text (r).contains ("bars 1 to 2 (1 bar)"), "set_loop sets the region and turns it on (the project is changed)");
+        engine.rebuild();   // (the app does this when the project changes)
+
+        check (text (tools.call ("play", args2 ({ { "to_bar", 3 } }), status)).contains ("never gets to bar 3"),
+               "to_bar past the end of a loop that's on is explained");
+        r = tools.call ("play", args2 ({ { "loop_times", 2 } }), status);
+        check (! (bool) r["isError"] && engine.isPlaying() && engine.getLoopPassesLeft() == 2 && e.insertMarker == 0.0
+               && text (r).contains ("2 times"), "play loop_times starts at the loop start");
+        runCallbacks (engine, 800);   // 204800 samples: room for two 96000-sample passes
+        check (! engine.isPlaying() && std::abs (engine.getPlayheadBeats() - 4.0) < 1.0e-6, "...plays it twice and stops at the loop end");
+        engine.stop();
+
+        r = tools.call ("set_loop", args2 ({ { "on", false } }), status);
+        check (! (bool) r["isError"] && ! e.loopEnabled && e.loopEnd == 4.0 && text (r).contains ("Loop off"),
+               "set_loop on=false turns it off and keeps the region");
+        check ((bool) tools.call ("set_loop", args2 ({ { "from_bar", 2 } }), status)["isError"], "set_loop needs both bars");
+        engine.rebuild();
+        e.insertMarker = 8.0;
+
         // --- the HTTP server
         const auto endpoint = dir.getChildFile ("assistant.json");
         int connects = 0;
@@ -2139,7 +2224,7 @@ int main()
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 5 && listed["id"].toString() == "a", "tools/list has the five tools");
+        check (listed["result"]["tools"].size() == 6 && listed["id"].toString() == "a", "tools/list has the six tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

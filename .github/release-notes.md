@@ -3,6 +3,15 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.7.4
+
+- **Your AI assistant can play exactly what you ask for.** "Play bars 9 to 13" stops
+  right at bar 13, to the sample: Lathe stops by itself rather than waiting for the
+  AI to say so.
+- **It can set the loop and play it a number of times**: "loop bars 17 to 25 and play
+  it three times" sets the loop brackets, plays three passes and stops at the loop end.
+- `describe_session` shows where playback will stop, and how many loop passes are left.
+
 ## New in 0.7.3
 
 - **The Mac version is signed and notarized by Apple.** Download it, unzip,

@@ -414,6 +414,14 @@ void Engine::handleAsyncUpdate()
 
 void Engine::timerCallback()
 {
+    // Playback stopped by itself (setAutoStop): back to the insert marker, as Stop does.
+    if (autoStopped.exchange (false) && edit != nullptr && ! playing)
+    {
+        notesOffRequest = true;
+        seekTo (edit->insertMarker);
+        edit->sendChangeMessage();
+    }
+
     // Plug-ins can change their latency at any time (lookahead switches etc).
     if (edit != nullptr && ! exporting && latencySignature() != lastLatencySignature)
         rebuild();
@@ -938,6 +946,7 @@ void Engine::setEdit (Edit* e)
 
     playing = false;
     recording = false;
+    clearAutoStop();
     installGraph (nullptr);
     edit = e;
     positionSamples = 0;
@@ -963,6 +972,25 @@ void Engine::seekTo (double beats)
     const auto s = (int64) std::llround (jmax (0.0, beats) * edit->samplesPerBeat (sr));
     positionSamples = s;
     seekRequest = s;
+    clearAutoStop();   // a seek means someone else took over the transport
+}
+
+void Engine::setAutoStop (double stopAtBeats, int loopPasses)
+{
+    if (edit == nullptr)
+        return;
+    const double sr = deviceRate.load() > 0 ? deviceRate.load() : 48000.0;
+    stopAtSamples = stopAtBeats < 0.0 ? (int64) -1 : (int64) std::llround (stopAtBeats * edit->samplesPerBeat (sr));
+    loopPassesLeft = jmax (0, loopPasses);
+}
+
+double Engine::getAutoStopBeats() const
+{
+    const auto s = stopAtSamples.load();
+    if (s < 0 || edit == nullptr)
+        return -1.0;
+    const double sr = deviceRate.load() > 0 ? deviceRate.load() : 48000.0;
+    return (double) s / edit->samplesPerBeat (sr);
 }
 
 void Engine::play()
@@ -978,6 +1006,8 @@ void Engine::stop()
 {
     if (edit == nullptr)
         return;
+
+    clearAutoStop();
 
     if (recording || isCountingIn())
     {
@@ -1026,6 +1056,8 @@ void Engine::startRecording()
 {
     if (edit == nullptr || recording || isCountingIn())
         return;
+
+    clearAutoStop();   // recording runs until you stop it
 
     if (deviceRate.load() <= 0.0 || graph == nullptr)
     {
@@ -1376,11 +1408,30 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
         }
     }
 
+    // Auto-stop (setAutoStop): never while recording.
+    int64 stopAt = rec ? (int64) -1 : stopAtSamples.load();
+    auto stopHere = [&]
+    {
+        playing = false;
+        rolling = false;
+        playHead.playing = false;
+        notesOff = true;
+        stopAt = -1;
+        stopAtSamples = -1;
+        loopPassesLeft = 0;
+        autoStopped = true;
+    };
+
     while (done < n)
     {
+        if (rolling && stopAt >= 0 && pos >= stopAt)
+            stopHere();
+
         int len = jmin (n - done, g.maxBlock);
         if (rolling && g.loop && ! rec && pos < g.loopEnd)
             len = (int) jmin ((int64) len, g.loopEnd - pos);
+        if (rolling && stopAt >= 0)
+            len = (int) jmin ((int64) len, stopAt - pos);
 
         playHead.position = pos;
         renderChunk (g, pos, len, done, rolling, inDev, numDeviceInputs, outDev, numDeviceOutputs, true, notesOff);
@@ -1392,8 +1443,16 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
             pos += len;
             if (g.loop && ! rec && pos == g.loopEnd)
             {
-                pos = g.loopStart;
-                notesOff = true;
+                int passes = loopPassesLeft.load();
+                if (passes == 1)
+                    stopHere();   // the last pass: stop at the loop end
+                else
+                {
+                    if (passes > 1)
+                        loopPassesLeft.compare_exchange_strong (passes, passes - 1);
+                    pos = g.loopStart;
+                    notesOff = true;
+                }
             }
         }
     }
