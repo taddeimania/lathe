@@ -3,6 +3,7 @@
 #include <random>
 
 #if ! JUCE_WINDOWS
+ #include <sys/socket.h>
  #include <sys/stat.h>
 #endif
 
@@ -165,12 +166,26 @@ bool readHttp (StreamingSocket& s, HttpMessage& m, bool isRequest, int timeoutMs
 
 bool writeAll (StreamingSocket& s, const String& text)
 {
+    // Writing to a connection the other end already closed must fail, not raise SIGPIPE
+    // (which would quit Lathe or LatheMCP). JUCE's write() doesn't ask for that.
+    const int fd = s.getRawSocketHandle();
+    if (! s.isConnected() || fd < 0)
+        return false;
+   #if JUCE_MAC || JUCE_IOS
+    int one = 1;
+    ::setsockopt (fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof (one));
+   #endif
+
     const auto* p = text.toRawUTF8();
     const int total = (int) text.getNumBytesAsUTF8();
     int done = 0;
     while (done < total)
     {
+       #if JUCE_LINUX || JUCE_BSD || JUCE_ANDROID
+        const int n = (int) ::send (fd, p + done, (size_t) (total - done), MSG_NOSIGNAL);
+       #else
         const int n = s.write (p + done, total - done);
+       #endif
         if (n <= 0)
             return false;
         done += n;

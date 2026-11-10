@@ -2153,7 +2153,19 @@ int main()
         check (JSON::parse (post (R"({"jsonrpc":"2.0","id":9,"method":"bogus"})", bearer).body)["error"]["code"].toString() == "-32601", "unknown methods too");
         check (post ("{nope", bearer).status == 400, "bad JSON: 400");
         check (raw ("GET /mcp HTTP/1.1\r\nHost: 127.0.0.1:" + String (server.getPort()) + "\r\n" + bearer + "\r\n").status == 405, "GET (a stream): not offered");
-        check (post (String::repeatedString ("x", kMaxBody + 10), bearer).status == 0, "a huge request is dropped");
+        const auto huge = post (String::repeatedString ("x", kMaxBody + 10), bearer).status;
+        check (huge == 0 || huge == 400, "a huge request is refused, and the closed connection doesn't kill anyone (SIGPIPE) (got "
+                                          + String (huge) + ")");
+        {
+            // A client that hangs up before the answer: Lathe must carry on.
+            StreamingSocket s;
+            s.connect ("127.0.0.1", server.getPort(), 2000);
+            writeAll (s, "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:" + String (server.getPort()) + "\r\n" + bearer
+                             + "Content-Length: " + String (init.length()) + "\r\n\r\n" + init);
+            s.close();
+            Thread::sleep (300);
+            check (post (R"({"jsonrpc":"2.0","id":10,"method":"ping"})", bearer).status == 200, "a client that hangs up early doesn't stop the server");
+        }
 
         server.stop();
         check (! endpoint.existsAsFile(), "stopping removes assistant.json");
