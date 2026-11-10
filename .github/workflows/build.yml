@@ -97,10 +97,11 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
-      # macOS: sign with a Developer ID and notarize, so the app opens with a double-click
-      # (no "unidentified developer" warning, no xattr). Skipped until the secrets exist:
-      # MACOS_CERT_P12 (base64 .p12), MACOS_CERT_PASSWORD, MACOS_SIGN_IDENTITY,
-      # NOTARY_KEY_P8 (base64 .p8), NOTARY_KEY_ID, NOTARY_ISSUER_ID.
+      # macOS: sign with a Developer ID and notarize, so the app opens with a double-click.
+      # Needs the secrets MACOS_CERT_P12 (base64 .p12), MACOS_CERT_PASSWORD,
+      # MACOS_SIGN_IDENTITY, NOTARY_KEY_P8 (base64 .p8), NOTARY_KEY_ID, NOTARY_ISSUER_ID.
+      # A version tag without them fails here, so every released Mac build is notarized.
+      # Branch builds without them keep the local (ad-hoc) signature, for testing only.
       - name: Sign and notarize (macOS)
         if: runner.os == 'macOS'
         env:
@@ -112,7 +113,11 @@ jobs:
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
           if [ -z "$MACOS_CERT_P12" ]; then
-            echo "No signing secrets: leaving the ad-hoc signature (users must right-click > Open the first time)."
+            if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+              echo "::error::Releases must be signed and notarized: the macOS signing secrets are missing."
+              exit 1
+            fi
+            echo "No signing secrets: this branch build keeps its local signature (for testing, not for release)."
             exit 0
           fi
           set -euo pipefail

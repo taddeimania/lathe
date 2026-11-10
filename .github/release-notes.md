@@ -6,7 +6,7 @@ a mix and stems. It doesn't try to do everything else.
 ## New in 0.7.3
 
 - **The Mac version is signed and notarized by Apple.** Download it, unzip,
-  and double-click: no "unidentified developer" warning, no right-click.
+  and double-click to open.
 - Downloads now come from [getlathe.app](https://getlathe.app) as well as here.
 - The user guide is in the download, in the `docs` folder.
 
