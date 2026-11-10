@@ -1044,6 +1044,13 @@ void NotesController::showThread (const String& noteId, Rectangle<int> screenAre
     CallOutBox::launchAsynchronously (std::make_unique<ThreadView> (*this, noteId), screenArea, nullptr);
 }
 
+std::unique_ptr<Component> NotesController::makeThreadView (const String& noteId)
+{
+    if (find (noteId) == nullptr)
+        return {};
+    return std::make_unique<ThreadView> (*this, noteId);
+}
+
 void NotesController::showCompose (int trackId, double beat, Rectangle<int> screenArea)
 {
     auto view = std::make_unique<ThreadView> (*this, trackId, beat);

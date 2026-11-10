@@ -248,7 +248,6 @@ public:
     void refresh()                      { content->refresh(); }
     void closeButtonPressed() override  { delete this; }
 
-private:
     class Content : public Component, private ListBoxModel
     {
     public:
@@ -315,8 +314,8 @@ private:
                     row = (int) i;
             list.selectRow (revisions.empty() ? -1 : row);
             showDetails();
-            pullButton.setEnabled (owner.isSignedIn());
-            pushButton.setEnabled (owner.isSignedIn());
+            pullButton.setEnabled (owner.isSignedIn() || owner.screenshotMode);
+            pushButton.setEnabled (owner.isSignedIn() || owner.screenshotMode);
             repaint();
         }
 
@@ -384,7 +383,7 @@ private:
             openButton.setEnabled (isPositiveAndBelow (row, (int) revisions.size()) && ! owner.isBusy());
             const bool pushed = isPositiveAndBelow (row, (int) revisions.size()) && ! revisions[(size_t) row].local
                                 && revisions[(size_t) row].inCloud;
-            keepButton.setEnabled (pushed && owner.isSignedIn() && ! owner.isBusy());
+            keepButton.setEnabled (pushed && (owner.isSignedIn() || owner.screenshotMode) && ! owner.isBusy());
             keepButton.setButtonText (pushed && revisions[(size_t) row].pinned ? "Don't Keep" : "Keep");
             const int n = owner.getRevisionsKept();
             keepButton.setTooltip ("The cloud keeps each song's newest " + (n > 0 ? String (n) : String ("few"))
@@ -439,8 +438,14 @@ private:
         Label note;
     };
 
+private:
     Content* content;
 };
+
+std::unique_ptr<Component> CloudController::makeHistoryView()
+{
+    return std::make_unique<HistoryWindow::Content> (*this);
+}
 
 //==============================================================================
 CloudController::CloudController (AppContext& c, PropertiesFile& s, Hooks h)

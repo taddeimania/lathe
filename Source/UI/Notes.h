@@ -57,6 +57,8 @@ public:
     // --- UI
     /** The conversation, in a bubble pointing at screenArea (screen coordinates). */
     void showThread (const String& noteId, Rectangle<int> screenArea);
+    /** The thread's view on its own (for screenshots); null if there's no such note. */
+    std::unique_ptr<Component> makeThreadView (const String& noteId);
     /** A new note: on a track at a beat, or (trackId < 0) on the song. */
     void showCompose (int trackId, double beat, Rectangle<int> screenArea);
     void showWindow();

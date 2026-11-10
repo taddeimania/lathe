@@ -1,5 +1,8 @@
 #include "MainComponent.h"
 #include "../Assistant/AssistantService.h"
+#include "../Demo/DemoSong.h"
+
+#include <iostream>
 
 namespace lathe
 {
@@ -48,8 +51,9 @@ private:
 };
 
 //==============================================================================
-MainComponent::MainComponent (PropertiesFile& s)
+MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     : settings (s),
+      forScreenshots (screenshots),
       host (s),
       engine (host, pool, s),
       ctx { edit, engine, host, pool, s, {}, {}, {}, {}, {}, {} },
@@ -156,11 +160,29 @@ MainComponent::MainComponent (PropertiesFile& s)
 
     edit.addChangeListener (this);
     engine.setEdit (&edit);
-    engine.openDevice();
+    if (! forScreenshots)
+    {
+        engine.openDevice();
+        ensureBuiltInTemplates();
+    }
+    else
+    {
+        // A pretend interface (nothing plays), so tracks show their inputs.
+        auto& dm = engine.deviceManager;
+        dm.addAudioDeviceType (demo::makeDeviceType());
+        dm.setCurrentAudioDeviceType ("Demo", true);
+        AudioDeviceManager::AudioDeviceSetup setup;
+        setup.inputDeviceName = setup.outputDeviceName = "Audio Interface";
+        setup.sampleRate = 48000.0;
+        setup.bufferSize = 128;
+        setup.useDefaultInputChannels = setup.useDefaultOutputChannels = false;
+        setup.inputChannels.setRange (0, 8, true);
+        setup.outputChannels.setRange (0, 8, true);
+        dm.setAudioDeviceSetup (setup, false);
+        dm.addAudioCallback (&engine);
+    }
 
-    ensureBuiltInTemplates();
-
-    if (host.known.getNumTypes() == 0)
+    if (host.known.getNumTypes() == 0 && ! forScreenshots)
     {
         setStatus ("First run: scanning your VST3 plug-ins in the background...");
         host.startScan (false);
@@ -177,6 +199,7 @@ MainComponent::MainComponent (PropertiesFile& s)
     hooks.setStatus = [this] (const String& m) { setStatus (m); };
     hooks.projectsDir = [] { return getProjectsDir(); };
     cloud = std::make_unique<CloudController> (ctx, settings, hooks);
+    cloud->screenshotMode = forScreenshots;
     addAndMakeVisible (cloud->getStatusComponent());
 
     notes = std::make_unique<NotesController> (ctx, *cloud);
@@ -190,7 +213,8 @@ MainComponent::MainComponent (PropertiesFile& s)
     notes->addChangeListener (this);
 
     // AI assistant (MCP) connection: off unless you turned it on (Options > AI Assistant).
-    aiAssistant = std::make_shared<assistant::Service> (ctx);
+    if (! forScreenshots)
+        aiAssistant = std::make_shared<assistant::Service> (ctx);
 
     updateNotice = std::make_unique<UpdateNotice> (settings, [this] { openPatcher(); });
     updateNotice->onShowOrHide = [this] { resized(); };
@@ -200,7 +224,8 @@ MainComponent::MainComponent (PropertiesFile& s)
     startTimerHz (30);
 
     // Quietly check GitHub for new versions of your plug-ins (cached for an hour).
-    store.refresh (false);
+    if (! forScreenshots)
+        store.refresh (false);
 }
 
 MainComponent::~MainComponent()
@@ -1237,6 +1262,119 @@ void MainComponent::confirmQuit (std::function<void()> proceed)
         if (cloud != nullptr)
             cloud->cancel();
         confirmDiscard (proceed);
+    });
+}
+
+//==============================================================================
+// Screenshots for the website: Lathe --screenshots <folder>
+//==============================================================================
+namespace
+{
+bool saveShot (Component& c, const File& f, Rectangle<int> area = {})
+{
+    // 2x, so they're sharp on high-density screens.
+    const auto image = c.createComponentSnapshot (area.isEmpty() ? c.getLocalBounds() : area, true, 2.0f);
+    f.deleteFile();
+    FileOutputStream out (f);
+    if (! out.openedOk())
+        return false;
+    JPEGImageFormat jpeg;
+    jpeg.setQuality (0.9f);
+    return jpeg.writeImageToStream (image, out);
+}
+} // namespace
+
+void MainComponent::runScreenshots (const File& outDir)
+{
+    struct Run
+    {
+        File out, work;
+        demo::Songs songs;
+        StringArray written;
+        bool ok = true;
+    };
+    auto run = std::make_shared<Run>();
+    run->out = outDir;
+    run->work = File::getSpecialLocation (File::tempDirectory)
+                    .getChildFile ("lathe-screenshots-" + String (Time::currentTimeMillis()));
+
+    auto finish = [run]
+    {
+        run->work.deleteRecursively();
+        std::cout << (run->ok ? "Wrote " : "Failed. Wrote ") << run->written.joinIntoString (", ")
+                  << " in " << run->out.getFullPathName() << std::endl;
+        JUCEApplicationBase::getInstance()->setApplicationReturnValue (run->ok ? 0 : 1);
+        JUCEApplicationBase::quit();
+    };
+    auto shot = [run] (Component& c, const String& name, Rectangle<int> area = {})
+    {
+        if (saveShot (c, run->out.getChildFile (name), area))
+            run->written.add (name);
+        else
+            run->ok = false;
+    };
+
+    run->out.createDirectory();
+    if (auto r = demo::write (run->work, run->songs); r.failed())
+    {
+        std::cerr << "Couldn't make the demo song: " << r.getErrorMessage() << std::endl;
+        run->ok = false;
+        finish();
+        return;
+    }
+
+    // A fixed window size, so the pictures are the same size every time.
+    if (auto* window = findParentComponentOfClass<DocumentWindow>())
+        window->setContentComponentSize (1440, 860);
+    else
+        setSize (1440, 860);
+    loadProjectFile (run->songs.plain, run->songs.plain);
+    detailShown = false;   // no plug-in panel: more room for the song
+    resized();
+
+    Component::SafePointer<MainComponent> self (this);
+    // Give the waveform overviews a moment to build, then take the pictures in turn.
+    Timer::callAfterDelay (2000, [self, run, shot, finish]
+    {
+        if (self == nullptr) return;
+        self->setStatus ("Opened Night Drive");
+        shot (*self, "arrange.jpg");
+
+        // The note on the vocal, open, the way clicking its marker shows it.
+        if (auto view = self->notes->makeThreadView (run->songs.noteId))
+        {
+            const auto area = self->getLocalArea (nullptr, self->arrangement.screenAreaFor (run->songs.noteTrackId, run->songs.noteBeat));
+            {
+                CallOutBox box (*view, area, self.getComponent());
+                shot (*self, "notes.jpg");
+                // A close-up: the open note and the lanes around it.
+                const auto around = box.getBounds().getUnion (area).expanded (260, 150).getIntersection (self->getLocalBounds());
+                shot (*self, "notes-detail.jpg", around);
+            }
+        }
+        else
+        {
+            run->ok = false;
+        }
+
+        self->setMixerShown (true);
+        Timer::callAfterDelay (500, [self, run, shot, finish]
+        {
+            if (self == nullptr) return;
+            shot (*self, "mixer.jpg");
+            self->setMixerShown (false);
+
+            // The shared copy, for its History window.
+            self->loadProjectFile (run->songs.shared, run->songs.shared);
+            Timer::callAfterDelay (1000, [self, run, shot, finish]
+            {
+                if (self == nullptr) return;
+                auto view = self->cloud->makeHistoryView();
+                view->setSize (900, 540);
+                shot (*view, "history.jpg");
+                finish();
+            });
+        });
     });
 }
 } // namespace lathe

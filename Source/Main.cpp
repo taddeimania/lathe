@@ -1,15 +1,17 @@
 #include "UI/MainComponent.h"
 
+#include <iostream>
+
 namespace lathe
 {
 class MainWindow : public DocumentWindow
 {
 public:
-    explicit MainWindow (PropertiesFile& s)
+    MainWindow (PropertiesFile& s, bool forScreenshots)
         : DocumentWindow ("Lathe", theme::window, DocumentWindow::allButtons), settings (s)
     {
         setUsingNativeTitleBar (true);
-        main = new MainComponent (settings);
+        main = new MainComponent (settings, forScreenshots);
         setContentOwned (main, true);
 
        #if JUCE_MAC
@@ -52,10 +54,26 @@ class LatheApplication : public JUCEApplication
 public:
     const String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
     const String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
-    bool moreThanOneInstanceAllowed() override       { return false; }
+    // A screenshot run (--screenshots) can go alongside a Lathe you have open.
+    bool moreThanOneInstanceAllowed() override       { return getCommandLineParameters().contains ("--screenshots"); }
 
     void initialise (const String& commandLine) override
     {
+        // Lathe --screenshots <folder>: draws a made-up demo song's windows to image files
+        // (for the website) and quits. It uses its own throwaway settings, so it never
+        // touches yours, your audio device or your plug-in list.
+        const auto args = StringArray::fromTokens (commandLine, true);
+        const int shotsArg = args.indexOf ("--screenshots");
+        screenshotsDir = shotsArg >= 0 ? File::getCurrentWorkingDirectory().getChildFile (args[shotsArg + 1].unquoted())
+                                       : File();
+        if (shotsArg >= 0 && args[shotsArg + 1].isEmpty())
+        {
+            std::cerr << "Usage: Lathe --screenshots <folder>" << std::endl;
+            setApplicationReturnValue (2);
+            quit();
+            return;
+        }
+
         PropertiesFile::Options options;
         options.applicationName = "Lathe";
        #if JUCE_LINUX
@@ -65,7 +83,18 @@ public:
        #endif
         options.filenameSuffix = ".settings";
         options.osxLibrarySubFolder = "Application Support";
+        if (screenshotsDir != File())
+        {
+            screenshotSettings = File::getSpecialLocation (File::tempDirectory).getNonexistentChildFile ("lathe-screenshot-settings", "");
+            screenshotSettings.createDirectory();
+            options.folderName = screenshotSettings.getFullPathName();   // absolute: wins over the usual place
+        }
         properties.setStorageParameters (options);
+        if (screenshotsDir != File())
+        {
+            properties.getUserSettings()->setValue ("autoUpdateCheck", false);
+            properties.getUserSettings()->setValue ("metronome", false);
+        }
 
        #if ! JUCE_MAC
         // Lathe Patcher renames files that were in use during an update to *.old.
@@ -75,14 +104,19 @@ public:
        #endif
 
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
-        window = std::make_unique<MainWindow> (*properties.getUserSettings());
-        window->main->startup (commandLine);
+        window = std::make_unique<MainWindow> (*properties.getUserSettings(), screenshotsDir != File());
+        if (screenshotsDir != File())
+            window->main->runScreenshots (screenshotsDir);
+        else
+            window->main->startup (commandLine);
     }
 
     void shutdown() override
     {
         window.reset();
         properties.saveIfNeeded();
+        if (screenshotSettings != File())
+            screenshotSettings.deleteRecursively();
         LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
@@ -111,6 +145,7 @@ private:
     LatheLookAndFeel lookAndFeel;
     ApplicationProperties properties;
     std::unique_ptr<MainWindow> window;
+    File screenshotsDir, screenshotSettings;
 };
 } // namespace lathe
 

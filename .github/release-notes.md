@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.7.2
+
+- **`Lathe --screenshots <folder>`** draws a made-up demo song's windows (arrangement,
+  an open note, mixer, History) to image files and quits, for the website. It
+  doesn't touch your settings, audio device or plug-ins.
+- Fixed: notes and History said "1 days ago". They say "yesterday" now.
+
 ## New in 0.7.1
 
 - **Lathe picks your audio interface on first run**, whichever brand it is: the

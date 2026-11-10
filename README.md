@@ -301,6 +301,10 @@ These were left out to keep Lathe small and predictable. Some could be added lat
 - Offline export can't capture external hardware synths driven by MIDI out. Record their audio onto a track first.
 - 16-bit export is truncated, not dithered.
 
+## Screenshots for the website
+
+`Lathe --screenshots <folder>` draws a made-up demo song ("Night Drive": generated audio, a note thread, and a shared copy with five pushes in its history) to `arrange.jpg`, `notes.jpg`, `notes-detail.jpg`, `mixer.jpg` and `history.jpg` at 2x, then quits. It uses throwaway settings and a pretend audio interface, so it never touches your own settings, audio device or plug-ins, and it can run while Lathe is open. On the Mac: `Lathe.app/Contents/MacOS/Lathe --screenshots ~/Desktop/shots`. The website's `tools/screenshots.sh` runs it before every deploy.
+
 ## Code map
 
 ```
@@ -310,6 +314,7 @@ Source/
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
+  Demo/                 the "Night Drive" demo song and pretend audio interface, for --screenshots
   Assistant/            AI assistant (MCP): Server (127.0.0.1 HTTP, key, JSON-RPC), Tools (what the AI can
                         read and do), Service (on/off, message thread), BridgeMain (LatheMCP, stdio <-> Lathe)
   Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,

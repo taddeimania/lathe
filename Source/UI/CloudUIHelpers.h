@@ -11,6 +11,7 @@ inline String timeAgo (int64 ms)
     if (seconds < 60)       return "just now";
     if (seconds < 3600)     return String (seconds / 60) + " min ago";
     if (seconds < 86400)    return String (seconds / 3600) + " h ago";
+    if (seconds < 2 * 86400) return "yesterday";
     if (seconds < 7 * 86400) return String (seconds / 86400) + " days ago";
     return Time (ms).formatted ("%d %b %Y");
 }

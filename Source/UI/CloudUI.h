@@ -84,6 +84,10 @@ public:
     cloud::LocalStore* getStore()  { return store.get(); }
     AppContext& getContext()       { return ctx; }
 
+    /** Screenshots (Lathe --screenshots): the History window's contents, drawn as if signed in. */
+    std::unique_ptr<Component> makeHistoryView();
+    bool screenshotMode = false;
+
 private:
     class StatusLabel;
     class SignInDialog;

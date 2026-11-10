@@ -19,11 +19,17 @@ class MainComponent : public Component,
                       private Timer
 {
 public:
-    explicit MainComponent (PropertiesFile& settings);
+    /** forScreenshots: Lathe --screenshots. No audio device, no plug-in scan, no network;
+        runScreenshots() then draws the demo song's windows to files and quits. */
+    explicit MainComponent (PropertiesFile& settings, bool forScreenshots = false);
     ~MainComponent() override;
 
     /** Opens a file from the command line, the last project, or the default template. */
     void startup (const String& commandLine);
+
+    /** Writes the demo song's screenshots (arrange, notes, mixer, history .jpg) into outDir,
+        then quits Lathe (exit code 0, or 1 if something failed). */
+    void runScreenshots (const File& outDir);
 
     void newProject (const File& templateFile);
     void openProject (const File&);
@@ -68,6 +74,7 @@ private:
     File autosaveFileFor (const File& project) const   { return project.getSiblingFile (project.getFileName() + "-autosave"); }
 
     PropertiesFile& settings;
+    const bool forScreenshots;
     PluginHost host;
     AudioPool pool;
     Edit edit;
