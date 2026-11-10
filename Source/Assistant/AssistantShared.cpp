@@ -392,8 +392,7 @@ var toolDefinitions()
                      "Plays part of the project for real and times every audio block, the way a CPU meter does: mean, "
                      "99th-percentile and peak load (share of each block's deadline; over 100% is a dropout), blocks that "
                      "missed the deadline, dropouts the interface reported, each track's own cost per block (heaviest "
-                     "first, with its plug-ins), and the conditions (computer, cores, power and Low Power Mode, how hot the "
-                     "Mac is, interface, buffer size). Bars default to the loop if it's on, else the first four. Takes about "
+                     "first, with its plug-ins), and the conditions (computer, CPU and cores, interface, buffer size). Bars default to the loop if it's on, else the first four. Takes about "
                      "`seconds` plus a short warm-up; Lathe is stopped first and the playhead goes back afterwards.",
                      schema ({ { "from_bar", prop ("number", "First bar to play (1-based)") },
                                { "to_bar", prop ("number", "Bar to stop at") },

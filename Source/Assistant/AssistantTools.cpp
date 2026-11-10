@@ -3,10 +3,6 @@
 #include "../Engine/PluginStore.h"
 
 #if JUCE_MAC
- #include <IOKit/ps/IOPowerSources.h>
- #include <IOKit/ps/IOPSKeys.h>
- #include <objc/message.h>
- #include <objc/runtime.h>
  #include <sys/sysctl.h>
 #endif
 
@@ -1346,31 +1342,6 @@ var machineConditions (Engine& engine)
     size = sizeof (eff);
     if (sysctlbyname ("hw.perflevel1.physicalcpu", &eff, &size, nullptr, 0) == 0 && eff > 0)
         set (o, "efficiency_cores", eff);
-
-    if (auto info = IOPSCopyPowerSourcesInfo())
-    {
-        if (auto type = IOPSGetProvidingPowerSourceType (info))
-            set (o, "power", String::fromCFString (type) == kIOPMACPowerKey ? "plugged in" : "battery");
-        CFRelease (info);
-    }
-
-    // NSProcessInfo, without Objective-C++: Low Power Mode and how hot the Mac is.
-    if (auto cls = objc_getClass ("NSProcessInfo"))
-    {
-        auto info = ((id (*) (id, SEL)) objc_msgSend) ((id) cls, sel_registerName ("processInfo"));
-        auto responds = [&] (const char* sel)
-        {
-            return ((BOOL (*) (id, SEL, SEL)) objc_msgSend) (info, sel_registerName ("respondsToSelector:"), sel_registerName (sel));
-        };
-        if (info != nullptr && responds ("isLowPowerModeEnabled"))
-            set (o, "low_power_mode", (bool) ((BOOL (*) (id, SEL)) objc_msgSend) (info, sel_registerName ("isLowPowerModeEnabled")));
-        if (info != nullptr && responds ("thermalState"))
-        {
-            const auto state = ((long (*) (id, SEL)) objc_msgSend) (info, sel_registerName ("thermalState"));
-            set (o, "thermal_state", state == 0 ? "nominal" : state == 1 ? "fair" : state == 2 ? "serious (the Mac is slowing itself down)"
-                                                                         : "critical (the Mac is slowing itself down)");
-        }
-    }
    #endif
 
     var audio = obj();

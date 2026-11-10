@@ -3,6 +3,11 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.9.1
+
+- The AI assistant's CPU measurements report the computer, its cores, the interface and
+  the buffer size. The power, Low Power Mode and temperature readings are gone for now.
+
 ## New in 0.9.0
 
 - **Undo covers the whole session now**, not just clips and notes: adding, deleting and
@@ -16,7 +21,7 @@ a mix and stems. It doesn't try to do everything else.
   request is a single undo step.
 - **It can measure what your session costs.** It plays some bars and reports the CPU
   load (average, worst moments, missed deadlines), each track's own cost with its
-  plug-ins, and the conditions (power, Low Power Mode, how hot the Mac is, buffer size).
+  plug-ins, and the conditions (computer, cores, interface, buffer size).
   It can also compare 1 core with all cores on your own song.
 - A new send to a return was silent until something else changed the session. Fixed.
 
