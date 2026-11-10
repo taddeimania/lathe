@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.10.1
+
+- **Fixed: Poly Synth could burst to full volume at random.** Its chorus sometimes read
+  one step past the end of its buffer, which came out as a loud spike on one channel
+  (and through any reverb or delay it was sent to).
+- **Fixed: the Drums rim shot was far too loud** (about 18 dB over the other drums, on
+  every kit). It now sits with the rest of the kit.
+- Drums respond properly to velocity: soft notes are now really soft (velocity 64 is
+  about -9 dB, 32 about -18 dB).
+- Fixed: asking the AI assistant for a second CPU measurement straight after the first
+  could be refused with "already measuring".
+
 ## New in 0.10.0
 
 - **Lathe comes with its own instruments.** Bass Synth (mono, with a sub and glide),
