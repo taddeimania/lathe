@@ -1,4 +1,5 @@
 #include "Widgets.h"
+#include "../Devices/Device.h"
 #include "Dialogs.h"
 
 namespace lathe
@@ -305,7 +306,7 @@ void fillMidiInputs (ComboBox& box, const Edit& edit, const Track& t, const Stri
     box.addItem ("No MIDI input", 2);
 
     // Another MIDI track's notes: what it plays, or what its plug-ins (an arpeggiator,
-    // a generator like Dicey) generate.
+    // a note generator) generate.
     bool anyTrack = false;
     for (auto& o : edit.tracks)
     {
@@ -507,6 +508,8 @@ std::shared_ptr<PluginSlot> insertPlugin (AppContext& ctx, std::shared_ptr<Track
         return {};
     }
 
+    if (track->isBus())
+        devices::startOnReturn (*slot->instance);
     const auto index = (size_t) jlimit (0, (int) track->plugins.size(), insertIndex < 0 ? (int) track->plugins.size() : insertIndex);
     track->plugins.insert (track->plugins.begin() + (long) index, slot);
     ctx.edit.changed();

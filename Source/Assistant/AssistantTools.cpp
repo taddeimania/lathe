@@ -1,6 +1,6 @@
 #include "AssistantTools.h"
 #include "AssistantShared.h"
-#include "../Engine/PluginStore.h"
+#include "../Devices/Device.h"
 
 #if JUCE_MAC
  #include <sys/sysctl.h>
@@ -82,6 +82,8 @@ var Tools::call (const String& name, const var& args, String& status)
 
     if (name == "get_notes")
         return getNotes (args);
+    if (name == "write_notes")
+        return writeNotes (args, status);
     if (name == "play")
         return play (args, status);
     if (name == "stop")
@@ -410,7 +412,7 @@ StringArray Tools::findProblems() const
         {
             if (auto* gen = activeGeneratorBeforeInstrument (t); gen != nullptr && ! t.clips.empty())
                 out.add (quoted + "'s clips go into " + gen->getName() + " before anything else. A generator that only plays its "
-                         "own notes (Dicey does) hides the clips: bypass " + gen->getName() + " to hear them.");
+                         "own notes (most do) hides the clips: bypass " + gen->getName() + " to hear them.");
 
             bool feedsAnother = false;
             for (auto& other : edit.tracks)
@@ -490,6 +492,142 @@ var Tools::getNotes (const var& args) const
         set (o, "truncated", "Only the first " + String ((int) limit) + " notes are listed. Ask for fewer bars or one clip.");
     set (o, "notes", notes);
     return toolText (JSON::toString (o, true, 4));
+}
+
+namespace
+{
+/** 60, "60", "C3", "F#2", "Bb-1" (C3 = middle C, as in Lathe). -1 if it isn't one. */
+int parsePitch (const var& v)
+{
+    if (v.isInt() || v.isInt64() || v.isDouble())
+    {
+        const double d = (double) v;
+        return std::abs (d - std::round (d)) < 1.0e-9 && d >= 0.0 && d <= 127.0 ? (int) std::round (d) : -1;
+    }
+    auto s = v.toString().trim().removeCharacters (" ");
+    if (s.isEmpty())
+        return -1;
+    if (s.containsOnly ("0123456789"))
+        return s.getIntValue() <= 127 ? s.getIntValue() : -1;
+
+    static const int semis[] { 9, 11, 0, 2, 4, 5, 7 };   // A B C D E F G
+    const auto letter = CharacterFunctions::toUpperCase (s[0]);
+    if (letter < 'A' || letter > 'G')
+        return -1;
+    int pitch = semis[letter - 'A'];
+    int i = 1;
+    for (; i < s.length() && (s[i] == '#' || s[i] == 'b'); ++i)
+        pitch += s[i] == '#' ? 1 : -1;
+    const auto octave = s.substring (i);
+    if (octave.isEmpty() || ! octave.trimCharactersAtStart ("-").containsOnly ("0123456789"))
+        return -1;
+    pitch += (octave.getIntValue() + 2) * 12;
+    return pitch >= 0 && pitch <= 127 ? pitch : -1;
+}
+} // namespace
+
+var Tools::writeNotes (const var& args, String& status)
+{
+    auto t = findTrack (args.getProperty ("track", {}));
+    if (t == nullptr)
+        return toolText ("No track called \"" + args.getProperty ("track", {}).toString() + "\". describe_session lists them.", true);
+    if (! t->isMidi())
+        return toolText (("\"" + t->name + "\"") + " is " + Edit::trackKindToString (t->kind) + " track; only MIDI tracks have notes.", true);
+    if (engine.isRecording() || engine.isCountingIn())
+        return toolText ("Lathe is recording. Stop first (the stop tool keeps the take).", true);
+
+    const double fromBar = (double) args.getProperty ("from_bar", 0.0), toBar_ = (double) args.getProperty ("to_bar", 0.0);
+    if (! (fromBar >= 1.0) || ! (toBar_ > fromBar) || toBar_ > 100000.0)
+        return toolText ("from_bar must be 1 or more, and to_bar after it.", true);
+    const int repeat = (int) args.getProperty ("repeat", 1);
+    if (repeat < 1 || repeat > 256)
+        return toolText ("repeat must be 1 to 256.", true);
+    const auto mode = args.getProperty ("mode", "replace").toString().trim().toLowerCase();
+    if (mode != "replace" && mode != "add")
+        return toolText ("mode is \"replace\" or \"add\".", true);
+    auto* list = args.getProperty ("notes", {}).getArray();
+    if (list == nullptr || list->isEmpty())
+        return toolText ("Give \"notes\": a list of { pitch, start_bar, length_beats, velocity }.", true);
+    if (list->size() * repeat > 4000)
+        return toolText ("At most 4000 notes per call, repeats included.", true);
+
+    const double from = toBeats (fromBar), span = toBeats (toBar_) - from, to = from + span * repeat;
+
+    std::vector<Note> notes;
+    for (int k = 0; k < list->size(); ++k)
+    {
+        const auto& v = list->getReference (k);
+        const auto where = "Note " + String (k + 1) + ": ";
+        const int pitch = parsePitch (v.getProperty ("pitch", {}));
+        if (pitch < 0)
+            return toolText (where + "pitch " + JSON::toString (v.getProperty ("pitch", {})) + " isn't a MIDI number (0-127) or a name like C3 (middle C).", true);
+        if (! v.hasProperty ("start_bar"))
+            return toolText (where + "give start_bar.", true);
+        const double start = toBeats ((double) v["start_bar"]);
+        if (start < from - 1.0e-9 || start >= from + span - 1.0e-9)
+            return toolText (where + "start_bar " + String ((double) v["start_bar"]) + " is outside bars "
+                             + barText (from) + " to " + barText (from + span) + ".", true);
+        const double length = (double) v.getProperty ("length_beats", 0.25);
+        if (! (length > 0.0) || length > 10000.0)
+            return toolText (where + "length_beats must be more than 0.", true);
+        const int velocity = (int) v.getProperty ("velocity", 100);
+        if (velocity < 1 || velocity > 127)
+            return toolText (where + "velocity must be 1-127.", true);
+        notes.push_back ({ pitch, start - from, length, (float) velocity / 127.0f });
+    }
+
+    edit.commitUndoStep();   // what was done before this call stays a step of its own
+    edit.beginClipEdit();
+
+    // "add" joins the clip that already covers the bars, if there's exactly that one.
+    Clip* target = nullptr;
+    if (mode == "add")
+    {
+        std::vector<Clip*> overlapping;
+        for (auto& c : t->clips)
+            if (c.kind == ClipKind::midi && c.end() > from + 1.0e-9 && c.start < to - 1.0e-9)
+                overlapping.push_back (&c);
+        if (overlapping.size() == 1 && overlapping[0]->start <= from + 1.0e-9 && overlapping[0]->end() >= to - 1.0e-9)
+            target = overlapping[0];
+        else if (! overlapping.empty())
+        {
+            edit.discardUncommitted();
+            return toolText ("Those bars are partly covered by " + String ((int) overlapping.size())
+                             + " clip(s) on " + ("\"" + t->name + "\"") + ", so the notes can't be added to one. Use mode \"replace\", "
+                             "or bars that one clip covers (describe_track lists them).", true);
+        }
+    }
+
+    if (target == nullptr)
+    {
+        if (mode == "replace")
+            edit.clearRange (*t, from, to);
+        Clip c;
+        c.id = edit.newId();
+        c.kind = ClipKind::midi;
+        c.name = t->name;
+        c.start = from;
+        c.length = to - from;
+        t->clips.push_back (c);
+        target = &t->clips.back();
+    }
+
+    const double offset = from - target->start;
+    for (int r = 0; r < repeat; ++r)
+        for (auto n : notes)
+        {
+            n.start += offset + span * r;
+            target->notes.push_back (n);
+        }
+    std::stable_sort (target->notes.begin(), target->notes.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+    const int clipId = target->id;
+    edit.changed();
+
+    const int count = (int) notes.size() * repeat;
+    status = "AI assistant: wrote " + String (count) + " notes on " + ("\"" + t->name + "\"");
+    return toolText ("Wrote " + String (count) + (count == 1 ? " note" : " notes") + " on " + ("\"" + t->name + "\"")
+                     + ", bars " + barText (from) + " to " + barText (to) + " (clip " + String (clipId) + "). "
+                     "In Lathe this is one undo step (Cmd/Ctrl+Z).");
 }
 
 String Tools::barText (double beats) const
@@ -648,10 +786,9 @@ var Tools::stop (String& status)
 
 String Tools::pluginKind (const PluginDescription& d) const
 {
-    // Lathe's own catalog knows what its plug-ins are (a MIDI tool may scan as an instrument).
-    for (auto& e : PluginStore::defaultCatalog())
-        if (e.name.equalsIgnoreCase (d.name))
-            return e.kind == "MIDI" ? "note generator" : e.kind == "Instrument" ? "instrument" : "effect";
+    // Lathe's own devices say what they are.
+    if (auto* info = devices::find (d))
+        return info->kind == devices::Kind::instrument ? "instrument" : "effect";
 
     // Loaded in this project already: then the plug-in itself says.
     for (auto* list : { &edit.tracks, &edit.buses })
@@ -669,7 +806,7 @@ String Tools::pluginKind (const PluginDescription& d) const
 std::optional<PluginDescription> Tools::findInstalledPlugin (const String& wanted, String& error) const
 {
     const auto name = wanted.trim();
-    const auto types = engine.getPluginHost().known.getTypes();
+    const auto types = engine.getPluginHost().allTypes();   // Lathe's own first, so "Reverb" means Lathe's
 
     for (auto& d : types)
         if (d.name.equalsIgnoreCase (name))
@@ -704,9 +841,12 @@ var Tools::listPlugins (const var& args) const
     const auto kindFilter = args.getProperty ("kind", {}).toString().trim().toLowerCase();
     const auto search = args.getProperty ("search", {}).toString().trim();
 
-    auto types = engine.getPluginHost().known.getTypes();
-    std::sort (types.begin(), types.end(), [] (const PluginDescription& a, const PluginDescription& b)
+    auto types = engine.getPluginHost().allTypes();
+    std::stable_sort (types.begin(), types.end(), [] (const PluginDescription& a, const PluginDescription& b)
     {
+        // Lathe's own first, then the rest by name.
+        if (devices::isBuiltIn (a) != devices::isBuiltIn (b))
+            return devices::isBuiltIn (a);
         return a.name.compareIgnoreCase (b.name) < 0;
     });
 
@@ -728,7 +868,9 @@ var Tools::listPlugins (const var& args) const
         set (o, "name", d.name);
         set (o, "maker", d.manufacturerName);
         set (o, "kind", kind);
-        set (o, "format", d.pluginFormatName);
+        set (o, "format", devices::isBuiltIn (d) ? String ("built into Lathe") : d.pluginFormatName);
+        if (devices::isBuiltIn (d))
+            set (o, "about", d.descriptiveName);
         if (d.version.isNotEmpty())
             set (o, "version", d.version);
         list.add (o);
@@ -895,6 +1037,8 @@ var Tools::editSession (const var& args, String& status)
             }
         }
 
+        if (t->isBus())
+            devices::startOnReturn (*slot->instance);
         t->plugins.insert (t->plugins.begin() + index, slot);
         if (added != nullptr)
             *added = slot;

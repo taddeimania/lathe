@@ -61,18 +61,8 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
       arrangement (ctx),
       mixer (ctx),
       devices (ctx),
-      pianoRoll (ctx),
-      store (host, s.getFile().getParentDirectory())
+      pianoRoll (ctx)
 {
-    // Plug-in updates that couldn't be swapped in last time (the old one was loaded) go in now,
-    // before anything loads a plug-in.
-    for (auto& bundle : PluginStore::applyPendingInstalls (s.getFile().getParentDirectory()))
-    {
-        OwnedArray<PluginDescription> found;
-        host.scanFile (bundle, found);
-    }
-    store.updateInstalledState();
-
     setWantsKeyboardFocus (true);
     divider = std::make_unique<Divider> (*this);
 
@@ -95,26 +85,6 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     ctx.openPluginBrowser = [this] { openPluginBrowser(); };
     ctx.showDevices = [this] { if (! detailShown || pianoRollShown) showDetail (false); };
 
-    store.onChanged = [this]
-    {
-        if (browserWindow != nullptr && browserWindow->isVisible())
-            browserWindow->getBrowser().refreshSoon();
-
-        // Once per session, mention updates for your plug-ins.
-        if (! announcedUpdates && ! store.isRefreshing())
-        {
-            StringArray names;
-            for (auto& e : store.entries)
-                if (e.updateAvailable())
-                    names.add (e.name + " " + e.version);
-            if (! names.isEmpty())
-            {
-                announcedUpdates = true;
-                setStatus ("Plug-in updates on GitHub: " + names.joinIntoString (", ") + ". Open the plug-in browser (Cmd/Ctrl+B) to update.");
-            }
-        }
-    };
-
     pianoRoll.onClose = [this] { showDetail (false); };
     transport.onViewChange = [this] (bool m) { setMixerShown (m); };
     transport.onOpenSettings = [this] { showSettingsDialog (ctx); };
@@ -133,7 +103,6 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
                                         : "  Skipped " + String (skipped.size()) + " that failed to load safely: "
                                           + skipped.joinIntoString (", ") + ". See Settings."));
         reloadMissingPlugins();
-        store.updateInstalledState();
         if (browserWindow != nullptr && browserWindow->isVisible())
             browserWindow->getBrowser().refreshSoon();
     };
@@ -223,10 +192,6 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
     setSize (1360, 860);
     startTimerHz (30);
-
-    // Quietly check GitHub for new versions of your plug-ins (cached for an hour).
-    if (! forScreenshots)
-        store.refresh (false);
 }
 
 MainComponent::~MainComponent()
@@ -238,7 +203,6 @@ MainComponent::~MainComponent()
     notes.reset();
     cloud.reset();
     browserWindow.reset();
-    store.onChanged = nullptr;
     settings.setValue ("detailHeight", detailHeight);
     settings.setValue ("recentProjects", recentFiles.toString());
     engine.saveDeviceSettings();
@@ -709,9 +673,8 @@ void MainComponent::reloadMissingPlugins()
 void MainComponent::openPluginBrowser()
 {
     if (browserWindow == nullptr)
-        browserWindow = std::make_unique<PluginBrowserWindow> (ctx, store);
+        browserWindow = std::make_unique<PluginBrowserWindow> (ctx);
     browserWindow->show();
-    store.refresh (false);
 }
 
 void MainComponent::importAudio()

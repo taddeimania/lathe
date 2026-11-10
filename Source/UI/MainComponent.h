@@ -86,13 +86,11 @@ private:
     MixerView mixer;
     DeviceChainView devices;
     PianoRoll pianoRoll;
-    PluginStore store;
     std::unique_ptr<PluginBrowserWindow> browserWindow;
     std::unique_ptr<CloudController> cloud;
     std::unique_ptr<UpdateNotice> updateNotice;
     std::unique_ptr<NotesController> notes;
     std::shared_ptr<assistant::Service> aiAssistant;   // AI assistant (MCP) connection
-    bool announcedUpdates = false;
     std::unique_ptr<Divider> divider;
     Label statusLeft, statusRight;
     TooltipWindow tooltips { this, 600 };

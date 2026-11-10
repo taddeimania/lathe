@@ -33,6 +33,13 @@ private:
     void quantizeSelection();
     void centreOnNotes();
 
+    // hearing notes as you click, drag and draw them
+    bool hearNotes() const;
+    void hear (int pitch, float velocity);   // the note sounds until stopHearing() or another hear()
+    void stopHearing();
+    void blip (int pitch, float velocity);   // a short note, for drawing and arrow keys
+    bool onKeyboard (Point<int>) const;
+
     // geometry
     Rectangle<int> gridArea() const;
     Rectangle<int> velocityArea() const;
@@ -52,12 +59,13 @@ private:
     static constexpr int keyboardWidth = 46, toolbarHeight = 28, velocityHeight = 48;
 
     ComboBox gridBox;
-    TextButton quantizeButton { "Quantize" }, closeButton { "Close" };
+    TextButton quantizeButton { "Quantize" }, closeButton { "Close" }, hearButton { "Hear notes" };
     Label title;
     ScrollBar hbar { false }, vbar { true };
 
     std::set<int> selected;
-    enum class Mode { none, move, resize, marquee, velocity } mode = Mode::none;
+    enum class Mode { none, move, resize, marquee, velocity, keyboard } mode = Mode::none;
+    int heardPitch = -1, heardTrack = -1, dragNote = -1;
     std::vector<Note> dragOriginal;
     Point<int> dragStart;
     Rectangle<int> marquee;

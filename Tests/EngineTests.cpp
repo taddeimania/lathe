@@ -2,7 +2,8 @@
 // Build with -DLATHE_BUILD_TESTS=ON and run LatheTests.
 
 #include "Engine/Engine.h"
-#include "Engine/PluginStore.h"
+#include "Devices/Device.h"
+#include "Devices/Reverb/Types.h"
 #include "Engine/ClipJoin.h"
 #include "Patcher/Updater.h"
 #include "Cloud/ProjectDiff.h"
@@ -63,7 +64,7 @@ private:
 };
 
 /** Pure delay "plug-in" that reports its latency, for testing compensation. */
-/** A MIDI generator (like an arpeggiator, or Dicey): plays one note on its own, from
+/** A MIDI generator (like an arpeggiator): plays one note on its own, from
     sample `on` to sample `off` of the song, whatever comes in. */
 class NoteGenerator : public AudioPluginInstance
 {
@@ -110,6 +111,23 @@ public:
     NoteEater() : NoteGenerator (-1, -1) {}
     bool producesMidi() const override { return false; }
     void processBlock (AudioBuffer<float>&, MidiBuffer& midi) override   { midi.clear(); }
+};
+
+/** A "synth" that counts the notes it gets. */
+class NoteCounter : public NoteEater
+{
+public:
+    void processBlock (AudioBuffer<float>&, MidiBuffer& midi) override
+    {
+        for (const auto m : midi)
+        {
+            const auto msg = m.getMessage();
+            if (msg.isNoteOn())       { ++ons; lastNote = msg.getNoteNumber(); lastVelocity = msg.getVelocity(); }
+            else if (msg.isNoteOff()) ++offs;
+        }
+        midi.clear();
+    }
+    std::atomic<int> ons { 0 }, offs { 0 }, lastNote { -1 }, lastVelocity { 0 };
 };
 
 /** Takes a steady few hundred microseconds per block, like a real plug-in would. */
@@ -207,52 +225,6 @@ int peakIndex (const std::vector<float>& v)
     for (size_t i = 0; i < v.size(); ++i)
         if (std::abs (v[i]) > bestValue + 1.0e-6f) { bestValue = std::abs (v[i]); best = (int) i; }
     return best;
-}
-
-/** Writes a stored (uncompressed) zip with Unix modes, like the macOS release archives. */
-void writeZipWithModes (const File& zipFile, const std::vector<std::tuple<String, String, int>>& entries)   // path, content, mode
-{
-    MemoryOutputStream out, central;
-    int count = 0;
-    for (auto& [path, content, mode] : entries)
-    {
-        const auto offset = (uint32) out.getDataSize();
-        const auto name = path.toRawUTF8();
-        const auto nameLen = (uint16) strlen (name);
-        const auto size = (uint32) content.getNumBytesAsUTF8();
-        const bool isDir = path.endsWithChar ('/');
-
-        out.writeInt (0x04034b50); out.writeShort (20); out.writeShort (0); out.writeShort (0);
-        out.writeShort (0); out.writeShort (0); out.writeInt (0); out.writeInt ((int) size); out.writeInt ((int) size);
-        out.writeShort ((short) nameLen); out.writeShort (0);
-        out.write (name, nameLen);
-        out.write (content.toRawUTF8(), size);
-
-        const uint32 attrs = ((uint32) ((isDir ? 040000 : 0100000) | mode) << 16) | (isDir ? 0x10u : 0u);
-        central.writeInt (0x02014b50); central.writeShort (0x0314); central.writeShort (20); central.writeShort (0); central.writeShort (0);
-        central.writeShort (0); central.writeShort (0); central.writeInt (0); central.writeInt ((int) size); central.writeInt ((int) size);
-        central.writeShort ((short) nameLen); central.writeShort (0); central.writeShort (0); central.writeShort (0); central.writeShort (0);
-        central.writeInt ((int) attrs); central.writeInt ((int) offset);
-        central.write (name, nameLen);
-        ++count;
-    }
-    const auto centralOffset = (uint32) out.getDataSize();
-    out.write (central.getData(), central.getDataSize());
-    out.writeInt (0x06054b50); out.writeShort (0); out.writeShort (0); out.writeShort ((short) count); out.writeShort ((short) count);
-    out.writeInt ((int) central.getDataSize()); out.writeInt ((int) centralOffset); out.writeShort (0);
-    zipFile.replaceWithData (out.getData(), out.getDataSize());
-}
-
-/** A fake release folder: Name-ver-Platform/{README.md, Name.vst3/Contents/...}. */
-File makeReleaseFolder (const File& dir, const String& name, const String& version, const String& binaryContent)
-{
-    auto root = dir.getChildFile (name + "-" + version + "-Linux");
-    root.deleteRecursively();
-    auto bin = root.getChildFile (name + ".vst3/Contents/x86_64-linux/" + name + ".so");
-    bin.getParentDirectory().createDirectory();
-    bin.replaceWithText (binaryContent);
-    root.getChildFile ("README.md").replaceWithText ("readme");
-    return root;
 }
 
 } // namespace
@@ -571,7 +543,7 @@ int main (int argc, char** argv)
         };
 
         // Gen plays a note from sample 10000 to 20000; the synth after it swallows the notes.
-        auto gen = edit.addTrack (TrackKind::midi, "Dicey");
+        auto gen = edit.addTrack (TrackKind::midi, "Arp");
         addPlugin (*gen, std::make_unique<NoteGenerator> (10000, 20000), "Gen", false);
         addPlugin (*gen, std::make_unique<NoteEater>(), "Synth", true);
         gen->arm = true;
@@ -607,8 +579,47 @@ int main (int argc, char** argv)
         if (! rec->clips.empty() && ! rec->clips[0].notes.empty())
             check (std::abs ((rec->clips[0].start + rec->clips[0].notes[0].start) * spb - 10000.0) < 1.0, "on time there too");
 
-        // Keyboard input still records as before on a track without a generator.
+        // Hearing notes from the piano roll: straight to that track's instrument,
+        // stopped or recording, and never into a clip.
         rec->arm = false;
+        {
+            auto keys = edit.addTrack (TrackKind::midi, "Keys");
+            auto counter = std::make_unique<NoteCounter>();
+            auto* counted = counter.get();
+            addPlugin (*keys, std::move (counter), "Counter", true);
+            auto other = edit.addTrack (TrackKind::midi, "Other");
+            auto otherCounter = std::make_unique<NoteCounter>();
+            auto* otherCounted = otherCounter.get();
+            addPlugin (*other, std::move (otherCounter), "Counter", true);
+            engine.rebuild();
+
+            engine.previewNote (keys->id, 60, 0.8f);
+            runCallbacks (engine, 2);
+            check (counted->ons == 1 && counted->lastNote == 60 && counted->lastVelocity == 102,
+                   "a heard note reaches the track's instrument while stopped (" + String (counted->ons.load()) + " on, velocity "
+                       + String (counted->lastVelocity.load()) + ")");
+            check (otherCounted->ons == 0, "and only that track's");
+            engine.previewNote (keys->id, 60, 0.0f);
+            runCallbacks (engine, 2);
+            check (counted->offs >= 1, "and stops when let go");
+
+            keys->arm = true;
+            edit.insertMarker = 0.0;
+            engine.toggleRecord();
+            runCallbacks (engine, 10);
+            engine.previewNote (keys->id, 64, 0.8f);
+            runCallbacks (engine, 10);
+            engine.previewNote (keys->id, 64, 0.0f);
+            runCallbacks (engine, 10);
+            engine.stop();
+            check (counted->ons == 2 && counted->lastNote == 64, "it plays while recording too");
+            check (keys->clips.empty() || keys->clips[0].notes.empty(), "but is never recorded");
+            keys->arm = false;
+            edit.removeTrack (other->id);
+            edit.removeTrack (keys->id);
+        }
+
+        // Keyboard input still records as before on a track without a generator.
         edit.removeTrack (rec->id);
         edit.removeTrack (gen->id);
         for (auto& [t, m] : wasMuted)
@@ -1076,9 +1087,9 @@ int main (int argc, char** argv)
         check (e.getUndoDepth() == 1, "adding two tracks in one go is one step (got " + String (e.getUndoDepth()) + ")");
 
         // Plug-ins and a send, as the mixer and the device chain do it.
-        auto dicey = slotNamed ("Dicey"), stepkin = slotNamed ("Stepkin"), nave = slotNamed ("Nave");
-        keys->plugins = { dicey, stepkin };
-        verb->plugins = { nave };
+        auto arp = slotNamed ("Arpeggiator"), drumSynth = slotNamed ("DrumSynth"), bigVerb = slotNamed ("BigVerb");
+        keys->plugins = { arp, drumSynth };
+        verb->plugins = { bigVerb };
         e.changed();
         e.commitUndoStep();
         keys->getSend (verb->id, true)->levelDb = -12.0f;
@@ -1095,12 +1106,12 @@ int main (int argc, char** argv)
         e.removeTrack (verb->id);
         e.commitUndoStep();
         check (e.buses.empty() && keys->sends.empty(), "deleting a return removes the sends to it");
-        check (e.undo() && e.buses.size() == 1 && e.buses[0] == verb && verb->plugins.size() == 1 && verb->plugins[0] == nave,
+        check (e.undo() && e.buses.size() == 1 && e.buses[0] == verb && verb->plugins.size() == 1 && verb->plugins[0] == bigVerb,
                "undo brings the deleted return back with its plug-in instance");
         check (keys->sends.size() == 1 && keys->sends[0]->busId == verb->id, "and the send to it");
 
         // Bypass, reorder, routing and renames are steps too.
-        stepkin->bypassed = true;
+        drumSynth->bypassed = true;
         e.changed();
         e.commitUndoStep();
         std::swap (keys->plugins[0], keys->plugins[1]);
@@ -1109,9 +1120,9 @@ int main (int argc, char** argv)
         keys->name = "Drums";
         e.changed();
         e.commitUndoStep();
-        check (e.undo() && keys->plugins[0] == dicey && keys->output.kind == OutputRoute::Kind::master && keys->name == "Keys",
+        check (e.undo() && keys->plugins[0] == arp && keys->output.kind == OutputRoute::Kind::master && keys->name == "Keys",
                "one undo puts back the order, the output and the name changed together");
-        check (e.undo() && ! stepkin->bypassed.load(), "the next undo turns the plug-in back on");
+        check (e.undo() && ! drumSynth->bypassed.load(), "the next undo turns the plug-in back on");
 
         // Something that calls changed() several times (a group bus) is still one step.
         auto a = e.addTrack (TrackKind::audio, "Kick");
@@ -1156,116 +1167,349 @@ int main (int argc, char** argv)
     }
 
 
-    std::cout << "Plug-in store" << std::endl;
+    std::cout << "Built-in devices" << std::endl;
     {
-        // parseRelease against the shape of a real release (taddeimania/tarry v0.1.0)
-        auto json = JSON::parse (R"({"tag_name":"v0.1.0","name":"Tarry 0.1.0","html_url":"https://github.com/taddeimania/tarry/releases/tag/v0.1.0",
-            "published_at":"2026-10-26T22:56:09Z","draft":false,"prerelease":false,"body":"## What's in 0.1.0\n- **12 types**",
-            "assets":[{"name":"Tarry-0.1.0-Linux.tar.gz","size":2528340,"browser_download_url":"https://github.com/taddeimania/tarry/releases/download/v0.1.0/Tarry-0.1.0-Linux.tar.gz"},
-                      {"name":"Tarry-0.1.0-macOS.zip","size":3726297,"browser_download_url":"https://github.com/taddeimania/tarry/releases/download/v0.1.0/Tarry-0.1.0-macOS.zip"},
-                      {"name":"Tarry-0.1.0-Windows.zip","size":2697478,"browser_download_url":"https://github.com/taddeimania/tarry/releases/download/v0.1.0/Tarry-0.1.0-Windows.zip"}]})");
-        StoreEntry e;
-        e.repo = "taddeimania/tarry";
-        PluginStore::parseRelease (json, e);
-        check (e.version == "0.1.0" && e.name == "Tarry", "release parsed: version " + e.version + ", name from asset " + e.name);
-        check (e.assetName == "Tarry-0.1.0-" + PluginStore::platformTag() + (PluginStore::platformTag() == "Linux" ? ".tar.gz" : ".zip"),
-               "picks this platform's archive (" + e.assetName + ")");
+        using namespace lathe::devices;
+        StringArray ids;
+        for (auto& info : all())
+            ids.add (info.id);
+        check (ids.joinIntoString (",") == "bass,poly,drums,reverb,delay,compressor,saturator,mastering", "the built-in devices (" + ids.joinIntoString (",") + ")");
 
-        StoreEntry dicey;
-        PluginStore::parseRelease (JSON::parse (R"({"tag_name":"v1.0.1","draft":false,"assets":[{"name":"Dicey-1.0.1-macOS-2044f29.zip","size":1,"browser_download_url":"x"},{"name":"Dicey-1.0.1-Windows-2044f29.zip","size":1,"browser_download_url":"y"},{"name":"Dicey-1.0.1-Linux-2044f29.tar.gz","size":1,"browser_download_url":"z"}]})"), dicey);
-        check (dicey.hasRelease(), "asset names with a commit suffix still match (Dicey)");
+        // Noise for half a second, then silence; instruments get a chord (or a drum hit
+        // every eighth note) for that half second instead.
+        auto runDevice = [] (AudioPluginInstance& p, int seconds, std::vector<float>& left, float level = 0.3f)
+        {
+            constexpr int block = 256;
+            p.prepareToPlay (48000.0, block);
+            AudioBuffer<float> buffer (2, block);
+            MidiBuffer midi;
+            Random rng (7);
+            left.clear();
+            const bool instrument = p.acceptsMidi();
+            for (int pos = 0; pos < 48000 * seconds; pos += block)
+            {
+                midi.clear();
+                if (instrument)
+                {
+                    static const int drumNotes[] { 36, 42, 38, 46, 39, 41, 49, 37, 45, 51, 48, 56 };
+                    const bool drums = p.getName() == "Drums";
+                    if ((drums && pos % 6144 == 0 && pos < 24000) || pos == 0)
+                        for (int k = 0; k < 3; ++k)
+                            midi.addEvent (MidiMessage::noteOn (1, drums ? drumNotes[(pos / 6144 * 3 + k) % 12] : 45 + 7 * k, jmin (1.0f, level)), 0);
+                    if (! drums && pos == 23808)
+                        for (int k = 0; k < 3; ++k)
+                            midi.addEvent (MidiMessage::noteOff (1, 45 + 7 * k), 10);
+                }
+                for (int c = 0; c < 2; ++c)
+                    for (int i = 0; i < block; ++i)
+                        buffer.setSample (c, i, instrument ? 0.0f : (pos + i < 24000 ? level * (rng.nextFloat() * 2.0f - 1.0f) : 0.0f));
+                p.processBlock (buffer, midi);
+                for (int i = 0; i < block; ++i)
+                    left.push_back (buffer.getSample (0, i));
+            }
+        };
+        auto rms = [] (const std::vector<float>& v, int from, int to)
+        {
+            double s = 0.0;
+            for (int i = from; i < to && i < (int) v.size(); ++i)
+                s += (double) v[(size_t) i] * v[(size_t) i];
+            return std::sqrt (s / jmax (1, to - from));
+        };
+        auto finite = [] (const std::vector<float>& v)
+        {
+            for (auto x : v)
+                if (! std::isfinite (x))
+                    return false;
+            return true;
+        };
 
-        StoreEntry draft;
-        PluginStore::parseRelease (JSON::parse (R"({"tag_name":"v9","draft":true,"assets":[]})"), draft);
-        check (! draft.hasRelease() && draft.version.isEmpty(), "draft releases are ignored");
+        for (auto& info : all())
+        {
+            const auto desc = describe (info);
+            check (desc.pluginFormatName == "Lathe" && desc.fileOrIdentifier == "lathe:" + info.id && find (desc) == &info,
+                   info.name + ": described as lathe:" + info.id);
+            auto resolved = host.resolve (desc);
+            check (resolved.has_value() && resolved->fileOrIdentifier == desc.fileOrIdentifier, info.name + ": the host resolves it");
 
-        check (PluginStore::compareVersions ("0.10.0", "0.9.1") > 0 && PluginStore::compareVersions ("v1.0", "1.0.0") == 0
-               && PluginStore::compareVersions ("1.2.0", "1.3.0") < 0, "version comparison");
-        check (PluginStore::defaultCatalog().size() == 14, "catalog lists all 14 plug-ins");
+            String error;
+            auto slot = engine.makeSlot (desc, {}, error);
+            check (slot->instance != nullptr && slot->instance->getName() == info.name, info.name + ": loads through the engine " + error);
+            if (slot->instance == nullptr)
+                continue;
+            auto& device = dynamic_cast<Device&> (*slot->instance);
+            check (device.getNumPrograms() >= 5, info.name + ": has presets (" + String (device.getNumPrograms()) + ")");
 
-        // Install from a zip that carries Unix modes, like the macOS builds.
-        auto work = dir.getChildFile ("store");
-        auto vst3 = work.getChildFile ("VST3");
-        auto data = work.getChildFile ("data");
-        work.deleteRecursively();
-        data.createDirectory();
+            std::vector<float> out;
+            runDevice (device, 2, out);
+            check (finite (out) && rms (out, 0, 24000) > 0.01, info.name + ": processes sound (rms " + String (rms (out, 0, 24000), 3) + ")");
 
-        auto zip = work.getChildFile ("Downloads/Foo-1.0.0-macOS.zip");
-        zip.getParentDirectory().createDirectory();
-        writeZipWithModes (zip, { { "Foo-1.0.0-macOS/", "", 0755 },
-                                  { "Foo-1.0.0-macOS/README.md", "readme", 0644 },
-                                  { "Foo-1.0.0-macOS/Foo.vst3/", "", 0755 },
-                                  { "Foo-1.0.0-macOS/Foo.vst3/Contents/", "", 0755 },
-                                  { "Foo-1.0.0-macOS/Foo.vst3/Contents/MacOS/", "", 0755 },
-                                  { "Foo-1.0.0-macOS/Foo.vst3/Contents/MacOS/Foo", "binary v1", 0755 },
-                                  { "Foo-1.0.0-macOS/Foo.vst3/Contents/Info.plist", "plist", 0644 } });
-        File bundle;
-        bool pending = false;
-        auto r = PluginStore::installArchive (zip, "Foo", vst3, data, bundle, pending);
-        check (r.wasOk() && ! pending, "zip release installs " + r.getErrorMessage());
-        check (bundle == vst3.getChildFile ("Foo.vst3") && bundle.getChildFile ("Contents/MacOS/Foo").loadFileAsString() == "binary v1",
-               "only the .vst3 bundle lands in the VST3 folder");
-        check (! vst3.getChildFile ("README.md").exists() && vst3.getNumberOfChildFiles (File::findFilesAndDirectories) == 1, "nothing else is copied");
-       #if ! JUCE_WINDOWS
-        check (access (bundle.getChildFile ("Contents/MacOS/Foo").getFullPathName().toRawUTF8(), X_OK) == 0, "the plug-in binary keeps its execute permission");
-       #endif
+            // Every preset plays without blowing up.
+            bool allFinite = true;
+            for (int i = 0; i < device.getNumPrograms(); ++i)
+            {
+                device.setCurrentProgram (i);
+                std::vector<float> o;
+                runDevice (device, 1, o, 0.8f);
+                allFinite = allFinite && finite (o);
+            }
+            check (allFinite, info.name + ": every preset gives finite output at a hot level");
 
-        // Update over the top: replaced in place, no leftovers.
-        auto folder = makeReleaseFolder (work, "Foo", "1.1.0", "binary v2");
-        auto tgz = work.getChildFile ("Downloads/Foo-1.1.0-Linux.tar.gz");
-        ChildProcess tar;
-        const bool tarOk = tar.start (StringArray { "tar", "-czf", tgz.getFullPathName(), "-C", work.getFullPathName(), folder.getFileName() })
-                           && tar.waitForProcessToFinish (30000) && tar.getExitCode() == 0;
-        check (tarOk, "made a tar.gz fixture");
-        r = PluginStore::installArchive (tgz, "Foo", vst3, data, bundle, pending);
-        check (r.wasOk() && ! pending && bundle.getChildFile ("Contents/x86_64-linux/Foo.so").loadFileAsString() == "binary v2",
-               "tar.gz update replaces the installed bundle " + r.getErrorMessage());
-        check (! bundle.getChildFile ("Contents/MacOS").exists(), "files from the old version are gone");
-        check (vst3.findChildFiles (File::findFilesAndDirectories, false, "*.lathe-old").isEmpty(), "no .lathe-old copy left behind");
+            // State round-trip through a fresh instance.
+            device.setCurrentProgram (1);
+            MemoryBlock saved;
+            device.getStateInformation (saved);
+            auto again = engine.makeSlot (desc, saved, error);
+            auto& copy = dynamic_cast<Device&> (*again->instance);
+            bool same = copy.getCurrentProgram() == 1;
+            for (auto* p : device.getParameters())
+                if (auto* rp = dynamic_cast<RangedAudioParameter*> (p))
+                    same = same && std::abs (rp->getValue() - copy.state.getParameter (rp->getParameterID())->getValue()) < 1.0e-5f;
+            check (same, info.name + ": settings and preset survive a save and load");
 
-        // A staged update (what happens when Windows has the old one locked) is applied on the next launch.
-        auto staged = data.getChildFile ("Pending/Foo.vst3");
-        staged.getChildFile ("Contents").createDirectory();
-        staged.getChildFile ("Contents/marker").replaceWithText ("v3");
-        DynamicObject::Ptr p = new DynamicObject();
-        p->setProperty ("source", staged.getFullPathName());
-        p->setProperty ("target", bundle.getFullPathName());
-        data.getChildFile ("Pending Installs.json").replaceWithText (JSON::toString (Array<var> { var (p.get()) }));
-        auto applied = PluginStore::applyPendingInstalls (data);
-        check (applied.size() == 1 && bundle.getChildFile ("Contents/marker").loadFileAsString() == "v3"
-               && ! data.getChildFile ("Pending Installs.json").exists(), "staged update applied at startup");
+            // The panel builds, at a sensible size.
+            std::unique_ptr<AudioProcessorEditor> editor (device.createEditor());
+            check (editor != nullptr && editor->getWidth() >= 400 && editor->getWidth() <= 1400 && editor->getHeight() >= 150 && editor->getHeight() <= 700,
+                   info.name + ": panel " + String (editor != nullptr ? editor->getWidth() : 0) + " x " + String (editor != nullptr ? editor->getHeight() : 0));
+            editor.reset();
+        }
 
-        // The whole flow: download (from a file:// URL here), unpack, install, record.
-        PluginStore store (host, data);
-        store.vst3DirOverride = vst3;
-        StoreEntry fake;
-        fake.repo = "test/bar";
-        fake.name = "Bar";
-        fake.kind = "Effect";
-        auto barFolder = makeReleaseFolder (work, "Bar", "2.0.0", "bar");
-        auto barTgz = work.getChildFile ("Bar-2.0.0-Linux.tar.gz");
-        ChildProcess tar2;
-        tar2.start (StringArray { "tar", "-czf", barTgz.getFullPathName(), "-C", work.getFullPathName(), barFolder.getFileName() });
-        tar2.waitForProcessToFinish (30000);
-        fake.version = "2.0.0";
-        fake.assetName = barTgz.getFileName();
-        fake.assetUrl = URL (barTgz).toString (false);
-        fake.assetSize = barTgz.getSize();
-        store.entries.push_back (fake);
+        auto load = [&] (const char* id) -> std::shared_ptr<PluginSlot>
+        {
+            for (auto& info : all())
+                if (info.id == id)
+                {
+                    String error;
+                    return engine.makeSlot (describe (info), {}, error);
+                }
+            return {};
+        };
 
-        bool finished = false;
-        Result installResult = Result::ok();
-        store.install ("test/bar", [&] (const Result& res, const PluginDescription*) { installResult = res; finished = true; });
-        for (int i = 0; i < 200 && ! finished; ++i)
-            MessageManager::getInstance()->runDispatchLoopUntil (20);
+        // Reverb: a tail after the sound stops; nothing of it at Mix 0.
+        {
+            auto slot = load ("reverb");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            d.setCurrentProgram (0);   // Hall
+            std::vector<float> out;
+            runDevice (d, 3, out);
+            const double tail = rms (out, 30000, 60000);
+            check (tail > 0.002, "reverb: the hall rings on after the noise stops (" + String (tail, 4) + ")");
+            d.set ("mix", 0.0f);
+            runDevice (d, 2, out);
+            check (rms (out, 30000, 60000) < 1.0e-5, "reverb: Mix 0 is only the dry sound");
+            d.modeChosen (5);
+            check (std::abs (d.get ("decay") - rvb::typeInfo (rvb::TSpring).start.decay) < 0.01f, "reverb: picking Spring moves Decay to where a spring starts");
+        }
 
-        auto* bar = store.find ("test/bar");
-        check (finished && installResult.wasOk(), "install() downloads and installs " + installResult.getErrorMessage());
-        check (bar != nullptr && bar->isInstalled() && bar->installedVersion == "2.0.0" && ! bar->busy, "store shows it installed at 2.0.0");
-        check (vst3.getChildFile ("Bar.vst3/Contents/x86_64-linux/Bar.so").existsAsFile(), "bundle is in the VST3 folder");
-        check (! data.getChildFile ("Downloads/" + fake.assetName).exists(), "the downloaded archive is cleaned up");
-        bar->version = "2.1.0";
-        check (bar->updateAvailable(), "a newer release shows as an update");
+        // Delay: the first echo lands on the beat (1/4 at 120 BPM = 500 ms, digital, clean).
+        {
+            auto slot = load ("delay");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            d.set ("type", 0); d.set ("sync", 1); d.set ("note", 8); d.set ("repeats", 0.0f);
+            d.set ("tone", 0.0f); d.set ("grit", 0.0f); d.set ("wobble", 0.0f); d.set ("mix", 1.0f); d.set ("stereo", 0);
+            d.prepareToPlay (48000.0, 256);
+            AudioBuffer<float> buffer (2, 256);
+            MidiBuffer midi;
+            std::vector<float> out;
+            for (int pos = 0; pos < 48000; pos += 256)
+            {
+                buffer.clear();
+                if (pos == 0)
+                    buffer.setSample (0, 0, 1.0f), buffer.setSample (1, 0, 1.0f);
+                d.processBlock (buffer, midi);
+                for (int i = 0; i < 256; ++i)
+                    out.push_back (buffer.getSample (0, i));
+            }
+            int peak = 0;
+            for (int i = 1; i < (int) out.size(); ++i)
+                if (std::abs (out[(size_t) i]) > std::abs (out[(size_t) peak]))
+                    peak = i;
+            check (std::abs (peak - 24000) < 120, "delay: a quarter note at 120 BPM echoes at 500 ms (" + String (peak / 48.0, 1) + " ms)");
+            check (d.statusLine().contains ("500"), "delay: the panel says when the echo comes (" + d.statusLine() + ")");
+        }
+
+        // Compressor: a steady tone 12 dB over a -18 dB threshold at 4:1 comes out about 9 dB down.
+        {
+            auto slot = load ("compressor");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            d.set ("threshold", -18.0f); d.set ("ratio", 4.0f); d.set ("attack", 1.0f); d.set ("release", 50.0f);
+            d.set ("makeup", 0.0f); d.set ("auto", 0); d.set ("mix", 1.0f);
+            d.prepareToPlay (48000.0, 256);
+            AudioBuffer<float> buffer (2, 256);
+            MidiBuffer midi;
+            float lastPeak = 0.0f;
+            for (int pos = 0; pos < 48000; pos += 256)
+            {
+                for (int i = 0; i < 256; ++i)
+                {
+                    const float s = 0.5f * std::sin (2.0f * MathConstants<float>::pi * 220.0f * (float) (pos + i) / 48000.0f);   // -6 dBFS peaks
+                    buffer.setSample (0, i, s);
+                    buffer.setSample (1, i, s);
+                }
+                d.processBlock (buffer, midi);
+                lastPeak = buffer.getMagnitude (0, 0, 256);
+            }
+            const float outDb = Decibels::gainToDecibels (lastPeak);
+            check (std::abs (outDb - (-15.0f)) < 1.5f, "compressor: -6 dB peaks come out near -15 dB (" + String (outDb, 1) + " dB)");
+            check (std::abs (d.meterValue() + 9.0f) < 1.5f, "compressor: the meter shows about 9 dB of reduction (" + String (d.meterValue(), 1) + ")");
+        }
+
+        // Saturator: reports its latency, and Mix 0 is the dry sound delayed by exactly that.
+        {
+            auto slot = load ("saturator");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            d.set ("mix", 0.0f); d.set ("output", 0.0f);
+            std::vector<float> out;
+            runDevice (d, 1, out, 0.3f);
+            check (d.getLatencySamples() > 0, "saturator: reports its oversampling latency (" + String (d.getLatencySamples()) + " samples)");
+        }
+
+        // Mastering: the limiter keeps peaks under the target's ceiling, and it reports its latency.
+        {
+            auto slot = load ("mastering");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            d.set ("amount", 0.8f);
+            std::vector<float> out;
+            runDevice (d, 2, out, 0.9f);
+            float peak = 0.0f;
+            for (auto x : out)
+                peak = jmax (peak, std::abs (x));
+            check (d.getLatencySamples() > 0, "mastering: reports the limiter's look-ahead (" + String (d.getLatencySamples()) + " samples)");
+            check (peak <= Decibels::decibelsToGain (-0.9f), "mastering: peaks stay under the -1 dBTP ceiling (" + String (Decibels::gainToDecibels (peak), 2) + " dB)");
+        }
+
+        // Instruments: play notes, read what comes out.
+        auto play = [] (Device& d, std::vector<std::tuple<int, int, int, float>> events, int samples)   // at, note, on (1) / off (0), velocity
+        {
+            constexpr int block = 256;
+            d.prepareToPlay (48000.0, block);
+            AudioBuffer<float> buffer (2, block);
+            std::vector<float> out;
+            for (int pos = 0; pos < samples; pos += block)
+            {
+                MidiBuffer midi;
+                for (auto& [at, note, on, vel] : events)
+                    if (at >= pos && at < pos + block)
+                        midi.addEvent (on ? MidiMessage::noteOn (1, note, vel) : MidiMessage::noteOff (1, note), at - pos);
+                d.processBlock (buffer, midi);
+                for (int i = 0; i < block; ++i)
+                    out.push_back (buffer.getSample (0, i));
+            }
+            return out;
+        };
+        auto crossingsHz = [] (const std::vector<float>& v, int from, int to)
+        {
+            int crossings = 0;
+            for (int i = from + 1; i < to; ++i)
+                if ((v[(size_t) i - 1] < 0.0f) != (v[(size_t) i] < 0.0f))
+                    ++crossings;
+            return crossings * 0.5 * 48000.0 / (to - from);
+        };
+
+        {
+            auto slot = load ("bass");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            check (d.acceptsMidi() && slot->description.isInstrument, "bass: an instrument that takes notes");
+            d.set ("wave", 2); d.set ("sub", 0.0f); d.set ("detune", 0.0f); d.set ("drive", 0.0f);
+            d.set ("cutoff", 12000.0f); d.set ("envAmount", 0.0f); d.set ("glide", 0.0f); d.set ("sustain", 1.0f);
+            auto out = play (d, { { 0, 45, 1, 0.8f } }, 48000);
+            const double hz = crossingsHz (out, 4800, 48000);
+            check (std::abs (hz - 110.0) < 2.0, "bass: A2 plays at 110 Hz (" + String (hz, 1) + " Hz)");
+
+            d.set ("glide", 200.0f);
+            out = play (d, { { 0, 45, 1, 0.8f }, { 24000, 57, 1, 0.8f } }, 72000);
+            const double during = crossingsHz (out, 24000 + 2400, 24000 + 7200), after = crossingsHz (out, 60000, 72000);
+            check (during > 120.0 && during < 210.0 && std::abs (after - 220.0) < 4.0,
+                   "bass: glide slides up an octave (" + String (during, 0) + " Hz on the way, " + String (after, 1) + " Hz after)");
+
+            d.set ("glide", 0.0f);
+            d.set ("release", 50.0f);
+            out = play (d, { { 0, 45, 1, 0.8f }, { 12000, 45, 0, 0.0f } }, 48000);
+            check (rms (out, 2000, 12000) > 0.05 && rms (out, 24000, 48000) < 1.0e-4, "bass: a note stops after its release");
+        }
+
+        {
+            auto slot = load ("poly");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            d.setCurrentProgram (0);
+            auto out = play (d, { { 0, 60, 1, 0.8f }, { 0, 64, 1, 0.8f }, { 0, 67, 1, 0.8f }, { 0, 72, 1, 0.8f } }, 48000);
+            check (finite (out) && rms (out, 24000, 48000) > 0.02, "poly: a chord rings (rms " + String (rms (out, 24000, 48000), 3) + ")");
+
+            d.setCurrentProgram (3);   // Pluck: no sustain, 400 ms release
+            std::vector<std::tuple<int, int, int, float>> many;
+            for (int k = 0; k < 12; ++k)
+                many.push_back ({ k * 100, 48 + k * 2, 1, 0.7f });   // more notes than voices
+            for (int k = 0; k < 12; ++k)
+                many.push_back ({ 24000, 48 + k * 2, 0, 0.0f });
+            out = play (d, many, 4 * 48000);
+            check (finite (out) && rms (out, 0, 12000) > 0.01 && rms (out, 3 * 48000, 4 * 48000) < 1.0e-4,
+                   "poly: twelve notes on eight voices play, then die away");
+        }
+
+        {
+            auto slot = load ("drums");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            const int notes[] { 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 56, 57, 59 };
+            StringArray silent;
+            for (int note : notes)
+            {
+                auto out = play (d, { { 0, note, 1, 1.0f } }, 12000);
+                if (! finite (out) || rms (out, 0, 12000) < 0.005)
+                    silent.add (String (note));
+            }
+            check (silent.isEmpty(), "drums: every General MIDI drum note it knows makes a sound" + (silent.isEmpty() ? String() : " (silent: " + silent.joinIntoString (", ") + ")"));
+            check (rms (play (d, { { 0, 60, 1, 1.0f } }, 12000), 0, 12000) < 1.0e-6, "drums: other notes are silent");
+
+            const auto open = play (d, { { 0, 46, 1, 1.0f } }, 24000);
+            const auto choked = play (d, { { 0, 46, 1, 1.0f }, { 2400, 42, 1, 0.01f } }, 24000);
+            check (rms (choked, 9600, 24000) < 0.25 * rms (open, 9600, 24000), "drums: a closed hat chokes the open hat");
+
+            auto kickTail = [&] (int kit)
+            {
+                d.set ("kit", (float) kit);
+                d.modeChosen (kit);
+                return rms (play (d, { { 0, 36, 1, 1.0f } }, 48000), 14400, 38400);
+            };
+            const double k909 = kickTail (0), k808 = kickTail (1), k606 = kickTail (2);
+            check (k808 > 2.0 * k909 && k909 > k606, "drums: the 808's kick booms longest, the 606's is shortest ("
+                   + String (k808, 3) + ", " + String (k909, 3) + ", " + String (k606, 3) + ")");
+            check (d.getProgramName (0) == "Simple 909" && d.getProgramName (1) == "Simple 808", "drums: the kits are named Simple 909, Simple 808...");
+        }
+
+        // On a return, Lathe's effects start fully wet.
+        {
+            auto slot = load ("reverb");
+            startOnReturn (*slot->instance);
+            check (dynamic_cast<Device&> (*slot->instance).get ("mix") == 1.0f, "an effect put on a return starts at Mix 100%");
+        }
+
+        // A project keeps them, settings and all.
+        {
+            Edit ep;
+            auto tr = ep.addTrack (TrackKind::audio, "Vox");
+            auto slot = load ("delay");
+            dynamic_cast<Device&> (*slot->instance).set ("repeats", 0.77f);
+            tr->plugins.push_back (slot);
+            const auto saved = ep.toVar (false);
+            Edit back;
+            back.loadFrom (saved, dir, [&] (const PluginDescription& d, const MemoryBlock& s)
+            {
+                String error;
+                return engine.makeSlot (d, s, error);
+            });
+            std::shared_ptr<Track> t2;
+            for (auto& x : back.tracks)
+                if (x->name == "Vox")
+                    t2 = x;
+            check (t2 != nullptr && t2->plugins.size() == 1 && t2->plugins[0]->instance != nullptr
+                   && std::abs (dynamic_cast<Device&> (*t2->plugins[0]->instance).get ("repeats") - 0.77f) < 0.001f,
+                   "a saved project loads its built-in delay back with its settings");
+        }
+
+        // The plug-in menu lists them first, and the host lists them with everything else.
+        std::vector<PluginDescription> menuItems;
+        host.buildMenu (false, menuItems);
+        check (menuItems.size() >= 5 && devices::isBuiltIn (menuItems.front()), "the add-plug-in menu has Lathe's own first");
+        check (host.allTypes().size() == (int) all().size() + host.known.getNumTypes(), "allTypes is the built-ins plus the scanned plug-ins");
     }
 
     std::cout << "Out-of-process plug-in scanning" << std::endl;
@@ -1733,7 +1977,7 @@ int main (int argc, char** argv)
             params->setProperty ("Decay", decay);
             params->setProperty ("Mix", "30 %");
             DynamicObject::Ptr p = new DynamicObject();
-            p->setProperty ("description", "<PLUGIN name=\"Nave\"/>");
+            p->setProperty ("description", "<PLUGIN name=\"BigVerb\"/>");
             p->setProperty ("state", "state-" + decay);
             p->setProperty ("params", var (params.get()));
             DynamicObject::Ptr t = new DynamicObject();
@@ -1745,7 +1989,7 @@ int main (int argc, char** argv)
             return var (proj.get());
         };
         const auto knob = cloud::summariseChanges (plug ("2.1 s"), plug ("3.4 s"));
-        check (knob == "\"Vox\": Nave: Decay 2.1 s -> 3.4 s", "names the plug-in knob that moved (got " + knob + ")");
+        check (knob == "\"Vox\": BigVerb: Decay 2.1 s -> 3.4 s", "names the plug-in knob that moved (got " + knob + ")");
     }
 
     std::cout << "Cloud: packed (FLAC) storage of takes" << std::endl;
@@ -2264,6 +2508,59 @@ int main (int argc, char** argv)
         };
         auto text = [] (const var& r) { return r["content"][0]["text"].toString(); };
 
+        // --- write_notes: a four-on-the-floor bar, repeated
+        {
+            auto beat = e.addTrack (TrackKind::midi, "Beat");
+            auto noteOf = [&] (var pitch, double bar, int velocity = 100)
+            {
+                return args2 ({ { "pitch", pitch }, { "start_bar", bar }, { "velocity", velocity } });
+            };
+            Array<var> bar1;
+            for (int k = 0; k < 4; ++k)
+                bar1.add (noteOf (36, 1.0 + k * 0.25));
+            bar1.add (noteOf ("D1", 1.25));   // 38, the snare
+            bar1.add (noteOf ("F#1", 1.125, 80));   // 42, a hat on the off-beat
+            e.commitUndoStep();
+            auto w = tools.call ("write_notes", args2 ({ { "track", "beat" }, { "from_bar", 1 }, { "to_bar", 2 },
+                                                         { "notes", bar1 }, { "repeat", 4 } }), status);
+            check (! (bool) w["isError"] && beat->clips.size() == 1 && beat->clips[0].notes.size() == 24
+                       && std::abs (beat->clips[0].length - 16.0) < 1.0e-9 && text (w).contains ("Wrote 24 notes"),
+                   "write_notes: one clip, four bars, 24 notes (" + text (w) + ")");
+            if (beat->clips.size() == 1 && beat->clips[0].notes.size() == 24)
+            {
+                auto& n = beat->clips[0].notes;
+                int kicks = 0, snares = 0, hats = 0;
+                for (auto& x : n)
+                    (x.pitch == 36 ? kicks : x.pitch == 38 ? snares : x.pitch == 42 ? hats : kicks) += 1;
+                check (kicks == 16 && snares == 4 && hats == 4 && std::abs (n.back().start - 15.0) < 1.0e-9
+                           && std::abs (n[0].length - 0.25) < 1.0e-9 && std::abs (n[0].velocity - 100.0f / 127.0f) < 1.0e-4,
+                       "notes by number and name (C3 = middle C), repeated a bar apart, 16th notes by default");
+            }
+
+            Array<var> one { noteOf (39, 2.5) };
+            w = tools.call ("write_notes", args2 ({ { "track", "Beat" }, { "from_bar", 2 }, { "to_bar", 3 }, { "notes", one }, { "mode", "add" } }), status);
+            check (! (bool) w["isError"] && beat->clips.size() == 1 && beat->clips[0].notes.size() == 25, "mode add joins the clip that's there");
+
+            w = tools.call ("write_notes", args2 ({ { "track", "Beat" }, { "from_bar", 2 }, { "to_bar", 3 }, { "notes", one } }), status);
+            int inBar2 = 0;
+            for (auto& c : beat->clips)
+                for (auto& x : c.notes)
+                    if (c.start + x.start >= 4.0 && c.start + x.start < 8.0) ++inBar2;
+            check (! (bool) w["isError"] && beat->clips.size() == 3 && inBar2 == 1, "replace clears those bars first (" + String ((int) beat->clips.size()) + " clips)");
+
+            check ((bool) tools.call ("write_notes", args2 ({ { "track", "Beat" }, { "from_bar", 1 }, { "to_bar", 2 },
+                                                              { "notes", Array<var> { noteOf (36, 2.0) } } }), status)["isError"],
+                   "a note past to_bar is an error");
+            check ((bool) tools.call ("write_notes", args2 ({ { "track", "Beat" }, { "from_bar", 1 }, { "to_bar", 2 },
+                                                              { "notes", Array<var> { noteOf ("H2", 1.0) } } }), status)["isError"],
+                   "so is a pitch that isn't one");
+            e.commitUndoStep();
+            e.undo();
+            check (beat->clips.size() == 1 && beat->clips[0].notes.size() == 25, "each write is one undo step");
+            e.removeTrack (beat->id);
+            e.commitUndoStep();
+        }
+
         status = {};
         auto r = tools.call ("play", args2 ({ { "from_bar", 1 }, { "to_bar", 2 } }), status);
         check (! (bool) r["isError"] && engine.isPlaying() && std::abs (engine.getAutoStopBeats() - 4.0) < 1.0e-6
@@ -2305,7 +2602,7 @@ int main (int argc, char** argv)
         {
             Edit ex;
             Tools tx (ex, engine);
-            auto addType = [&] (const String& name, bool instrument)
+            auto addType = [&] (const String& name, bool instrument, const String& category = {})
             {
                 PluginDescription d;
                 d.name = name;
@@ -2313,18 +2610,19 @@ int main (int argc, char** argv)
                 d.pluginFormatName = "Test";
                 d.fileOrIdentifier = "test:" + name;
                 d.isInstrument = instrument;
+                d.category = category;
                 host.known.addType (d);
             };
-            addType ("Dicey", true);       // a MIDI tool that scans as an instrument: the catalog knows better
-            addType ("Stepkin", true);
-            addType ("Tincture", true);
-            addType ("Nave", false);
+            addType ("Arpeggiator", true, "Instrument|Generator");   // a note generator that scans as an instrument
+            addType ("DrumSynth", true);
+            addType ("Wavetable", true);
+            addType ("BigVerb", false);
             addType ("Broken Verb", false);
             tx.loadPlugin = [] (const PluginDescription& d, String& error)
             {
                 auto slot = std::make_shared<PluginSlot>();
                 slot->description = d;
-                if (d.name == "Dicey")              slot->instance = std::make_unique<NoteGenerator> (-1, -1);
+                if (d.name == "Arpeggiator")              slot->instance = std::make_unique<NoteGenerator> (-1, -1);
                 else if (d.name != "Broken Verb")   slot->instance = std::make_unique<NoteEater>();
                 else                                error = "it crashed";
                 return slot;
@@ -2348,33 +2646,35 @@ int main (int argc, char** argv)
             const auto listed = JSON::parse (text (tx.call ("list_plugins", var (new DynamicObject()), status)));
             String diceyKind;
             for (auto& p : *listed["plugins"].getArray())
-                if (p["name"].toString() == "Dicey")
+                if (p["name"].toString() == "Arpeggiator")
                     diceyKind = p["kind"].toString();
-            check (listed["plugins"].size() == 5 && diceyKind == "note generator", "list_plugins lists them, Dicey as a note generator");
-            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2,
+            check (listed["plugins"].size() == 5 + (int) devices::all().size() && diceyKind == "note generator"
+                   && listed["plugins"][0]["format"].toString() == "built into Lathe",
+                   "list_plugins lists Lathe's own first, then these, Arpeggiator as a note generator");
+            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2 + 3,   // + Lathe's own three
                    "list_plugins filters by kind");
 
             // One track: the generator goes before the instrument, whatever order it's given in.
             auto r = tx.call ("edit_session", batchOf ({ change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Drums" },
-                                                                   { "plugins", Array<var> { "Stepkin", "dicey" } } }) }), status);
+                                                                   { "plugins", Array<var> { "DrumSynth", "arpeggiator" } } }) }), status);
             auto drums = tx.findTrack ("Drums");
-            check (! (bool) r["isError"] && drums != nullptr && drums->isMidi() && names (*drums) == "Dicey,Stepkin",
-                   "add_track with plugins: a MIDI track with Dicey before Stepkin (" + text (r) + ")");
-            check (text (r).contains ("with Dicey -> Stepkin"), "the reply shows the chain in signal order");
+            check (! (bool) r["isError"] && drums != nullptr && drums->isMidi() && names (*drums) == "Arpeggiator,DrumSynth",
+                   "add_track with plugins: a MIDI track with Arpeggiator before DrumSynth (" + text (r) + ")");
+            check (text (r).contains ("with Arpeggiator -> DrumSynth"), "the reply shows the chain in signal order");
             check (ex.getUndoDepth() == 1 && status.contains ("Cmd/Ctrl+Z"), "it's one undo step, and Lathe's status bar says so");
 
             // Two tracks, one feeding the other, plus a reverb return in the same call.
             r = tx.call ("edit_session", batchOf ({
-                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Seq" }, { "plugins", Array<var> { "Dicey" } } }),
-                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Kit" }, { "plugins", Array<var> { "Stepkin" } } }),
+                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Seq" }, { "plugins", Array<var> { "Arpeggiator" } } }),
+                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Kit" }, { "plugins", Array<var> { "DrumSynth" } } }),
                     change ({ { "action", "set_input" }, { "track", "Kit" }, { "from_track", "Seq" } }),
-                    change ({ { "action", "add_track" }, { "kind", "return" }, { "name", "Verb" }, { "plugins", Array<var> { "Nave" } } }),
+                    change ({ { "action", "add_track" }, { "kind", "return" }, { "name", "Verb" }, { "plugins", Array<var> { "BigVerb" } } }),
                     change ({ { "action", "set_send" }, { "track", "Kit" }, { "return", "Verb" }, { "level_db", -12 } }) }), status);
             auto seq = tx.findTrack ("Seq"), kit = tx.findTrack ("Kit"), verb = tx.findTrack ("Verb");
             check (! (bool) r["isError"] && kit != nullptr && seq != nullptr && kit->input.track == seq->id
                    && kit->monitor.load() == (int) Monitor::in, "set_input from_track routes Seq into Kit, monitoring In (" + text (r) + ")");
-            check (verb != nullptr && verb->isBus() && names (*verb) == "Nave" && kit->sends.size() == 1
-                   && kit->sends[0]->busId == verb->id && kit->sends[0]->levelDb.load() == -12.0f, "a return with Nave, Kit sending to it at -12 dB");
+            check (verb != nullptr && verb->isBus() && names (*verb) == "BigVerb" && kit->sends.size() == 1
+                   && kit->sends[0]->busId == verb->id && kit->sends[0]->levelDb.load() == -12.0f, "a return with BigVerb, Kit sending to it at -12 dB");
             check (ex.getUndoDepth() == 2, "the whole batch is one more undo step");
 
             check (ex.undo() && ex.tracks.size() == 1 && ex.buses.empty() && ex.tracks[0] == drums,
@@ -2386,7 +2686,7 @@ int main (int argc, char** argv)
             drums->volumeDb = 0.0f;
             r = tx.call ("edit_session", batchOf ({
                     change ({ { "action", "set_mixer" }, { "track", "Drums" }, { "volume_db", -10 } }),
-                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Lead" }, { "plugins", Array<var> { "Tincture" } } }),
+                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Lead" }, { "plugins", Array<var> { "Wavetable" } } }),
                     change ({ { "action", "add_plugin" }, { "track", "Lead" }, { "plugin", "Broken Verb" } }) }), status);
             check ((bool) r["isError"] && text (r).contains ("Change 3") && text (r).contains ("couldn't load Broken Verb: it crashed")
                    && text (r).contains ("Nothing was changed"),
@@ -2394,13 +2694,13 @@ int main (int argc, char** argv)
             check (tx.findTrack ("Lead") == nullptr && drums->volumeDb.load() == 0.0f && ex.getUndoDepth() == depth,
                    "...and nothing before it is kept, levels included");
 
-            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Drums" }, { "plugin", "Tincture" } }) }), status))
-                       .contains ("already has an instrument (Stepkin)"), "a second instrument on a MIDI track is refused");
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Drums" }, { "plugin", "Wavetable" } }) }), status))
+                       .contains ("already has an instrument (DrumSynth)"), "a second instrument on a MIDI track is refused");
             auto audio = ex.addTrack (TrackKind::audio, "Gtr");
             ex.commitUndoStep();
-            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "Stepkin" } }) }), status))
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "DrumSynth" } }) }), status))
                        .contains ("goes on a MIDI track"), "an instrument on an audio track is refused, with what to do instead");
-            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "in" } }) }), status))
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "Verb" } }) }), status))
                        .contains ("could be"), "an ambiguous plug-in name lists the candidates");
             check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "set_input" }, { "track", "Seq" }, { "from_track", "Kit" } }) }), status))
                        .contains ("loop"), "routing that would loop is refused");
@@ -2411,7 +2711,7 @@ int main (int argc, char** argv)
 
             r = tx.call ("edit_session", batchOf ({
                     change ({ { "action", "set_output" }, { "track", "Gtr" }, { "to", "Verb" } }),
-                    change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "Nave" }, { "on", false } }),
+                    change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "BigVerb" }, { "on", false } }),
                     change ({ { "action", "set_plugin_on" }, { "track", "Drums" }, { "plugin", 1 }, { "on", false } }),
                     change ({ { "action", "rename_track" }, { "track", "Gtr" }, { "name", "Guitar" } }),
                     change ({ { "action", "set_tempo" }, { "bpm", 96 } }) }), status);
@@ -2558,7 +2858,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 10 && listed["id"].toString() == "a", "tools/list has the ten tools");
+        check (listed["result"]["tools"].size() == 11 && listed["id"].toString() == "a", "tools/list has the eleven tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

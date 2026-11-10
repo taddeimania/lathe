@@ -15,7 +15,7 @@
   3. Arm the audio track. The MIDI track now plays your keyboard live, and you hear it through the audio track (not twice), so the audio track's fader sets how loud it is.
   4. Record. The audio track gets what the instrument played after its plug-ins and EQ (before its fader, mute and solo), in stereo, lined up the way a MIDI recording is.
   Arm the MIDI track too if you also want the notes. Any audio or MIDI track can be the source, so you can resample an audio track through its effects the same way.
-- **Recording what a plug-in generates** (an arpeggiator, or a generator like Dicey):
+- **Recording what a plug-in generates** (an arpeggiator or another note generator):
   - **On its own track:** put the generator before the instrument on a MIDI track, arm it, and record. Lathe records the notes the generator hands to the instrument (not what you play into it), exactly in time. Afterwards, bypass the generator (the status bar reminds you), or it plays along with the new clip.
   - **From a track:** on another MIDI track, pick the generator's track under **From a track** in the input box, put your instrument there, arm it and record. That track plays and records the generator's notes live, and the generator's track stays as it is, so nothing doubles on playback.
 

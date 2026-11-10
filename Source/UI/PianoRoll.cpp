@@ -30,6 +30,20 @@ PianoRoll::PianoRoll (AppContext& c) : ctx (c)
         addAndMakeVisible (b);
     }
 
+    hearButton.setClickingTogglesState (true);
+    hearButton.setToggleState (ctx.settings.getBoolValue ("pianoRollHearNotes", true), dontSendNotification);
+    hearButton.setColour (TextButton::buttonOnColourId, theme::accent);
+    hearButton.setColour (TextButton::textColourOnId, theme::textDark);
+    hearButton.setTooltip ("Play notes through the track's instrument as you click, drag and draw them");
+    hearButton.setWantsKeyboardFocus (false);
+    hearButton.onClick = [this]
+    {
+        ctx.settings.setValue ("pianoRollHearNotes", hearButton.getToggleState());
+        if (! hearButton.getToggleState())
+            stopHearing();
+    };
+    addAndMakeVisible (hearButton);
+
     hbar.addListener (this);
     vbar.addListener (this);
     hbar.setAutoHide (false);
@@ -40,6 +54,7 @@ PianoRoll::PianoRoll (AppContext& c) : ctx (c)
 
 PianoRoll::~PianoRoll()
 {
+    stopHearing();
     hbar.removeListener (this);
     vbar.removeListener (this);
 }
@@ -54,6 +69,8 @@ Clip* PianoRoll::getClip()
 void PianoRoll::setClip (int newTrackId, int newClipId)
 {
     const bool changedClip = newTrackId != trackId || newClipId != clipId;
+    if (changedClip)
+        stopHearing();
     trackId = newTrackId;
     clipId = newClipId;
     if (changedClip)
@@ -316,6 +333,8 @@ void PianoRoll::resized()
     top.removeFromRight (8);
     quantizeButton.setBounds (top.removeFromRight (72));
     top.removeFromRight (6);
+    hearButton.setBounds (top.removeFromRight (84));
+    top.removeFromRight (6);
     gridBox.setBounds (top.removeFromRight (110));
     title.setBounds (top);
 
@@ -350,6 +369,13 @@ void PianoRoll::mouseDown (const MouseEvent& e)
         return;
     }
 
+    if (onKeyboard (e.getPosition()))
+    {
+        mode = Mode::keyboard;
+        hear (yToPitch (e.y), 0.8f);
+        return;
+    }
+
     if (! gridArea().contains (e.getPosition()))
     {
         mode = Mode::none;
@@ -375,6 +401,9 @@ void PianoRoll::mouseDown (const MouseEvent& e)
         selected.insert (i);
     }
     mode = edge ? Mode::resize : Mode::move;
+    dragNote = i;
+    if (mode == Mode::move)
+        hear (c->notes[(size_t) i].pitch, c->notes[(size_t) i].velocity);
     repaint();
 }
 
@@ -383,6 +412,13 @@ void PianoRoll::mouseDrag (const MouseEvent& e)
     auto* c = getClip();
     if (c == nullptr || mode == Mode::none)
         return;
+
+    if (mode == Mode::keyboard)
+    {
+        if (const int p = yToPitch (e.y); p != heardPitch)
+            hear (p, 0.8f);
+        return;
+    }
 
     auto beginChange = [&]
     {
@@ -458,6 +494,11 @@ void PianoRoll::mouseDrag (const MouseEvent& e)
                 n.start = jmax (0.0, o.start + snappedDelta);
                 n.pitch = jlimit (0, 127, o.pitch + deltaPitch);
             }
+
+            // Follow the grabbed note: sound its new pitch when it changes.
+            if (dragNote >= 0 && dragNote < (int) c->notes.size() && heardPitch >= 0
+                 && c->notes[(size_t) dragNote].pitch != heardPitch)
+                hear (c->notes[(size_t) dragNote].pitch, c->notes[(size_t) dragNote].velocity);
         }
         else if (mode == Mode::resize)
         {
@@ -475,6 +516,10 @@ void PianoRoll::mouseDrag (const MouseEvent& e)
 
 void PianoRoll::mouseUp (const MouseEvent&)
 {
+    // A held note stops on release; a blip from a double-click stops on its own timer.
+    if (mode == Mode::keyboard || mode == Mode::move)
+        stopHearing();
+    dragNote = -1;
     if (dragChanged)
         ctx.edit.changed();
     mode = Mode::none;
@@ -504,6 +549,7 @@ void PianoRoll::mouseDoubleClick (const MouseEvent& e)
             return;
         c->notes.push_back ({ yToPitch (e.y), start, gridStep(), 0.8f });
         selected = { (int) c->notes.size() - 1 };
+        blip (yToPitch (e.y), 0.8f);
     }
 
     mode = Mode::none;
@@ -563,6 +609,8 @@ bool PianoRoll::keyPressed (const KeyPress& k)
         for (int i : selected)
             c->notes[(size_t) i].pitch = jlimit (0, 127, c->notes[(size_t) i].pitch + delta);
         ctx.edit.changed();
+        const auto& first = c->notes[(size_t) *selected.begin()];
+        blip (first.pitch, first.velocity);
         return true;
     }
 
@@ -579,6 +627,50 @@ bool PianoRoll::keyPressed (const KeyPress& k)
     }
 
     return false;
+}
+
+//==============================================================================
+bool PianoRoll::onKeyboard (Point<int> p) const
+{
+    const auto g = gridArea();
+    return p.x >= 0 && p.x < keyboardWidth && p.y >= g.getY() && p.y < g.getBottom();
+}
+
+bool PianoRoll::hearNotes() const
+{
+    return hearButton.getToggleState() && trackId >= 0;
+}
+
+void PianoRoll::hear (int pitch, float velocity)
+{
+    if (! hearNotes())
+        return;
+    stopHearing();
+    heardPitch = jlimit (0, 127, pitch);
+    heardTrack = trackId;
+    ctx.engine.previewNote (heardTrack, heardPitch, jlimit (0.05f, 1.0f, velocity));
+}
+
+void PianoRoll::stopHearing()
+{
+    if (heardPitch >= 0 && heardTrack >= 0)
+        ctx.engine.previewNote (heardTrack, heardPitch, 0.0f);
+    heardPitch = -1;
+    heardTrack = -1;
+}
+
+void PianoRoll::blip (int pitch, float velocity)
+{
+    if (! hearNotes())
+        return;
+    hear (pitch, velocity);
+    const int p = heardPitch, track = heardTrack;
+    Timer::callAfterDelay (250, [safe = Component::SafePointer<PianoRoll> (this), p, track]
+    {
+        // Stop this note only if nothing else has taken over since.
+        if (safe != nullptr && safe->heardPitch == p && safe->heardTrack == track && safe->mode == Mode::none)
+            safe->stopHearing();
+    });
 }
 
 void PianoRoll::quantizeSelection()

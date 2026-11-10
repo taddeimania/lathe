@@ -10,7 +10,7 @@ How to use Lathe, and how it's put together. Start with **Getting started**.
 | [Performance](performance.md) | Processing cores, buffer size, the CPU meter, and the benchmark |
 | [Sharing projects with Lathe Cloud](lathe-cloud.md) | The Cloud menu: sharing, push and pull, history, notes |
 | [AI assistant (MCP)](ai-assistant.md) | Letting your AI assistant read and build the session, control playback, and measure CPU use |
-| [Plug-in browser](plugin-browser.md) | Installing and updating plug-ins from GitHub releases |
+| [Built-in devices and the plug-in browser](plugin-browser.md) | Lathe's own reverb, delay, compressor, saturator and mastering, and finding installed plug-ins |
 | [Updating Lathe](updating.md) | Lathe Patcher and the automatic update check |
 | [Project files](project-files.md) | What's in a project folder, saves, autosave and recovery |
 | [Code map](code-map.md) | For contributors: where things live in `Source/`, and the audio-thread rules |

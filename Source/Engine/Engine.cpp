@@ -99,7 +99,7 @@ struct RenderTrack
     AudioBuffer<float> tap;        // this block's sound after plug-ins and EQ (when an audio track listens)
 
     // MIDI tracks: notes are "tapped" right after the last plug-in that generates MIDI (an
-    // arpeggiator, Dicey...) and before the first instrument; -1 = before any plug-in.
+    // arpeggiator, a step sequencer...) and before the first instrument; -1 = before any plug-in.
     int midiTapAfter = -1;
     bool recordGenerated = false;  // a plug-in generates notes: record what it hands on, not the input
     String generatorName;
@@ -1472,6 +1472,14 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
         collectors[i]->removeNextBlockOfMessages (liveMidi[i], n);
     }
 
+    // Notes to hear (the piano roll), for this block.
+    previewCount = 0;
+    if (const int ready = previewFifo.getNumReady(); ready > 0)
+    {
+        const auto scope = previewFifo.read (jmin (ready, (int) previewBlock.size()));
+        scope.forEach ([this] (int index) { previewBlock[(size_t) previewCount++] = previewQueue[(size_t) index]; });
+    }
+
     bool notesOff = notesOffRequest.exchange (false);
     int64 pos = positionSamples.load();
     if (const auto s = seekRequest.exchange (-1); s >= 0)
@@ -1683,6 +1691,17 @@ void Engine::renderBuses (RenderGraph& g, int len)
         auto& j = *static_cast<BlockJob*> (context);
         j.engine->renderBusTimed (*j.g, j.g->buses[(*j.tasks)[(size_t) i]], j.len);
     }, &job);
+}
+
+//==============================================================================
+void Engine::previewNote (int trackId, int note, float velocity)
+{
+    PreviewEvent e;
+    e.trackId = trackId;
+    e.note = (uint8) jlimit (0, 127, note);
+    e.velocity = velocity <= 0.0f ? (uint8) 0 : (uint8) jlimit (1, 127, roundToInt (velocity * 127.0f));
+    const auto scope = previewFifo.write (1);
+    scope.forEach ([this, &e] (int index) { previewQueue[(size_t) index] = e; });
 }
 
 //==============================================================================
@@ -2008,6 +2027,13 @@ void Engine::renderTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, i
             rt.midi.addEvent (MidiMessage::controllerEvent (ch, 64, 0), 0);
             rt.midi.addEvent (MidiMessage::allNotesOff (ch), 0);
         }
+
+        // Notes the piano roll wants heard: straight to the instrument, never recorded.
+        if (realtime && offset == 0)
+            for (int i = 0; i < previewCount; ++i)
+                if (const auto& e = previewBlock[(size_t) i]; e.trackId == rt.track->id)
+                    rt.midi.addEvent (e.velocity > 0 ? MidiMessage::noteOn (ch, e.note, e.velocity)
+                                                     : MidiMessage::noteOff (ch, e.note), 0);
 
         if (rolling && ! recordingHere)
         {

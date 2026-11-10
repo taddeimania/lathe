@@ -1,21 +1,20 @@
 #pragma once
 
 #include "Widgets.h"
-#include "../Engine/PluginStore.h"
 
 namespace lathe
 {
-/** Your GitHub plug-ins (install / update / add in one click) plus everything
-    else that's installed. Lives in its own window. */
-class PluginBrowser : public Component, private Timer, private AsyncUpdater
+/** Lathe's own instruments and effects, plus everything else that's installed,
+    in one searchable list. Lives in its own window. */
+class PluginBrowser : public Component, private AsyncUpdater
 {
 public:
-    PluginBrowser (AppContext&, PluginStore&);
+    explicit PluginBrowser (AppContext&);
     ~PluginBrowser() override;
 
-    /** Rebuilds the list from the store and the scanned plug-ins. */
+    /** Rebuilds the list from the built-in devices and the scanned plug-ins. */
     void refresh();
-    /** Use this from store notifications: a row may be in the middle of its own click handler. */
+    /** Use this from notifications: a row may be in the middle of its own click handler. */
     void refreshSoon()   { triggerAsyncUpdate(); }
     void focusSearch()   { search.grabKeyboardFocus(); }
 
@@ -26,22 +25,17 @@ private:
     class Row;
     friend class Row;
 
-    void timerCallback() override;
     void handleAsyncUpdate() override   { refresh(); }
     void select (const String& key);
     void showDetails();
-    void addFromStore (String repo);
-    void updateFromStore (String repo);
-    void addLocal (const PluginDescription&);
+    void add (const PluginDescription&);
     void layoutList();
-    bool matches (const String& kind, const String& text) const;
+    bool matches (bool instrument, const String& text) const;
 
     AppContext& ctx;
-    PluginStore& store;
 
-    TextButton filterAll { "All" }, filterEffects { "Effects" }, filterInstruments { "Instruments" }, filterMidi { "MIDI tools" };
+    TextButton filterAll { "All" }, filterEffects { "Effects" }, filterInstruments { "Instruments" };
     TextEditor search;
-    TextButton checkButton { "Check for updates" }, addRepoButton { "Add repository..." };
     struct ListArea : public Component
     {
         std::function<void (Graphics&)> painter;
@@ -50,10 +44,10 @@ private:
     Viewport viewport;
     ListArea list;
     OwnedArray<Row> rows;
+    int numBuiltIn = 0;
     std::vector<std::pair<String, int>> headings;   // text, y in the list
-    TextEditor notes;
+    TextEditor details;
     Label detailsTitle;
-    HyperlinkButton releaseLink;
     Label footer;
 
     String filter = "All";
@@ -63,7 +57,7 @@ private:
 class PluginBrowserWindow : public DocumentWindow
 {
 public:
-    PluginBrowserWindow (AppContext&, PluginStore&);
+    explicit PluginBrowserWindow (AppContext&);
     void closeButtonPressed() override   { setVisible (false); }
     void show();
     PluginBrowser& getBrowser()          { return *browser; }

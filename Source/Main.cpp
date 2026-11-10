@@ -1,5 +1,6 @@
 #include "Bench/Benchmark.h"
 #include "UI/MainComponent.h"
+#include "Devices/Device.h"
 
 #include <iostream>
 
@@ -59,7 +60,7 @@ public:
     bool moreThanOneInstanceAllowed() override
     {
         const auto params = getCommandLineParameters();
-        return params.contains ("--screenshots") || params.contains ("--benchmark");
+        return params.contains ("--screenshots") || params.contains ("--benchmark") || params.contains ("--device-shots");
     }
 
     void initialise (const String& commandLine) override
@@ -78,6 +79,30 @@ public:
             const auto csv = File::getCurrentWorkingDirectory().getChildFile (name.isNotEmpty() && ! name.startsWith ("-")
                                                                                   ? name : String ("lathe-benchmark.csv"));
             setApplicationReturnValue (bench::run (csv, { "1", "full" }, std::cout));
+            quit();
+            return;
+        }
+
+        // Lathe --device-shots <folder>: draws each built-in device's window to a PNG and quits.
+        if (const int devArg = args.indexOf ("--device-shots"); devArg >= 0)
+        {
+            const auto dir = File::getCurrentWorkingDirectory().getChildFile (args[devArg + 1].unquoted());
+            dir.createDirectory();
+            LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+            for (auto& info : devices::all())
+            {
+                auto device = info.create();
+                device->prepareToPlay (48000.0, 256);
+                std::unique_ptr<AudioProcessorEditor> editor (device->createEditor());
+                const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
+                const auto file = dir.getChildFile (info.id + ".png");
+                file.deleteFile();
+                FileOutputStream out (file);
+                PNGImageFormat().writeImageToStream (image, out);
+                std::cout << file.getFullPathName() << "  " << editor->getWidth() << " x " << editor->getHeight() << std::endl;
+                editor.reset();
+            }
+            LookAndFeel::setDefaultLookAndFeel (nullptr);
             quit();
             return;
         }

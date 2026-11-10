@@ -90,6 +90,12 @@ public:
     /** Threads rendering right now (1 = only the audio thread). */
     int getActiveProcessingThreads() const noexcept;
 
+    // --- hearing notes (the piano roll)
+    /** Plays a note on a MIDI track's instrument right away, whether or not the track is
+        armed or the transport is running, so you can hear a note before drawing it.
+        Velocity 0..1; 0 ends the note. Never recorded. Message thread. */
+    void previewNote (int trackId, int note, float velocity);
+
     // --- measuring (the AI assistant's measure_performance tool)
     /** Starts timing every audio block and every track, after skipping the first `skipBlocks`
         (a warm-up). Message thread. */
@@ -230,6 +236,14 @@ private:
     bool poolWorkgroupChanged = false;
     std::atomic<bool> poolDirty { false };
     std::atomic<double> parallelMinimumUs { 60.0 };
+    // hearing notes: the message thread queues them, the audio thread takes them at the start
+    // of each block, and the tracks (on any render thread) read that block's list
+    struct PreviewEvent { int trackId = -1; uint8 note = 0, velocity = 0; };
+    AbstractFifo previewFifo { 256 };
+    std::array<PreviewEvent, 256> previewQueue;
+    std::array<PreviewEvent, 64> previewBlock;
+    int previewCount = 0;
+
     // measuring: the message thread sets it up and reads it; the audio thread records
     std::atomic<bool> measuring { false };
     std::atomic<int> measureSkip { 0 }, measureCount { 0 };

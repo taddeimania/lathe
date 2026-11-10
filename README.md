@@ -71,4 +71,4 @@ The engine renders tracks on several cores (docs/multicore.md). `ctest` also run
 
 ## Documentation
 
-The user guide and the code map are in [docs/](docs/README.md): getting started, recording and mixing, keys, Lathe Cloud, the AI assistant, the plug-in browser, updating, project files, and where things live in the source.
+The user guide and the code map are in [docs/](docs/README.md): getting started, recording and mixing, keys, Lathe Cloud, the AI assistant, the built-in devices and plug-in browser, updating, project files, and where things live in the source.

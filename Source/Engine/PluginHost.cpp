@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include "../Devices/Device.h"
 
 namespace lathe
 {
@@ -202,6 +203,14 @@ void PluginHost::unblacklist (const String& file)
 
 std::unique_ptr<AudioPluginInstance> PluginHost::create (const PluginDescription& desc, double sampleRate, int blockSize, String& error)
 {
+    if (devices::isBuiltIn (desc))
+    {
+        auto device = devices::create (desc);
+        if (device == nullptr)
+            error = desc.name + " isn't in this version of Lathe";
+        return device;
+    }
+
     auto instance = formats.createPluginInstance (desc, sampleRate, blockSize, error);
     if (instance == nullptr)
         return {};
@@ -219,8 +228,24 @@ std::unique_ptr<AudioPluginInstance> PluginHost::create (const PluginDescription
     return instance;
 }
 
+Array<PluginDescription> PluginHost::allTypes() const
+{
+    Array<PluginDescription> types;
+    for (auto& info : devices::all())
+        types.add (devices::describe (info));
+    types.addArray (known.getTypes());
+    return types;
+}
+
 std::optional<PluginDescription> PluginHost::resolve (const PluginDescription& saved) const
 {
+    if (devices::isBuiltIn (saved))
+    {
+        if (auto* info = devices::find (saved))
+            return devices::describe (*info);
+        return std::nullopt;
+    }
+
     if (auto exact = known.getTypeForIdentifierString (saved.createIdentifierString()))
         return *exact;
 
@@ -352,6 +377,17 @@ PopupMenu PluginHost::buildMenu (bool instrumentsFirst, std::vector<PluginDescri
         PopupMenu currentMaker;
         String currentName;
 
+        // Lathe's own first, then the installed plug-ins by maker.
+        for (auto& info : devices::all())
+        {
+            if ((info.kind == devices::Kind::instrument) != instruments)
+                continue;
+            results.push_back (devices::describe (info));
+            menu.addItem ((int) results.size(), info.name);
+        }
+        if (menu.getNumItems() > 0 && ! types.isEmpty())
+            menu.addSeparator();
+
         auto flush = [&]
         {
             if (currentMaker.getNumItems() > 0)
@@ -381,12 +417,7 @@ PopupMenu PluginHost::buildMenu (bool instrumentsFirst, std::vector<PluginDescri
     auto effects = makeGroup (false);
 
     PopupMenu menu;
-    if (types.isEmpty())
-    {
-        menu.addItem (-1, "No plug-ins found yet", false);
-        menu.addSeparator();
-    }
-    else if (instrumentsFirst)
+    if (instrumentsFirst)
     {
         menu.addSubMenu ("Instruments", instruments, instruments.getNumItems() > 0);
         menu.addSubMenu ("Audio Effects", effects, effects.getNumItems() > 0);

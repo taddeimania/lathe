@@ -305,6 +305,33 @@ var toolDefinitions()
                                { "to_bar", prop ("number", "Only notes starting before this bar (1-based)") } },
                              { "track" }),
                      true));
+    {
+        auto note = schema ({
+            { "pitch", object ({ { "type", var (Array<var> { "integer", "string" }) },
+                                 { "description", "MIDI number (60 = C3, middle C) or a name like \"C1\", \"F#2\", \"Bb3\"" } }) },
+            { "start_bar", prop ("number", "Song position in bars, 1-based, as get_notes gives it: 1.25 is the second beat of bar 1 in 4/4") },
+            { "length_beats", prop ("number", "Length in beats (default 0.25, a 16th note)") },
+            { "velocity", prop ("integer", "1-127 (default 100)") } },
+            { "pitch", "start_bar" });
+
+        tools.add (tool ("write_notes", "Write MIDI notes",
+                         "Writes notes into a MIDI track, as one undo step in Lathe. The notes go in a clip covering from_bar to "
+                         "to_bar: with mode \"replace\" (the default) whatever was in those bars on that track goes first; with "
+                         "\"add\" they join the notes already there. Every note must start inside the bars. repeat plays the "
+                         "notes again that many times back to back (a one-bar beat with repeat 4 fills four bars). "
+                         "Lathe's Drums play the usual drum notes: 36 kick, 37 rim, 38 snare, 39 clap, 42 closed hat, "
+                         "46 open hat, 41/45/48 low/mid/high tom, 49 crash, 51 ride, 56 cowbell.",
+                         schema ({ { "track", prop ("string", "MIDI track name or id") },
+                                   { "from_bar", prop ("number", "Where the clip starts (1-based bar)") },
+                                   { "to_bar", prop ("number", "Where it ends: from_bar 1, to_bar 2 is one bar") },
+                                   { "notes", object ({ { "type", "array" }, { "items", note },
+                                                        { "description", "The notes (at most 4000 with the repeats)" } }) },
+                                   { "repeat", prop ("integer", "Play the notes this many times in a row, each copy (to_bar - from_bar) bars later, "
+                                                                "and make the clip that much longer (default 1)") },
+                                   { "mode", prop ("string", "\"replace\" (default) or \"add\"") } },
+                                 { "track", "from_bar", "to_bar", "notes" }),
+                         false, true));
+    }
     tools.add (tool ("play", "Play",
                      "Starts playback, from the given bar or from Lathe's insert marker. With to_bar, Lathe stops by "
                      "itself exactly when the playhead gets there. With loop_times, it plays the loop that many times "
@@ -324,8 +351,9 @@ var toolDefinitions()
                                { "on", prop ("boolean", "false turns the loop off (the region is kept). Default true") } }),
                      false));
     tools.add (tool ("list_plugins", "List installed plug-ins",
-                     "The plug-ins Lathe can load on this computer: name, maker, kind (instrument, note generator or "
-                     "effect) and format. Use the names with edit_session's add_plugin and add_track's plugins.",
+                     "The plug-ins Lathe can load on this computer: Lathe's own built-in devices first (Reverb, Delay, "
+                     "Compressor, Saturator, Mastering), then the installed ones, with name, maker, kind (instrument, note "
+                     "generator or effect) and format. Use the names with edit_session's add_plugin and add_track's plugins.",
                      schema ({ { "kind", prop ("string", "Only this kind: \"instrument\", \"note generator\" or \"effect\"") },
                                { "search", prop ("string", "Only plug-ins whose name or maker contains this") } }),
                      true));
@@ -376,11 +404,12 @@ var toolDefinitions()
                          "effects. A MIDI track plays one instrument. A track whose input is another track gets monitoring In so "
                          "it plays without being armed.\n"
                          "Routing a note generator into an instrument, two ways: on one track, "
-                         "{\"action\":\"add_track\",\"kind\":\"midi\",\"name\":\"Drums\",\"plugins\":[\"Dicey\",\"Stepkin\"]} "
+                         "{\"action\":\"add_track\",\"kind\":\"midi\",\"name\":\"Arp\",\"plugins\":[\"<generator>\",\"<instrument>\"]} "
                          "(simplest), or on two, so the generator's notes can be recorded or drive several instruments: "
-                         "add_track \"Dicey\" with plugins [\"Dicey\"], add_track \"Stepkin\" with plugins [\"Stepkin\"], then "
-                         "{\"action\":\"set_input\",\"track\":\"Stepkin\",\"from_track\":\"Dicey\"}. "
-                         "A reverb return: add_track kind \"return\" with plugins [\"Nave\"], then set_send from each track.\n"
+                         "a MIDI track with the generator, a MIDI track with the instrument, then "
+                         "{\"action\":\"set_input\",\"track\":\"<instrument track>\",\"from_track\":\"<generator track>\"}. "
+                         "A reverb return: {\"action\":\"add_track\",\"kind\":\"return\",\"name\":\"Verb\",\"plugins\":[\"Reverb\"]}, "
+                         "then set_send from each track. Lathe's own effects start 100% wet on a return.\n"
                          "Volume, pan, mute, solo, send levels, monitoring and arm change live and aren't part of the undo step.",
                          schema ({ { "changes", object ({ { "type", "array" }, { "items", change },
                                                           { "description", "The changes, applied in order" } }) } },

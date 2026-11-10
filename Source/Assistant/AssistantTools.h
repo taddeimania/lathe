@@ -51,6 +51,7 @@ private:
     double toBeats (double bar) const     { return (bar - 1.0) * edit.beatsPerBar(); }
 
     var getNotes (const var& args) const;
+    var writeNotes (const var& args, String& status);
     var play (const var& args, String& status);
     var stop (String& status);
     var setLoop (const var& args, String& status);

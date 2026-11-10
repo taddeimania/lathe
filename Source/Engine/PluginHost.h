@@ -24,7 +24,11 @@ public:
 
     std::unique_ptr<AudioPluginInstance> create (const PluginDescription&, double sampleRate, int blockSize, String& error);
 
-    /** Finds the installed plug-in matching one saved in a project (paths differ between machines). */
+    /** Lathe's built-in devices, then every scanned plug-in. */
+    Array<PluginDescription> allTypes() const;
+
+    /** Finds the installed plug-in matching one saved in a project (paths differ between machines).
+        Lathe's built-in devices resolve to themselves. */
     std::optional<PluginDescription> resolve (const PluginDescription& saved) const;
 
     /** Scans one plug-in bundle right away (after installing or updating it). */

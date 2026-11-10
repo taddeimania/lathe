@@ -3,6 +3,29 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.10.0
+
+- **Lathe comes with its own instruments.** Bass Synth (mono, with a sub and glide),
+  Poly Synth (eight voices for pads, keys, brass and plucks) and Drums, with four
+  synthesized kits: Simple 909, Simple 808, Simple 606 and Simple 707, on the usual drum
+  notes.
+- **And its own effects.** Reverb (small room, room, chamber, hall, plate, spring), Delay
+  (digital, tape, analog, lo-fi, synced to the song), Compressor, Saturator (tape, tube,
+  clip) and Mastering (five styles, four loudness targets, and Learn to set the levels
+  for your mix).
+- Every one has presets and the same simple panel. Nothing to install: they're built in,
+  so a bandmate who opens your project has them too.
+- Put Reverb or Delay on a return and it starts 100% wet.
+- **Hear notes in the piano roll.** Click or drag the keyboard on the left to play a
+  pitch through the track's instrument, and notes sound as you add, grab, drag and
+  transpose them. No need to press play. Hear notes in the toolbar turns it off.
+- **The plug-in browser** (Cmd/Ctrl+B) lists Lathe's own devices, then everything
+  installed on your computer. It no longer downloads plug-ins.
+- The AI assistant knows the built-in devices: "add a return with Reverb and send the
+  drums to it" just works.
+- **The AI assistant can write notes.** "Put a four-on-the-floor beat on a new 909 track"
+  writes the clip, as one undo step.
+
 ## New in 0.9.1
 
 - The AI assistant's CPU measurements report the computer, its cores, the interface and
@@ -15,9 +38,9 @@ a mix and stems. It doesn't try to do everything else.
   inputs, outputs, sends, names, tempo and time signature. A deleted track comes back
   with its plug-ins still loaded and set up. Faders, pans and send levels aren't part of
   undo yet: they stay where you left them.
-- **Your AI assistant can build the session.** "Add a MIDI track with Dicey into Stepkin,
-  and a reverb return with Nave that the drums send to" makes the tracks, loads the
-  plug-ins in the right order, and sets the routing and sends. Everything from one
+- **Your AI assistant can build the session.** "Add a MIDI track with an arpeggiator into
+  a synth, and a reverb return the drums send to" makes the tracks, loads the plug-ins in
+  the right order, and sets the routing and sends. Everything from one
   request is a single undo step.
 - **It can measure what your session costs.** It plays some bars and reports the CPU
   load (average, worst moments, missed deadlines), each track's own cost with its
@@ -83,7 +106,7 @@ a mix and stems. It doesn't try to do everything else.
 ## New in 0.6.1
 
 - **Record the notes a plug-in generates** (an arpeggiator, or a generator like
-  Dicey). Arm its MIDI track and record: Lathe records the notes the generator
+  a note generator). Arm its MIDI track and record: Lathe records the notes the generator
   hands to the instrument, exactly in time (then bypass the generator so it
   doesn't play along with the clip). Or pick its track under **From a track** in
   another MIDI track's input box, and record there.

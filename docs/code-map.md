@@ -13,7 +13,9 @@ Source/
   Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,
                         snapshots, push / pull), ProjectDiff (change summaries)
   Patcher/              Lathe Patcher: Updater.* (GitHub lookup, download, verify, swap in place) + its window
-  Engine/PluginStore.*  GitHub releases: catalog, lookup + cache, download, unpack, install, staged updates
+  Devices/              Lathe's built-in effects: Device.* (base class, shared panel, catalogue), Effects.cpp
+                        (Reverb, Delay, Compressor, Saturator, Mastering), and their engines in
+                        Reverb/, Delay/ and Master/
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
   UI/                   transport, arrangement, mixer (+ mix tabs), device chain, EQ editor, piano roll, dialogs
 Tests/EngineTests.cpp   headless engine checks
