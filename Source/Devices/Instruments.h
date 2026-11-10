@@ -38,6 +38,11 @@ struct Ladder
     Svf a, b;
 };
 
+/** Reads a circular delay line `delaySamples` behind `writePos`, with linear interpolation.
+    Whole samples are split off as an integer and wrapped with integer arithmetic, so the
+    index is always inside the line (float wrapping can round up to exactly `size`). */
+float readDelay (const float* line, int size, int writePos, float delaySamples);
+
 float noteHz (float midiNote);
 float polyBlep (float t, float dt);
 } // namespace synth

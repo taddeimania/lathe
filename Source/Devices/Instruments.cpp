@@ -89,6 +89,21 @@ float Ladder::tick (float x)
     return b.low (a.low (x));
 }
 
+float readDelay (const float* line, int size, int writePos, float delaySamples)
+{
+    if (size <= 0)
+        return 0.0f;
+    delaySamples = jlimit (0.0f, (float) (size - 1), delaySamples);
+    const int whole = (int) std::floor (delaySamples);
+    const float frac = delaySamples - (float) whole;   // 0 <= frac < 1
+    // Behind by `whole` and `whole + 1` samples; interpolate between them.
+    int i0 = (writePos - whole) % size;
+    if (i0 < 0) i0 += size;
+    int i1 = i0 - 1;
+    if (i1 < 0) i1 += size;
+    return line[i0] * (1.0f - frac) + line[i1] * frac;
+}
+
 float noteHz (float note)   { return 440.0f * std::pow (2.0f, (note - 69.0f) / 12.0f); }
 
 /** Splits a block at its MIDI events: render (from, to), then the event, in order. */
@@ -466,12 +481,7 @@ public:
                 const float sweep = std::sin (MathConstants<float>::twoPi * chorusPhase);
                 auto tap = [&] (const std::vector<float>& line, float ms)
                 {
-                    float d = ms * 0.001f * sr;
-                    float pos = (float) chorusPos - d;
-                    while (pos < 0.0f) pos += (float) size;
-                    const int i0 = (int) pos;
-                    const float f = pos - (float) i0;
-                    return line[(size_t) i0] * (1.0f - f) + line[(size_t) ((i0 + 1) % size)] * f;
+                    return readDelay (line.data(), size, chorusPos, ms * 0.001f * sr);
                 };
                 const float wl = tap (chorusR, 12.0f + 4.0f * sweep);
                 const float wr = tap (chorusL, 12.0f - 4.0f * sweep);
@@ -766,7 +776,8 @@ public:
                 case Drum::rim:
                 {
                     const float kick = t < 0.0005f ? 1.0f : 0.0f;
-                    y = (bp1.band (kick * 8.0f) * 1.2f + bp2.band (kick * 6.0f)) * std::exp (-t / decay);
+                    // The filters ring hard from a short pulse: scaled to sit with the other drums.
+                    y = (bp1.band (kick * 8.0f) * 1.2f + bp2.band (kick * 6.0f)) * std::exp (-t / decay) * 0.1f;
                     break;
                 }
                 case Drum::cowbell:
@@ -947,7 +958,8 @@ public:
             {
                 if (*d == Drum::closedHat)
                     voices[(size_t) Drum::openHat].choke();
-                voices[(size_t) *d].trigger (0.25f + 0.75f * m.getFloatVelocity(), kit, t);
+                // Velocity to level: a curve, so soft notes are really soft (64 is about -9 dB, 32 about -20 dB).
+                voices[(size_t) *d].trigger (std::pow (m.getFloatVelocity(), 1.5f), kit, t);
             }
         });
 

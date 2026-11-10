@@ -3,6 +3,7 @@
 
 #include "Engine/Engine.h"
 #include "Devices/Device.h"
+#include "Devices/Instruments.h"
 #include "Devices/Reverb/Types.h"
 #include "Engine/ClipJoin.h"
 #include "Patcher/Updater.h"
@@ -1446,6 +1447,32 @@ int main (int argc, char** argv)
         }
 
         {
+            // The chorus delay line: every read stays inside the line. The old float wrap turned a
+            // position a hair below 0 into exactly `size` (one past the end), which read stray
+            // memory: random full-scale bursts on one channel.
+            constexpr int size = 2400;
+            std::vector<float> line ((size_t) size + 1);
+            for (int i = 0; i < size; ++i)
+                line[(size_t) i] = (float) i;
+            line[(size_t) size] = 1.0e9f;   // one past the end: must never be read
+            int bad = 0;
+            for (int w = 0; w < size; ++w)
+                for (float base : { 0.0f, 1.0f, 384.0f, 575.0f, 768.0f })
+                    for (float eps : { 0.0f, 1.0e-7f, 1.0e-5f, 0.25f, 0.9999f })
+                    {
+                        const float d = (float) w + base + eps;   // lands just past a wrap, among others
+                        const float got = synth::readDelay (line.data(), size, w, std::fmod (d, (float) size));
+                        if (! std::isfinite (got) || got < 0.0f || got > (float) size)
+                            ++bad;
+                    }
+            check (bad == 0, "poly chorus: reading the delay line never goes past its end (" + String (bad) + " bad reads)");
+            line.resize ((size_t) size);
+            const float half = synth::readDelay (line.data(), size, 10, 2.5f);
+            check (std::abs (half - 7.5f) < 1.0e-4f && std::abs (synth::readDelay (line.data(), size, 1, 3.0f) - 2398.0f) < 1.0e-3f,
+                   "poly chorus: reads between samples and wraps round the start (" + String (half, 3) + ")");
+        }
+
+        {
             auto slot = load ("drums");
             auto& d = dynamic_cast<Device&> (*slot->instance);
             const int notes[] { 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 56, 57, 59 };
@@ -1458,6 +1485,22 @@ int main (int argc, char** argv)
             }
             check (silent.isEmpty(), "drums: every General MIDI drum note it knows makes a sound" + (silent.isEmpty() ? String() : " (silent: " + silent.joinIntoString (", ") + ")"));
             check (rms (play (d, { { 0, 60, 1, 1.0f } }, 12000), 0, 12000) < 1.0e-6, "drums: other notes are silent");
+
+            // No drum may come out far hotter than the rest (the rim once peaked at +14 dBFS).
+            auto peakOf = [] (const std::vector<float>& v) { float p = 0.0f; for (auto x : v) p = jmax (p, std::abs (x)); return p; };
+            StringArray hot;
+            for (int kit = 0; kit < 4; ++kit)
+            {
+                d.set ("kit", (float) kit);
+                for (int note : notes)
+                    if (const float pk = peakOf (play (d, { { 0, note, 1, 1.0f } }, 12000)); pk > 1.0f)
+                        hot.add ("kit " + String (kit + 1) + " note " + String (note) + " " + String (pk, 2));
+            }
+            d.set ("kit", 0.0f);
+            check (hot.isEmpty(), "drums: every voice of every kit peaks under 0 dBFS at full velocity" + (hot.isEmpty() ? String() : " (" + hot.joinIntoString (", ") + ")"));
+            const float loud = peakOf (play (d, { { 0, 37, 1, 1.0f } }, 12000));
+            const float soft = peakOf (play (d, { { 0, 37, 1, 32.0f / 127.0f } }, 12000));
+            check (soft < loud * 0.25f, "drums: velocity 32 is at least 12 dB under 127 (" + String (Decibels::gainToDecibels (soft / loud), 1) + " dB)");
 
             const auto open = play (d, { { 0, 46, 1, 1.0f } }, 24000);
             const auto choked = play (d, { { 0, 46, 1, 1.0f }, { 2400, 42, 1, 0.01f } }, 24000);
