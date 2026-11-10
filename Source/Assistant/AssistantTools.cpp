@@ -1576,6 +1576,9 @@ public:
         }
     }
 
+    /** Done and reported: what's left is only letting go of it. */
+    bool isFinished() const noexcept   { return state == State::finished; }
+
 private:
     enum class State { settling, playing, finished };
 
@@ -1848,11 +1851,12 @@ std::shared_ptr<Tools::Job> Tools::startLongTool (const String& name, const var&
         immediate = toolText ("Unknown tool: " + name, true);
         return {};
     }
-    if (measurer != nullptr)
+    if (measurer != nullptr && ! measurer->isFinished())
     {
         immediate = toolText ("Lathe is already measuring. Wait for that to finish.", true);
         return {};
     }
+    measurer.reset();   // a finished one whose clean-up hasn't come round yet
     if (engine.getSampleRate() <= 0.0)
     {
         immediate = toolText ("No audio device is running, so there's nothing to measure (Options > Audio / MIDI Settings).", true);
@@ -1917,7 +1921,8 @@ void Tools::measurerFinished (const Measurer* m)
     auto flag = alive;
     MessageManager::callAsync ([this, flag, m]
     {
-        if (flag->load() && measurer.get() == m)
+        // A new measurement may have taken its place (even at the same address): only a finished one goes.
+        if (flag->load() && measurer != nullptr && measurer.get() == m && measurer->isFinished())
             measurer.reset();
     });
 }

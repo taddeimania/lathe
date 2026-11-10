@@ -2789,6 +2789,8 @@ int main (int argc, char** argv)
 
             check (tm.call ("measure_performance", var (new DynamicObject()), status)["isError"], "a long tool can't run as a quick call");
 
+            // Straight after "done", before the finished measurement has been tidied away (that comes
+            // on the message thread a moment later): the next one must still start.
             job = tm.startLongTool ("compare_processing_cores", args2 ({ { "from_bar", 1 }, { "to_bar", 2 }, { "seconds", 2 }, { "rounds", 1 } }), immediate);
             check (job != nullptr, "compare_processing_cores starts " + (job == nullptr ? text (immediate) : String()));
             if (job != nullptr && waitFor (*job))
