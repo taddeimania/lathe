@@ -30,6 +30,7 @@ public:
 
 private:
     var callTool (const String& name, const var& args, const std::atomic<bool>& running);
+    var callLongTool (const String& name, const var& args, const std::atomic<bool>& running);
     void stopServer();
 
     AppContext& ctx;

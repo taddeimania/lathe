@@ -39,6 +39,9 @@ bool tokensMatch (const String& a, const String& b);
 constexpr int kFirstPort = 47960;
 constexpr int kPortsToTry = 10;
 constexpr int kMaxBody = 1024 * 1024;
+/** The most a long tool (measure_performance, compare_processing_cores) may take. */
+constexpr int kLongToolSeconds = 120;
+inline bool isLongTool (const String& name)   { return name == "measure_performance" || name == "compare_processing_cores"; }
 
 //==============================================================================
 // Just enough HTTP/1.1 for one request and one response per connection.

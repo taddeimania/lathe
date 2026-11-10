@@ -139,10 +139,10 @@ faster on the same machine, with the same bit-identical result.
 
 **Results** (share of the audio deadline at 128 samples, 1 core → all cores)
 
-| Session | 2-core Intel Xeon (whole engine) | 4-core Apple M1 Pro (scheduler + same workload) |
+| Session | 2-core Intel Xeon | Apple M1 Pro, 6 performance cores |
 |---|---|---|
-| 12 heavy synths | 87% (peaks 121%, dropouts) → 49% | 45% → 13% |
-| 8 synths | 59% → 30% | 30% → 9.5% |
-| Band: 8 audio + 4 synths + 2 returns | 45% → 26% | 24% → 9% |
-| 4 synths printed to audio (chained) | 38% → 21% | 19% → 8% |
-| 32-bar export | 34.3 s → 19.0 s | |
+| 12 heavy synths | 92% (peaks 148%, dropouts) → 51% | 42% → 9% |
+| 8 synths | 66% → 32% | 28% → 9% |
+| Band: 8 audio + 4 synths + 2 returns | 51% → 26% | 22% → 8.5% |
+| 4 synths printed to audio (chained) | 44% → 20% | 18% → 5.6% |
+| 32-bar export | 33.4 s → 20.0 s | 16.3 s → 5.5 s |

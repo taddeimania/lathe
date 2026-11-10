@@ -175,6 +175,9 @@ struct Track
     bool rtGainValid = false;
     EqProcessor rtEq;
 
+    // While the engine measures (Engine::beginMeasurement): time spent on this track, in µs.
+    std::atomic<double> measuredUs { 0.0 };
+
     bool isAudio() const noexcept   { return kind == TrackKind::audio; }
     bool isMidi() const noexcept    { return kind == TrackKind::midi; }
     bool isBus() const noexcept     { return kind == TrackKind::bus; }
@@ -186,8 +189,11 @@ struct Track
     int indexOfClip (int clipId) const;
 };
 
+struct EditSnapshot;
+
 //==============================================================================
-class Edit : public ChangeBroadcaster
+class Edit : public ChangeBroadcaster,
+             private Timer
 {
 public:
     Edit();
@@ -278,21 +284,41 @@ public:
     /** Notes on a song that isn't in the cloud (cloud songs keep theirs on the server). */
     std::vector<SongNote> localNotes;
 
-    void changed()  { dirty = true; needsRebuild = true; sendChangeMessage(); }
+    void changed()  { dirty = true; needsRebuild = true; sendChangeMessage(); scheduleUndoStep(); }
     /** For changes the engine already reads live (mute, solo, arm, monitor): UI refresh only. */
-    void touched()  { dirty = true; sendChangeMessage(); }
+    void touched()  { dirty = true; sendChangeMessage(); scheduleUndoStep(); }
     /** For continuous controls (faders, knobs): no notification at all. */
     void markDirty() { dirty = true; }
 
     bool dirty = false;
     bool needsRebuild = false;
 
-    // --- undo for clip and note edits (track and plug-in changes are not undoable)
-    void beginClipEdit();
+    // --- undo
+    // Covers tracks, returns, groups, cue mixes, routing, sends, plug-ins (added, removed,
+    // moved, bypassed), names, colours, tempo, time signature, clips and notes. Not the
+    // continuous controls (faders, pans, send levels, EQ), mute/solo/arm, the loop or the
+    // playhead: those live in the shared Track objects and keep their current values.
+    //
+    // Steps are recorded automatically: changed() schedules one, and every change made
+    // until things go quiet (a few hundred ms) becomes that one step, so an action that
+    // touches several things (a group bus, a recorded take) undoes in one go.
+
+    /** Ends the pending step now, so what follows is a step of its own. Call before an
+        edit that should undo separately from what came just before it (a clip drag, an
+        assistant's batch of changes). */
+    void commitUndoStep();
+    /** Older name for commitUndoStep(), used before clip and note edits. */
+    void beginClipEdit()   { commitUndoStep(); }
+    /** Puts back the state as of the last step, without making an undo or redo step of it
+        (for an edit that failed halfway). */
+    void discardUncommitted();
+    /** Forgets all steps; the current state becomes the starting point (after opening a project). */
+    void clearUndo();
     bool undo();
     bool redo();
-    bool canUndo() const   { return ! undoStack.empty(); }
+    bool canUndo() const   { return ! undoStack.empty() || stepPending; }
     bool canRedo() const   { return ! redoStack.empty(); }
+    int getUndoDepth() const   { return (int) undoStack.size(); }
 
     // --- files
     using PluginFactory = std::function<std::shared_ptr<PluginSlot> (const PluginDescription&, const MemoryBlock& state)>;
@@ -308,10 +334,16 @@ public:
 private:
     int lastId = 0;
     int colourIndex = 0;
-    std::vector<var> undoStack, redoStack;
+    std::vector<std::shared_ptr<const EditSnapshot>> undoStack, redoStack;
+    std::shared_ptr<const EditSnapshot> committed;   // the state after the last step
+    bool stepPending = false;
+    bool restoring = false;
 
-    var clipsToVar() const;
-    void clipsFromVar (const var&);
+    std::shared_ptr<const EditSnapshot> capture() const;
+    void restore (const EditSnapshot&);
+    void scheduleUndoStep();
+    void timerCallback() override   { commitUndoStep(); }
+
     var trackToVar (const Track&, bool asTemplate) const;
     void removeEmptyGroups();
     std::shared_ptr<Track> trackFromVar (const var&, const File& baseDir, const PluginFactory&);

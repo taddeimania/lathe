@@ -287,8 +287,16 @@ public:
                     const int busId = bus->id;
                     k->onValueChange = [this, k, busId]
                     {
+                        // A track's first turn of a send knob creates the send. The audio engine
+                        // only routes the sends it knew about when it last rebuilt, so a new one
+                        // needs a rebuild or the return hears nothing. Later turns only change
+                        // the level, which the engine reads live.
+                        const bool isNew = track->getSend (busId, false) == nullptr;
                         track->getSend (busId, true)->levelDb = theme::faderPosToDb ((float) k->getValue());
-                        ctx.edit.markDirty();
+                        if (isNew)
+                            ctx.edit.changed();
+                        else
+                            ctx.edit.markDirty();
                     };
                     addAndMakeVisible (k);
 

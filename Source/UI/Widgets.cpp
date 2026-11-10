@@ -844,21 +844,9 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
         }
         else if (r == 4)
         {
-            const auto id = track->id;
-            if (track->clips.empty())
-            {
-                edit.removeTrack (id);
-                return;
-            }
-
-            AlertWindow::showOkCancelBox (MessageBoxIconType::WarningIcon, "Delete " + track->name + "?",
-                                          "This track has clips. Deleting it can't be undone.",
-                                          "Delete", "Cancel", nullptr,
-                                          ModalCallbackFunction::create ([context, id] (int ok)
-                                          {
-                                              if (ok == 1)
-                                                  context->edit.removeTrack (id);
-                                          }));
+            const auto name = track->name;
+            edit.removeTrack (track->id);
+            context->showStatus ("Deleted " + name + ". Undo (Cmd/Ctrl+Z) brings it back.");
         }
     });
 }

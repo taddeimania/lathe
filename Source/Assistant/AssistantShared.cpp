@@ -266,14 +266,14 @@ var prop (const char* type, const char* description)
     return object ({ { "type", type }, { "description", description } });
 }
 
-var tool (const char* name, const char* title, const char* description, var inputSchema, bool readOnly)
+var tool (const char* name, const char* title, const char* description, var inputSchema, bool readOnly, bool destructive = false)
 {
     return object ({ { "name", name },
                      { "title", title },
                      { "description", description },
                      { "inputSchema", inputSchema },
                      { "annotations", object ({ { "readOnlyHint", readOnly },
-                                                { "destructiveHint", false },
+                                                { "destructiveHint", destructive },
                                                 { "idempotentHint", readOnly },
                                                 { "openWorldHint", false } }) } });
 }
@@ -323,6 +323,93 @@ var toolDefinitions()
                                { "to_bar", prop ("number", "Loop end: the bar it jumps back from") },
                                { "on", prop ("boolean", "false turns the loop off (the region is kept). Default true") } }),
                      false));
+    tools.add (tool ("list_plugins", "List installed plug-ins",
+                     "The plug-ins Lathe can load on this computer: name, maker, kind (instrument, note generator or "
+                     "effect) and format. Use the names with edit_session's add_plugin and add_track's plugins.",
+                     schema ({ { "kind", prop ("string", "Only this kind: \"instrument\", \"note generator\" or \"effect\"") },
+                               { "search", prop ("string", "Only plug-ins whose name or maker contains this") } }),
+                     true));
+
+    {
+        auto change = schema ({
+            { "action", object ({ { "type", "string" },
+                                  { "enum", Array<var> { "add_track", "remove_track", "rename_track", "move_track",
+                                                         "add_plugin", "remove_plugin", "move_plugin", "set_plugin_on",
+                                                         "set_input", "set_output", "set_send", "set_mixer", "set_track",
+                                                         "set_tempo", "set_time_signature" } },
+                                  { "description", "What to change" } }) },
+            { "track", prop ("string", "The track it applies to: name or id. Tracks added earlier in the same call can be named") },
+            { "kind", prop ("string", "add_track: \"audio\", \"midi\" or \"return\"") },
+            { "name", prop ("string", "add_track, rename_track: the track's name (must differ from every other track's)") },
+            { "plugins", object ({ { "type", "array" }, { "items", object ({ { "type", "string" } }) },
+                                   { "description", "add_track: plug-ins to put on it, in order (names from list_plugins)" } }) },
+            { "plugin", prop ("string", "add_plugin: the plug-in's name. remove_plugin, move_plugin, set_plugin_on: its name or 1-based position on the track") },
+            { "position", prop ("integer", "add_track, move_track: place in the track list (1 = top). add_plugin, move_plugin: place in the chain (1 = first)") },
+            { "on", prop ("boolean", "set_plugin_on: false bypasses it, true switches it back on. add_plugin: false adds it bypassed") },
+            { "from_track", prop ("string", "set_input: take this track's notes (MIDI tracks, from a MIDI track) or sound (audio tracks)") },
+            { "interface_input", prop ("integer", "set_input (audio tracks): the interface input to record, 1-based") },
+            { "midi_input", prop ("string", "set_input (MIDI tracks): \"all\", \"none\" or a MIDI device's name") },
+            { "none", prop ("boolean", "set_input: true for no input") },
+            { "stereo", prop ("boolean", "with interface_input (default false) or interface_output (default true): use a pair of channels") },
+            { "to", prop ("string", "set_output: \"master\" or a return's name") },
+            { "interface_output", prop ("integer", "set_output: play out of this interface output instead, 1-based") },
+            { "return", prop ("string", "set_send: the return to send to") },
+            { "level_db", prop ("number", "set_send: send level in dB (0 = unity, -12 is typical; \"off\" for none)") },
+            { "pre_fader", prop ("boolean", "set_send: send before the track's fader") },
+            { "volume_db", prop ("number", "set_mixer: fader in dB (-70 to +6)") },
+            { "pan", prop ("number", "set_mixer: -1 (left) to 1 (right)") },
+            { "mute", prop ("boolean", "set_mixer") },
+            { "solo", prop ("boolean", "set_mixer") },
+            { "monitor", prop ("string", "set_track (also set_input): \"auto\", \"in\" or \"off\"") },
+            { "arm", prop ("boolean", "set_track: arm for recording") },
+            { "midi_channel", prop ("integer", "set_track (MIDI tracks): 1-16") },
+            { "bpm", prop ("number", "set_tempo") },
+            { "numerator", prop ("integer", "set_time_signature") },
+            { "denominator", prop ("integer", "set_time_signature: 2, 4, 8 or 16") } },
+            { "action" });
+
+        tools.add (tool ("edit_session", "Change the session",
+                         "Builds or changes the project: tracks, returns, plug-ins, routing, sends, mixer, tempo. Give every "
+                         "change for one request in a single call, in order: they all land as ONE undo step in Lathe, or, if one "
+                         "can't be made, none of them do (the reply says which and why). Plug-in placement is automatic unless "
+                         "position is given: a note generator goes before the instrument it drives, an instrument before the "
+                         "effects. A MIDI track plays one instrument. A track whose input is another track gets monitoring In so "
+                         "it plays without being armed.\n"
+                         "Routing a note generator into an instrument, two ways: on one track, "
+                         "{\"action\":\"add_track\",\"kind\":\"midi\",\"name\":\"Drums\",\"plugins\":[\"Dicey\",\"Stepkin\"]} "
+                         "(simplest), or on two, so the generator's notes can be recorded or drive several instruments: "
+                         "add_track \"Dicey\" with plugins [\"Dicey\"], add_track \"Stepkin\" with plugins [\"Stepkin\"], then "
+                         "{\"action\":\"set_input\",\"track\":\"Stepkin\",\"from_track\":\"Dicey\"}. "
+                         "A reverb return: add_track kind \"return\" with plugins [\"Nave\"], then set_send from each track.\n"
+                         "Volume, pan, mute, solo, send levels, monitoring and arm change live and aren't part of the undo step.",
+                         schema ({ { "changes", object ({ { "type", "array" }, { "items", change },
+                                                          { "description", "The changes, applied in order" } }) } },
+                                 { "changes" }),
+                         false, true));
+    }
+
+    tools.add (tool ("measure_performance", "Measure CPU use",
+                     "Plays part of the project for real and times every audio block, the way a CPU meter does: mean, "
+                     "99th-percentile and peak load (share of each block's deadline; over 100% is a dropout), blocks that "
+                     "missed the deadline, dropouts the interface reported, each track's own cost per block (heaviest "
+                     "first, with its plug-ins), and the conditions (computer, cores, power and Low Power Mode, how hot the "
+                     "Mac is, interface, buffer size). Bars default to the loop if it's on, else the first four. Takes about "
+                     "`seconds` plus a short warm-up; Lathe is stopped first and the playhead goes back afterwards.",
+                     schema ({ { "from_bar", prop ("number", "First bar to play (1-based)") },
+                               { "to_bar", prop ("number", "Bar to stop at") },
+                               { "seconds", prop ("number", "How long to measure, 2 to 20 (default 8). Short bars are played again until it's reached") } }),
+                     false));
+    tools.add (tool ("compare_processing_cores", "Compare 1 core with all cores",
+                     "Measures the same bars with Lathe rendering on 1 core and on all cores (Auto), alternating "
+                     "(1, all, 1, all) so a warming or throttling computer doesn't favour either, and returns both side by "
+                     "side with the speed-up, every run, each track's cost, and the conditions. The Processing cores "
+                     "setting is put back afterwards. Takes about 2 x rounds x seconds, plus warm-ups.",
+                     schema ({ { "from_bar", prop ("number", "First bar to play (1-based)") },
+                               { "to_bar", prop ("number", "Bar to stop at") },
+                               { "seconds", prop ("number", "Seconds per run, 2 to 20 (default 6)") },
+                               { "rounds", prop ("integer", "Rounds of 1 core + all cores, 1 to 3 (default 2)") } }),
+                     false));
+
     tools.add (tool ("stop", "Stop",
                      "Stops playback, like pressing Stop. If Lathe is recording, this finishes the recording and "
                      "keeps the take, exactly as the Stop button does.",
@@ -337,8 +424,8 @@ StringArray protocolVersions()
 
 String instructions()
 {
-    return "Lathe is a small DAW (digital audio workstation). These tools read the project that is open in Lathe "
-           "and control its transport. Positions are in bars (1-based) and beats. A MIDI track's notes go through its "
+    return "Lathe is a small DAW (digital audio workstation). These tools read the project that is open in Lathe, "
+           "control its transport, and change it (edit_session: each call is one undo step the person can take back). Positions are in bars (1-based) and beats. A MIDI track's notes go through its "
            "plug-ins in order: a generator plug-in (one that makes its own notes, like an arpeggiator or a sequencer) "
            "comes before the instrument it drives. A MIDI track can take its notes from another MIDI track, and an "
            "audio track can take another track's sound; tracks that take their input from somewhere only hear it "

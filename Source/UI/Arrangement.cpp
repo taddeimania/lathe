@@ -1810,7 +1810,7 @@ void ArrangementView::joinSelectedClips()
 
     if (joined.empty())
     {
-        ctx.edit.undo();
+        ctx.edit.discardUncommitted();
         ctx.showStatus (problem);
         return;
     }

@@ -1420,6 +1420,44 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
     if (! exactlyEqual (g.sampleRate, deviceRate.load()) || g.maxBlock <= 0)
         return;
 
+    // Measuring: time the whole block (what the CPU meter shows), after the warm-up.
+    struct BlockTimer
+    {
+        Engine& e;
+        int64 start = 0;
+        bool on = false;
+        explicit BlockTimer (Engine& en) : e (en)
+        {
+            if (e.measuring.load (std::memory_order_acquire))
+            {
+                if (e.measureSkip.load (std::memory_order_relaxed) > 0)
+                    e.measureSkip.fetch_sub (1, std::memory_order_relaxed);
+                else
+                {
+                    on = true;
+                    e.measureWriting.store (true, std::memory_order_relaxed);
+                    start = Time::getHighResolutionTicks();
+                }
+            }
+            e.measureThisBlock = on;
+        }
+        ~BlockTimer()
+        {
+            e.measureThisBlock = false;
+            if (! on)
+                return;
+            const int i = e.measureCount.load (std::memory_order_relaxed);
+            if (i < (int) e.measureBlocks.size())
+            {
+                e.measureBlocks[(size_t) i] = (float) ((double) (Time::getHighResolutionTicks() - start)
+                                                       * 1.0e6 / (double) Time::getHighResolutionTicksPerSecond());
+                e.measureCount.store (i + 1, std::memory_order_release);
+            }
+            e.measureTrackBlocks.fetch_add (1, std::memory_order_relaxed);
+            e.measureWriting.store (false, std::memory_order_release);
+        }
+    } blockTimer (*this);
+
     const float* inDev[kMaxChannels] {};
     float* outDev[kMaxChannels] {};
 
@@ -1562,10 +1600,15 @@ void sortByCost (std::vector<size_t>& tasks, const std::vector<RenderTrack>& tra
             std::swap (tasks[j], tasks[j - 1]);
 }
 
-inline void noteCost (RenderTrack& rt, int64 start) noexcept
+inline void noteCost (RenderTrack& rt, int64 start, bool measure) noexcept
 {
     const auto us = (float) ticksToUs (Time::getHighResolutionTicks() - start);
     rt.costUs = rt.costUs <= 0.0f ? us : 0.9f * rt.costUs + 0.1f * us;
+    if (measure)   // one thread renders a track in a given block, so a plain add is enough
+    {
+        auto& m = rt.track->measuredUs;
+        m.store (m.load (std::memory_order_relaxed) + us, std::memory_order_relaxed);
+    }
 }
 }
 
@@ -1574,14 +1617,14 @@ void Engine::renderTrackTimed (RenderGraph& g, RenderTrack& rt, int64 pos, int l
 {
     const auto start = Time::getHighResolutionTicks();
     renderTrack (g, rt, pos, len, offset, rolling, inDev, numIn, realtime, notesOff);
-    noteCost (rt, start);
+    noteCost (rt, start, realtime && measureThisBlock.load (std::memory_order_relaxed));
 }
 
 void Engine::renderBusTimed (RenderGraph& g, RenderTrack& rt, int len)
 {
     const auto start = Time::getHighResolutionTicks();
     renderBus (g, rt, len);
-    noteCost (rt, start);
+    noteCost (rt, start, measureThisBlock.load (std::memory_order_relaxed));
 }
 
 bool Engine::worthSharing (const std::vector<RenderTrack>& tracks) const noexcept
@@ -1640,6 +1683,40 @@ void Engine::renderBuses (RenderGraph& g, int len)
         auto& j = *static_cast<BlockJob*> (context);
         j.engine->renderBusTimed (*j.g, j.g->buses[(*j.tasks)[(size_t) i]], j.len);
     }, &job);
+}
+
+//==============================================================================
+void Engine::beginMeasurement (int skipBlocks)
+{
+    measuring = false;
+    while (measureWriting.load (std::memory_order_acquire))   // a block still being written down
+        Thread::yield();
+    if (edit != nullptr)
+    {
+        for (auto* list : { &edit->tracks, &edit->buses })
+            for (auto& t : *list)
+                t->measuredUs = 0.0;
+    }
+    const int block = jmax (16, deviceBlock.load());
+    const double rate = jmax (8000.0, deviceRate.load());
+    measureBlocks.assign ((size_t) (rate * 120.0 / block) + 16, 0.0f);   // room for two minutes
+    measureCount = 0;
+    measureTrackBlocks = 0;
+    measureSkip = jmax (0, skipBlocks);
+    measuring.store (true, std::memory_order_release);
+}
+
+Engine::Measured Engine::endMeasurement()
+{
+    measuring = false;
+    Measured m;
+    const int count = measureCount.load (std::memory_order_acquire);
+    m.blockUs.assign (measureBlocks.begin(), measureBlocks.begin() + jmin (count, (int) measureBlocks.size()));
+    m.blockSize = deviceBlock.load();
+    m.sampleRate = deviceRate.load();
+    m.threads = getActiveProcessingThreads();
+    m.trackBlocks = measureTrackBlocks.load();
+    return m;
 }
 
 //==============================================================================

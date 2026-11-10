@@ -418,6 +418,7 @@ void MainComponent::newProject (const File& templateFile)
     engine.rebuild();
     edit.needsRebuild = false;
     edit.dirty = false;
+    edit.clearUndo();   // setting the project up isn't something to undo
     refreshAll();
 
     if (cloud != nullptr)
@@ -500,6 +501,7 @@ void MainComponent::loadProjectFile (const File& file, const File& readFrom)
     engine.rebuild();
     edit.needsRebuild = false;
     edit.dirty = false;
+    edit.clearUndo();   // setting the project up isn't something to undo
     refreshAll();
 
     settings.setValue ("lastProject", file.getFullPathName());
@@ -935,8 +937,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
     }
     else if (index == 1)
     {
-        item (menu::undo, "Undo (clips and notes)", cmd + "Z", edit.canUndo());
-        item (menu::redo, "Redo", cmd + "Shift+Z", edit.canRedo());
+        item (menu::undo, "Undo", cmd + "Z", edit.canUndo() && ! engine.isRecording());
+        item (menu::redo, "Redo", cmd + "Shift+Z", edit.canRedo() && ! engine.isRecording());
         m.addSeparator();
         const int numClips = arrangement.numSelectedClips();
         const bool hasClip = numClips > 0;
@@ -1087,8 +1089,14 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::showFolder:    edit.workDir.revealToUser(); break;
         case menu::quit:          JUCEApplication::getInstance()->systemRequestedQuit(); break;
 
-        case menu::undo:          if (! edit.undo()) setStatus ("Nothing to undo."); break;
-        case menu::redo:          edit.redo(); break;
+        case menu::undo:
+            if (engine.isRecording()) setStatus ("Stop recording first, then undo.");
+            else if (! edit.undo())   setStatus ("Nothing to undo.");
+            break;
+        case menu::redo:
+            if (engine.isRecording()) setStatus ("Stop recording first, then redo.");
+            else                      edit.redo();
+            break;
         case menu::deleteClip:    arrangement.deleteSelectedClip(); break;
         case menu::duplicate:     arrangement.duplicateSelectedClip(); break;
         case menu::split:         arrangement.splitSelectedClip(); break;

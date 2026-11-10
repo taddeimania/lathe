@@ -4,6 +4,7 @@ namespace lathe::assistant
 {
 Service::Service (AppContext& c) : ctx (c), tools (c.edit, c.engine)
 {
+    tools.showStatus = [this] (const String& s) { ctx.showStatus (s); };
     if (ctx.settings.getBoolValue ("assistantOn", false))
         if (auto r = setOn (true); r.failed())
             ctx.showStatus ("AI assistant connection: " + r.getErrorMessage());
@@ -73,6 +74,9 @@ void Service::stopServer()
 
 var Service::callTool (const String& name, const var& args, const std::atomic<bool>& running)
 {
+    if (Tools::isLongTool (name))
+        return callLongTool (name, args, running);
+
     // The project belongs to the message thread: run the tool there and wait for it.
     struct Pending
     {
@@ -102,6 +106,42 @@ var Service::callTool (const String& name, const var& args, const std::atomic<bo
             break;
     }
     return toolText ("Lathe didn't answer in time (it may be busy loading, or showing a dialog). Try again.", true);
+}
+
+var Service::callLongTool (const String& name, const var& args, const std::atomic<bool>& running)
+{
+    // Started on the message thread, which stays free while Lathe plays; this thread waits.
+    struct Started
+    {
+        WaitableEvent done;
+        std::shared_ptr<Tools::Job> job;
+        var immediate;
+    };
+    auto started = std::make_shared<Started>();
+    auto flag = alive;
+
+    MessageManager::callAsync ([this, flag, started, name, args]
+    {
+        if (flag->load())
+            started->job = tools.startLongTool (name, args, started->immediate);
+        started->done.signal();
+    });
+
+    for (int waited = 0; ! started->done.wait (100); waited += 100)
+        if (waited > 15000 || ! running.load() || ! flag->load())
+            return toolText ("Lathe didn't answer in time (it may be busy loading, or showing a dialog). Try again.", true);
+
+    if (started->job == nullptr)
+        return started->immediate.isVoid() ? toolText ("Lathe is closing.", true) : started->immediate;
+
+    for (int waited = 0; waited < kLongToolSeconds * 1000; waited += 100)
+    {
+        if (started->job->done.wait (100))
+            return started->job->result;
+        if (! running.load() || ! flag->load())
+            break;
+    }
+    return toolText ("The measurement didn't finish in time.", true);
 }
 
 String Service::statusText() const

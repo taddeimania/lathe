@@ -90,6 +90,23 @@ public:
     /** Threads rendering right now (1 = only the audio thread). */
     int getActiveProcessingThreads() const noexcept;
 
+    // --- measuring (the AI assistant's measure_performance tool)
+    /** Starts timing every audio block and every track, after skipping the first `skipBlocks`
+        (a warm-up). Message thread. */
+    void beginMeasurement (int skipBlocks);
+    struct Measured
+    {
+        std::vector<float> blockUs;   // time each measured block took, in microseconds
+        int blockSize = 0;
+        double sampleRate = 0.0;
+        int threads = 1;
+        int64 trackBlocks = 0;        // blocks the per-track figures cover
+    };
+    /** Stops timing and hands over what was measured. Per-track times are in each Track's
+        measuredUs (summed over Measured::trackBlocks blocks). Message thread. */
+    Measured endMeasurement();
+    bool isMeasuring() const noexcept   { return measuring.load(); }
+
     // --- device info
     double getSampleRate() const noexcept   { return deviceRate.load(); }
     int getBlockSize() const noexcept       { return deviceBlock.load(); }
@@ -109,6 +126,7 @@ public:
     /** Loads a plug-in (or a placeholder that keeps its state if it isn't installed). */
     std::shared_ptr<PluginSlot> makeSlot (const PluginDescription&, const MemoryBlock& state, String& error);
     void prepareSlot (PluginSlot&);
+    PluginHost& getPluginHost() noexcept   { return host; }
 
     // --- export
     struct ExportSettings
@@ -212,6 +230,12 @@ private:
     bool poolWorkgroupChanged = false;
     std::atomic<bool> poolDirty { false };
     std::atomic<double> parallelMinimumUs { 60.0 };
+    // measuring: the message thread sets it up and reads it; the audio thread records
+    std::atomic<bool> measuring { false };
+    std::atomic<int> measureSkip { 0 }, measureCount { 0 };
+    std::atomic<int64> measureTrackBlocks { 0 };
+    std::vector<float> measureBlocks;   // sized before measuring starts, written by the audio thread
+    std::atomic<bool> measureThisBlock { false }, measureWriting { false };   // the audio thread is timing this block (read by workers)
     // auto-stop (setAutoStop): set on the message thread, reached and cleared by the audio thread
     std::atomic<int64> stopAtSamples { -1 };
     std::atomic<int> loopPassesLeft { 0 };

@@ -12,8 +12,9 @@ public:
     {
         heading (intro, "AI assistant (MCP)");
         note (introNote, "Lets an AI app on this computer, like Claude Desktop or Claude Code, look at the open project "
-                         "(tracks, routing, plug-ins, clips and notes), play any stretch of it, and set the loop. "
-                         "It's off until you turn it on here.");
+                         "(tracks, routing, plug-ins, clips and notes), play any stretch of it, set the loop, and build the "
+                         "session: add tracks and plug-ins, route them, set sends. Each change it makes is one step you can "
+                         "undo with Cmd/Ctrl+Z. It's off until you turn it on here.");
 
         enable.setButtonText ("Let AI apps on this computer connect to Lathe");
         enable.onClick = [this] { toggle(); };

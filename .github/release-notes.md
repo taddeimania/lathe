@@ -3,13 +3,30 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.9.0
+
+- **Undo covers the whole session now**, not just clips and notes: adding, deleting and
+  moving tracks and returns, groups, plug-ins (added, removed, reordered, bypassed),
+  inputs, outputs, sends, names, tempo and time signature. A deleted track comes back
+  with its plug-ins still loaded and set up. Faders, pans and send levels aren't part of
+  undo yet: they stay where you left them.
+- **Your AI assistant can build the session.** "Add a MIDI track with Dicey into Stepkin,
+  and a reverb return with Nave that the drums send to" makes the tracks, loads the
+  plug-ins in the right order, and sets the routing and sends. Everything from one
+  request is a single undo step.
+- **It can measure what your session costs.** It plays some bars and reports the CPU
+  load (average, worst moments, missed deadlines), each track's own cost with its
+  plug-ins, and the conditions (power, Low Power Mode, how hot the Mac is, buffer size).
+  It can also compare 1 core with all cores on your own song.
+- A new send to a return was silent until something else changed the session. Fixed.
+
 ## New in 0.8.0
 
 - **Lathe uses all your cores.** Tracks and their plug-ins now play on several cores at
   once instead of one after another, so big sessions fit where one core used to run out.
-  On a 4-core Apple M1 Pro, twelve heavy synths went from 45% of the audio deadline to
-  13%. Exports get faster the same way. Nothing sounds different: the output is identical
-  to the sample.
+  On an M1 Pro (6 performance cores), twelve heavy synths went from 42% of the audio
+  deadline to 9%, and a 32-bar export from 16.3 s to 5.5 s. Nothing sounds different:
+  the output is identical to the sample.
 - **Options > Audio / MIDI Settings > Processing cores**: Auto (one per performance core) or
   a number. 1 plays one track at a time, as before, in case a plug-in misbehaves.
 - **`Lathe --benchmark`** times the audio engine on one core and on all of them, with

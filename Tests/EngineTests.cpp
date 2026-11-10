@@ -112,6 +112,19 @@ public:
     void processBlock (AudioBuffer<float>&, MidiBuffer& midi) override   { midi.clear(); }
 };
 
+/** Takes a steady few hundred microseconds per block, like a real plug-in would. */
+class Spinner : public NoteEater
+{
+public:
+    explicit Spinner (double microseconds) : us (microseconds) {}
+    void processBlock (AudioBuffer<float>&, MidiBuffer&) override
+    {
+        const auto until = Time::getHighResolutionTicks() + (int64) (us * 1.0e-6 * (double) Time::getHighResolutionTicksPerSecond());
+        while (Time::getHighResolutionTicks() < until) {}
+    }
+    double us;
+};
+
 class LatencyPlugin : public AudioPluginInstance
 {
 public:
@@ -1043,6 +1056,103 @@ int main (int argc, char** argv)
         t->clips.clear();
         e.undo();
         check (t->clips.size() == 2, "undo restores clips");
+    }
+
+    std::cout << "Undo: tracks, routing and plug-ins" << std::endl;
+    {
+        Edit e;
+        auto slotNamed = [] (const String& name)
+        {
+            auto s = std::make_shared<PluginSlot>();
+            s->description.name = name;
+            return s;
+        };
+
+        check (! e.canUndo(), "a fresh project has nothing to undo");
+
+        auto keys = e.addTrack (TrackKind::midi, "Keys");
+        auto verb = e.addTrack (TrackKind::bus, "Verb");
+        e.commitUndoStep();
+        check (e.getUndoDepth() == 1, "adding two tracks in one go is one step (got " + String (e.getUndoDepth()) + ")");
+
+        // Plug-ins and a send, as the mixer and the device chain do it.
+        auto dicey = slotNamed ("Dicey"), stepkin = slotNamed ("Stepkin"), nave = slotNamed ("Nave");
+        keys->plugins = { dicey, stepkin };
+        verb->plugins = { nave };
+        e.changed();
+        e.commitUndoStep();
+        keys->getSend (verb->id, true)->levelDb = -12.0f;
+        e.changed();
+        e.commitUndoStep();
+        keys->volumeDb = -6.0f;   // a fader move: not a step of its own, and undo leaves it alone
+        e.markDirty();
+
+        check (e.undo() && keys->sends.empty(), "undo takes the new send away");
+        check (keys->plugins.size() == 2 && keys->volumeDb.load() == -6.0f, "and leaves the plug-ins and the fader where they were");
+        check (e.redo() && keys->sends.size() == 1 && keys->sends[0]->levelDb.load() == -12.0f, "redo brings the same send back, level and all");
+
+        // Deleting a track brings back the very same track, plug-ins still loaded.
+        e.removeTrack (verb->id);
+        e.commitUndoStep();
+        check (e.buses.empty() && keys->sends.empty(), "deleting a return removes the sends to it");
+        check (e.undo() && e.buses.size() == 1 && e.buses[0] == verb && verb->plugins.size() == 1 && verb->plugins[0] == nave,
+               "undo brings the deleted return back with its plug-in instance");
+        check (keys->sends.size() == 1 && keys->sends[0]->busId == verb->id, "and the send to it");
+
+        // Bypass, reorder, routing and renames are steps too.
+        stepkin->bypassed = true;
+        e.changed();
+        e.commitUndoStep();
+        std::swap (keys->plugins[0], keys->plugins[1]);
+        keys->output.kind = OutputRoute::Kind::bus;
+        keys->output.busId = verb->id;
+        keys->name = "Drums";
+        e.changed();
+        e.commitUndoStep();
+        check (e.undo() && keys->plugins[0] == dicey && keys->output.kind == OutputRoute::Kind::master && keys->name == "Keys",
+               "one undo puts back the order, the output and the name changed together");
+        check (e.undo() && ! stepkin->bypassed.load(), "the next undo turns the plug-in back on");
+
+        // Something that calls changed() several times (a group bus) is still one step.
+        auto a = e.addTrack (TrackKind::audio, "Kick");
+        auto b = e.addTrack (TrackKind::audio, "Snare");
+        e.commitUndoStep();
+        auto g = e.createGroup ({ a->id, b->id }, "Drums");
+        e.makeGroupBus (g->id);
+        e.commitUndoStep();
+        check (e.buses.size() == 2 && a->output.kind == OutputRoute::Kind::bus, "group bus made");
+        check (e.undo() && e.groups.empty() && e.buses.size() == 1 && a->groupId == -1 && a->output.kind == OutputRoute::Kind::master,
+               "one undo takes the group and its bus away together");
+
+        // A change nobody announced still becomes its own step once the next edit begins.
+        a->name = "Kick In";
+        e.beginClipEdit();
+        Clip hit;
+        hit.id = e.newId();
+        hit.kind = ClipKind::midi;
+        b->clips.push_back (hit);
+        e.changed();
+        e.commitUndoStep();
+        check (e.undo() && b->clips.empty() && a->name == "Kick In", "undo takes the new clip, not the rename before it");
+        check (e.undo() && a->name == "Kick", "then the rename");
+
+        // A failed edit can be rolled back without leaving a step behind.
+        const int depth = e.getUndoDepth();
+        b->clips.push_back ({});
+        e.discardUncommitted();
+        check (b->clips.empty() && e.getUndoDepth() == depth, "discardUncommitted puts things back and leaves no step");
+
+        // Loading or starting a project starts the history over.
+        e.clearUndo();
+        check (! e.canUndo() && ! e.canRedo(), "clearUndo forgets every step");
+
+        // A new edit after an undo drops the redo history.
+        e.addTrack (TrackKind::audio, "One");
+        e.commitUndoStep();
+        e.undo();
+        e.addTrack (TrackKind::audio, "Two");
+        e.commitUndoStep();
+        check (! e.canRedo(), "a new step after undo clears redo");
     }
 
 
@@ -2191,6 +2301,213 @@ int main (int argc, char** argv)
         engine.rebuild();
         e.insertMarker = 8.0;
 
+        // --- building a session: list_plugins and edit_session
+        {
+            Edit ex;
+            Tools tx (ex, engine);
+            auto addType = [&] (const String& name, bool instrument)
+            {
+                PluginDescription d;
+                d.name = name;
+                d.manufacturerName = "Test";
+                d.pluginFormatName = "Test";
+                d.fileOrIdentifier = "test:" + name;
+                d.isInstrument = instrument;
+                host.known.addType (d);
+            };
+            addType ("Dicey", true);       // a MIDI tool that scans as an instrument: the catalog knows better
+            addType ("Stepkin", true);
+            addType ("Tincture", true);
+            addType ("Nave", false);
+            addType ("Broken Verb", false);
+            tx.loadPlugin = [] (const PluginDescription& d, String& error)
+            {
+                auto slot = std::make_shared<PluginSlot>();
+                slot->description = d;
+                if (d.name == "Dicey")              slot->instance = std::make_unique<NoteGenerator> (-1, -1);
+                else if (d.name != "Broken Verb")   slot->instance = std::make_unique<NoteEater>();
+                else                                error = "it crashed";
+                return slot;
+            };
+            auto change = [&] (std::initializer_list<std::pair<const char*, var>> kv) { return args2 (kv); };
+            auto batchOf = [&] (std::initializer_list<var> list)
+            {
+                Array<var> a;
+                for (auto& v : list)
+                    a.add (v);
+                return args2 ({ { "changes", a } });
+            };
+            auto names = [] (const Track& t)
+            {
+                StringArray n;
+                for (auto& p : t.plugins)
+                    n.add (p->getName());
+                return n.joinIntoString (",");
+            };
+
+            const auto listed = JSON::parse (text (tx.call ("list_plugins", var (new DynamicObject()), status)));
+            String diceyKind;
+            for (auto& p : *listed["plugins"].getArray())
+                if (p["name"].toString() == "Dicey")
+                    diceyKind = p["kind"].toString();
+            check (listed["plugins"].size() == 5 && diceyKind == "note generator", "list_plugins lists them, Dicey as a note generator");
+            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2,
+                   "list_plugins filters by kind");
+
+            // One track: the generator goes before the instrument, whatever order it's given in.
+            auto r = tx.call ("edit_session", batchOf ({ change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Drums" },
+                                                                   { "plugins", Array<var> { "Stepkin", "dicey" } } }) }), status);
+            auto drums = tx.findTrack ("Drums");
+            check (! (bool) r["isError"] && drums != nullptr && drums->isMidi() && names (*drums) == "Dicey,Stepkin",
+                   "add_track with plugins: a MIDI track with Dicey before Stepkin (" + text (r) + ")");
+            check (text (r).contains ("with Dicey -> Stepkin"), "the reply shows the chain in signal order");
+            check (ex.getUndoDepth() == 1 && status.contains ("Cmd/Ctrl+Z"), "it's one undo step, and Lathe's status bar says so");
+
+            // Two tracks, one feeding the other, plus a reverb return in the same call.
+            r = tx.call ("edit_session", batchOf ({
+                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Seq" }, { "plugins", Array<var> { "Dicey" } } }),
+                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Kit" }, { "plugins", Array<var> { "Stepkin" } } }),
+                    change ({ { "action", "set_input" }, { "track", "Kit" }, { "from_track", "Seq" } }),
+                    change ({ { "action", "add_track" }, { "kind", "return" }, { "name", "Verb" }, { "plugins", Array<var> { "Nave" } } }),
+                    change ({ { "action", "set_send" }, { "track", "Kit" }, { "return", "Verb" }, { "level_db", -12 } }) }), status);
+            auto seq = tx.findTrack ("Seq"), kit = tx.findTrack ("Kit"), verb = tx.findTrack ("Verb");
+            check (! (bool) r["isError"] && kit != nullptr && seq != nullptr && kit->input.track == seq->id
+                   && kit->monitor.load() == (int) Monitor::in, "set_input from_track routes Seq into Kit, monitoring In (" + text (r) + ")");
+            check (verb != nullptr && verb->isBus() && names (*verb) == "Nave" && kit->sends.size() == 1
+                   && kit->sends[0]->busId == verb->id && kit->sends[0]->levelDb.load() == -12.0f, "a return with Nave, Kit sending to it at -12 dB");
+            check (ex.getUndoDepth() == 2, "the whole batch is one more undo step");
+
+            check (ex.undo() && ex.tracks.size() == 1 && ex.buses.empty() && ex.tracks[0] == drums,
+                   "one undo takes the whole batch away");
+            check (ex.redo() && ex.tracks.size() == 3 && ex.buses.size() == 1 && kit->input.track == seq->id, "redo brings it all back");
+
+            // Nothing lands when a change can't be made.
+            const int depth = ex.getUndoDepth();
+            drums->volumeDb = 0.0f;
+            r = tx.call ("edit_session", batchOf ({
+                    change ({ { "action", "set_mixer" }, { "track", "Drums" }, { "volume_db", -10 } }),
+                    change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Lead" }, { "plugins", Array<var> { "Tincture" } } }),
+                    change ({ { "action", "add_plugin" }, { "track", "Lead" }, { "plugin", "Broken Verb" } }) }), status);
+            check ((bool) r["isError"] && text (r).contains ("Change 3") && text (r).contains ("couldn't load Broken Verb: it crashed")
+                   && text (r).contains ("Nothing was changed"),
+                   "a change that fails says which one (" + text (r) + ")");
+            check (tx.findTrack ("Lead") == nullptr && drums->volumeDb.load() == 0.0f && ex.getUndoDepth() == depth,
+                   "...and nothing before it is kept, levels included");
+
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Drums" }, { "plugin", "Tincture" } }) }), status))
+                       .contains ("already has an instrument (Stepkin)"), "a second instrument on a MIDI track is refused");
+            auto audio = ex.addTrack (TrackKind::audio, "Gtr");
+            ex.commitUndoStep();
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "Stepkin" } }) }), status))
+                       .contains ("goes on a MIDI track"), "an instrument on an audio track is refused, with what to do instead");
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "in" } }) }), status))
+                       .contains ("could be"), "an ambiguous plug-in name lists the candidates");
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "set_input" }, { "track", "Seq" }, { "from_track", "Kit" } }) }), status))
+                       .contains ("loop"), "routing that would loop is refused");
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "add_track" }, { "name", "kit" } }) }), status))
+                       .contains ("already a track called"), "track names stay distinct");
+            check (text (tx.call ("edit_session", batchOf ({ change ({ { "action", "set_output" }, { "track", "Gtr" }, { "to", "Kit" } }) }), status))
+                       .contains ("isn't a return"), "output goes to the master, a return or the interface");
+
+            r = tx.call ("edit_session", batchOf ({
+                    change ({ { "action", "set_output" }, { "track", "Gtr" }, { "to", "Verb" } }),
+                    change ({ { "action", "add_plugin" }, { "track", "Gtr" }, { "plugin", "Nave" }, { "on", false } }),
+                    change ({ { "action", "set_plugin_on" }, { "track", "Drums" }, { "plugin", 1 }, { "on", false } }),
+                    change ({ { "action", "rename_track" }, { "track", "Gtr" }, { "name", "Guitar" } }),
+                    change ({ { "action", "set_tempo" }, { "bpm", 96 } }) }), status);
+            check (! (bool) r["isError"] && audio->name == "Guitar" && audio->output.kind == OutputRoute::Kind::bus
+                   && audio->output.busId == verb->id && audio->plugins.size() == 1 && audio->plugins[0]->bypassed.load()
+                   && drums->plugins[0]->bypassed.load() && ex.tempo == 96.0, "outputs, bypass, rename and tempo (" + text (r) + ")");
+            check (ex.undo() && audio->name == "Gtr" && audio->plugins.empty() && ! drums->plugins[0]->bypassed.load() && ex.tempo == 120.0
+                   && audio->output.kind == OutputRoute::Kind::master, "...all undone in one step");
+
+            r = tx.call ("edit_session", batchOf ({ change ({ { "action", "remove_track" }, { "track", "Verb" } }) }), status);
+            check (! (bool) r["isError"] && ex.buses.empty() && kit->sends.empty(), "remove_track takes the return and the sends to it");
+            check (ex.undo() && ex.buses.size() == 1 && kit->sends.size() == 1, "undo brings them back");
+        }
+
+        // --- measuring: a thread plays the audio callbacks in real time, as a device would
+        {
+            Edit em;
+            em.tempo = 120.0;
+            engine.setEdit (&em);
+            for (auto [name, cost] : { std::pair<const char*, double> { "Heavy", 600.0 }, { "Light", 150.0 } })
+            {
+                auto tr = em.addTrack (TrackKind::audio, name);
+                auto slot = std::make_shared<PluginSlot>();
+                slot->description.name = String (name) + " Load";
+                slot->instance = std::make_unique<Spinner> (cost);
+                tr->plugins.push_back (slot);
+            }
+            em.insertMarker = 2.0;
+            engine.rebuild();
+            Tools tm (em, engine);
+
+            std::atomic<bool> running { true };
+            std::thread audioThread ([&]
+            {
+                AudioBuffer<float> outs (2, 256), ins (2, 256);
+                ins.clear();
+                auto next = Time::getMillisecondCounterHiRes();
+                while (running.load())
+                {
+                    engine.audioDeviceIOCallbackWithContext (ins.getArrayOfReadPointers(), 2, outs.getArrayOfWritePointers(), 2, 256, {});
+                    next += 256.0 * 1000.0 / 48000.0;
+                    const auto wait = next - Time::getMillisecondCounterHiRes();
+                    if (wait > 0)
+                        Thread::sleep ((int) wait);
+                }
+            });
+
+            auto waitFor = [] (Tools::Job& job)
+            {
+                const auto start = Time::getMillisecondCounterHiRes();
+                while (! job.done.wait (0) && Time::getMillisecondCounterHiRes() - start < 60000)
+                    MessageManager::getInstance()->runDispatchLoopUntil (10);
+                return job.done.wait (0);
+            };
+
+            const int threadsBefore = engine.getProcessingThreads();
+            var immediate;
+            auto job = tm.startLongTool ("measure_performance", args2 ({ { "from_bar", 1 }, { "to_bar", 2 }, { "seconds", 2 } }), immediate);
+            check (job != nullptr, "measure_performance starts " + (job == nullptr ? text (immediate) : String()));
+            if (job != nullptr && waitFor (*job))
+            {
+                const auto res = JSON::parse (text (job->result));
+                if (res["per_track"].size() == 0)
+                    std::cout << "    measure_performance said: " << text (job->result) << std::endl;
+                const auto heavyPct = res["per_track"].size() > 0 ? (double) res["per_track"][0]["pct_of_deadline"] : 0.0;
+                check (! (bool) job->result["isError"] && (double) res["result"]["mean_load_pct"] > 0.0
+                       && (int) res["result"]["blocks_measured"] > 100, "it measures real blocks (" + text (job->result).substring (0, 400) + ")");
+                check (res["per_track"].size() == 2 && res["per_track"].size() > 0 && res["per_track"][0]["track"].toString() == "Heavy"
+                       && std::abs (heavyPct - 600.0 / 5333.3 * 100.0) < 6.0,
+                       "per-track cost: the heavy track first, at about its real cost (" + String (heavyPct, 1) + "% of the deadline, want ~11.3%)");
+                check (res["conditions"]["audio"]["buffer_samples"].toString() == "256" && res.hasProperty ("to_compare_elsewhere"),
+                       "it reports the conditions and how to compare");
+                check (! engine.isPlaying() && em.insertMarker == 2.0 && ! engine.isMeasuring(), "Lathe is stopped afterwards, insert marker untouched");
+            }
+
+            check (tm.call ("measure_performance", var (new DynamicObject()), status)["isError"], "a long tool can't run as a quick call");
+
+            job = tm.startLongTool ("compare_processing_cores", args2 ({ { "from_bar", 1 }, { "to_bar", 2 }, { "seconds", 2 }, { "rounds", 1 } }), immediate);
+            check (job != nullptr, "compare_processing_cores starts " + (job == nullptr ? text (immediate) : String()));
+            if (job != nullptr && waitFor (*job))
+            {
+                const auto res = JSON::parse (text (job->result));
+                if (res["runs"].size() != 2)
+                    std::cout << "    compare_processing_cores said: " << text (job->result) << std::endl;
+                check (! (bool) job->result["isError"] && res["runs"].size() == 2
+                       && (double) res["summary"]["one_core"]["mean_load_pct"] > 0.0 && (double) res["summary"]["all_cores"]["mean_load_pct"] > 0.0
+                       && res["runs"].size() > 0 && res["runs"][0]["mode"].toString() == "1 core", "it measures 1 core, then all cores (" + text (job->result).substring (0, 300) + ")");
+                check (engine.getProcessingThreads() == threadsBefore, "and puts the Processing cores setting back");
+            }
+
+            running = false;
+            audioThread.join();
+            engine.setEdit (&e);
+            engine.rebuild();
+        }
+
         // --- the HTTP server
         const auto endpoint = dir.getChildFile ("assistant.json");
         int connects = 0;
@@ -2241,7 +2558,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 6 && listed["id"].toString() == "a", "tools/list has the six tools");
+        check (listed["result"]["tools"].size() == 10 && listed["id"].toString() == "a", "tools/list has the ten tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

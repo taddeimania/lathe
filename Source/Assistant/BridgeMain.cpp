@@ -78,8 +78,10 @@ void handle (const String& line)
 
     String body;
     int status = 0;
+    // A measurement plays part of the song for real: give it the time it needs.
+    const bool longCall = message["method"].toString() == "tools/call" && isLongTool (message["params"]["name"].toString());
     if (auto e = readEndpoint())
-        status = postToLathe (*e, JSON::toString (message, true), body, 20000);
+        status = postToLathe (*e, JSON::toString (message, true), body, longCall ? (kLongToolSeconds + 15) * 1000 : 20000);
 
     if (status == 200)
     {

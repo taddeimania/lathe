@@ -65,8 +65,6 @@ void Edit::reset()
     clickInMain = true;
     projectFile = File();
     workDir = File();
-    undoStack.clear();
-    redoStack.clear();
     lastId = 0;
     colourIndex = 0;
     dirty = false;
@@ -79,6 +77,8 @@ void Edit::reset()
     master->colour = Colour (0xff9a9a9a);
     master->output.kind = OutputRoute::Kind::hardware;
     master->output.channel = 0;
+
+    clearUndo();
 }
 
 void Edit::ensureWorkDir()
@@ -579,70 +579,309 @@ void Edit::clearRange (Track& t, double from, double to, int exceptClipId)
 }
 
 //==============================================================================
-void Edit::beginClipEdit()
+// Undo. A snapshot holds what an undo puts back: which tracks, returns, groups and cue
+// mixes exist and in what order (the same objects, so a deleted track comes back with its
+// plug-ins still loaded, settings and all), plus each one's structural settings and clips.
+// Continuous controls aren't in it: they live in the shared objects and keep their values.
+
+struct TrackState
 {
-    undoStack.push_back (clipsToVar());
-    if (undoStack.size() > 200)
-        undoStack.erase (undoStack.begin());
+    std::shared_ptr<Track> track;
+    String name;
+    Colour colour;
+    AudioInput input;
+    String midiInput, midiOutput;
+    int midiChannel = 1;
+    int groupId = -1;
+    OutputRoute output;
+    std::vector<std::shared_ptr<Send>> sends;
+    std::vector<std::shared_ptr<PluginSlot>> plugins;
+    std::vector<bool> bypassed;
+    std::vector<Clip> clips;
+};
+
+struct GroupState
+{
+    std::shared_ptr<TrackGroup> group;
+    String name;
+    Colour colour;
+    int busId = -1;
+};
+
+struct CueState
+{
+    std::shared_ptr<CueMix> cue;
+    String name;
+    Colour colour;
+};
+
+struct EditSnapshot
+{
+    double tempo = 120.0;
+    int timeSigNum = 4, timeSigDen = 4;
+    std::vector<TrackState> tracks, buses;
+    TrackState master;
+    std::vector<GroupState> groups;
+    std::vector<CueState> cues;
+};
+
+static TrackState captureTrack (const std::shared_ptr<Track>& t)
+{
+    TrackState s;
+    s.track = t;
+    s.name = t->name;
+    s.colour = t->colour;
+    s.input = t->input;
+    s.midiInput = t->midiInput;
+    s.midiOutput = t->midiOutput;
+    s.midiChannel = t->midiChannel;
+    s.groupId = t->groupId;
+    s.output = t->output;
+    s.sends = t->sends;
+    s.plugins = t->plugins;
+    for (auto& p : t->plugins)
+        s.bypassed.push_back (p->bypassed.load());
+    s.clips = t->clips;
+    return s;
+}
+
+static void restoreTrack (const TrackState& s)
+{
+    auto& t = *s.track;
+    t.name = s.name;
+    t.colour = s.colour;
+    t.input = s.input;
+    t.midiInput = s.midiInput;
+    t.midiOutput = s.midiOutput;
+    t.midiChannel = s.midiChannel;
+    t.groupId = s.groupId;
+    t.output = s.output;
+    t.sends = s.sends;
+    t.plugins = s.plugins;
+    for (size_t i = 0; i < s.plugins.size() && i < s.bypassed.size(); ++i)
+        s.plugins[i]->bypassed = s.bypassed[i];
+    t.clips = s.clips;
+}
+
+static bool sameNotes (const std::vector<Note>& a, const std::vector<Note>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].pitch != b[i].pitch || ! exactlyEqual (a[i].start, b[i].start)
+            || ! exactlyEqual (a[i].length, b[i].length) || ! exactlyEqual (a[i].velocity, b[i].velocity))
+            return false;
+    return true;
+}
+
+static bool sameEvents (const std::vector<MidiEvent>& a, const std::vector<MidiEvent>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (! exactlyEqual (a[i].beat, b[i].beat) || a[i].size != b[i].size
+            || std::memcmp (a[i].data, b[i].data, sizeof (a[i].data)) != 0)
+            return false;
+    return true;
+}
+
+static bool sameClips (const std::vector<Clip>& a, const std::vector<Clip>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        auto& x = a[i];
+        auto& y = b[i];
+        if (x.id != y.id || x.kind != y.kind || x.name != y.name || ! exactlyEqual (x.start, y.start)
+            || ! exactlyEqual (x.length, y.length) || x.file != y.file || x.sourceOffset != y.sourceOffset
+            || ! exactlyEqual (x.gainDb, y.gainDb) || ! sameNotes (x.notes, y.notes) || ! sameEvents (x.events, y.events))
+            return false;
+    }
+    return true;
+}
+
+static bool sameTrack (const TrackState& a, const TrackState& b)
+{
+    return a.track == b.track && a.name == b.name && a.colour == b.colour
+        && a.input.channel == b.input.channel && a.input.stereo == b.input.stereo && a.input.track == b.input.track
+        && a.midiInput == b.midiInput && a.midiOutput == b.midiOutput && a.midiChannel == b.midiChannel
+        && a.groupId == b.groupId
+        && a.output.kind == b.output.kind && a.output.busId == b.output.busId
+        && a.output.channel == b.output.channel && a.output.stereo == b.output.stereo
+        && a.sends == b.sends && a.plugins == b.plugins && a.bypassed == b.bypassed
+        && sameClips (a.clips, b.clips);
+}
+
+static bool sameTracks (const std::vector<TrackState>& a, const std::vector<TrackState>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (! sameTrack (a[i], b[i]))
+            return false;
+    return true;
+}
+
+static bool sameSnapshot (const EditSnapshot& a, const EditSnapshot& b)
+{
+    if (! exactlyEqual (a.tempo, b.tempo) || a.timeSigNum != b.timeSigNum || a.timeSigDen != b.timeSigDen
+        || ! sameTracks (a.tracks, b.tracks) || ! sameTracks (a.buses, b.buses) || ! sameTrack (a.master, b.master)
+        || a.groups.size() != b.groups.size() || a.cues.size() != b.cues.size())
+        return false;
+    for (size_t i = 0; i < a.groups.size(); ++i)
+        if (a.groups[i].group != b.groups[i].group || a.groups[i].name != b.groups[i].name
+            || a.groups[i].colour != b.groups[i].colour || a.groups[i].busId != b.groups[i].busId)
+            return false;
+    for (size_t i = 0; i < a.cues.size(); ++i)
+        if (a.cues[i].cue != b.cues[i].cue || a.cues[i].name != b.cues[i].name || a.cues[i].colour != b.cues[i].colour)
+            return false;
+    return true;
+}
+
+std::shared_ptr<const EditSnapshot> Edit::capture() const
+{
+    auto s = std::make_shared<EditSnapshot>();
+    s->tempo = tempo;
+    s->timeSigNum = timeSigNum;
+    s->timeSigDen = timeSigDen;
+    for (auto& t : tracks) s->tracks.push_back (captureTrack (t));
+    for (auto& t : buses)  s->buses.push_back (captureTrack (t));
+    s->master = captureTrack (master);
+    for (auto& g : groups) s->groups.push_back ({ g, g->name, g->colour, g->busId });
+    for (auto& c : cues)   s->cues.push_back ({ c, c->name, c->colour });
+    return s;
+}
+
+void Edit::restore (const EditSnapshot& s)
+{
+    // Plug-ins this takes away get their editor windows closed (they stay loaded, for redo).
+    std::set<PluginSlot*> kept;
+    for (auto* list : { &s.tracks, &s.buses })
+        for (auto& ts : *list)
+            for (auto& p : ts.plugins)
+                kept.insert (p.get());
+    for (auto& p : s.master.plugins)
+        kept.insert (p.get());
+
+    auto closeGone = [&kept] (const Track& t)
+    {
+        for (auto& p : t.plugins)
+            if (kept.count (p.get()) == 0)
+                p->window.reset();
+    };
+    for (auto& t : tracks) closeGone (*t);
+    for (auto& t : buses)  closeGone (*t);
+    closeGone (*master);
+
+    tempo = s.tempo;
+    timeSigNum = s.timeSigNum;
+    timeSigDen = s.timeSigDen;
+
+    tracks.clear();
+    for (auto& ts : s.tracks) { restoreTrack (ts); tracks.push_back (ts.track); }
+    buses.clear();
+    for (auto& ts : s.buses)  { restoreTrack (ts); buses.push_back (ts.track); }
+    restoreTrack (s.master);
+
+    groups.clear();
+    for (auto& g : s.groups)
+    {
+        g.group->name = g.name;
+        g.group->colour = g.colour;
+        g.group->busId = g.busId;
+        groups.push_back (g.group);
+    }
+    cues.clear();
+    for (auto& c : s.cues)
+    {
+        c.cue->name = c.name;
+        c.cue->colour = c.colour;
+        cues.push_back (c.cue);
+    }
+}
+
+void Edit::scheduleUndoStep()
+{
+    if (restoring)
+        return;
+    if (committed == nullptr)
+        committed = capture();   // first change since the project was set up
+    stepPending = true;
+    if (MessageManager::getInstanceWithoutCreating() != nullptr)
+        startTimer (400);        // a drag or a burst of changes ends up as one step
+}
+
+void Edit::commitUndoStep()
+{
+    // Compares with the last step even when nothing called changed(), so an edit made
+    // without telling anyone still becomes a step of its own before the next one starts.
+    stepPending = false;
+    stopTimer();
+
+    auto now = capture();
+    if (committed != nullptr && ! sameSnapshot (*now, *committed))
+    {
+        undoStack.push_back (committed);
+        if (undoStack.size() > 100)
+            undoStack.erase (undoStack.begin());
+        redoStack.clear();
+    }
+    committed = now;
+}
+
+void Edit::discardUncommitted()
+{
+    stepPending = false;
+    stopTimer();
+    if (committed == nullptr)
+        return;
+    const ScopedValueSetter<bool> busy (restoring, true);
+    restore (*committed);
+    changed();
+}
+
+void Edit::clearUndo()
+{
+    stepPending = false;
+    stopTimer();
+    undoStack.clear();
     redoStack.clear();
+    committed = capture();
 }
 
 bool Edit::undo()
 {
+    commitUndoStep();
     if (undoStack.empty())
         return false;
 
-    redoStack.push_back (clipsToVar());
-    clipsFromVar (undoStack.back());
+    redoStack.push_back (committed);
+    committed = undoStack.back();
     undoStack.pop_back();
-    changed();
+    {
+        const ScopedValueSetter<bool> busy (restoring, true);
+        restore (*committed);
+        changed();
+    }
     return true;
 }
 
 bool Edit::redo()
 {
+    commitUndoStep();
     if (redoStack.empty())
         return false;
 
-    undoStack.push_back (clipsToVar());
-    clipsFromVar (redoStack.back());
+    undoStack.push_back (committed);
+    committed = redoStack.back();
     redoStack.pop_back();
-    changed();
+    {
+        const ScopedValueSetter<bool> busy (restoring, true);
+        restore (*committed);
+        changed();
+    }
     return true;
-}
-
-var Edit::clipsToVar() const
-{
-    Array<var> list;
-    for (auto& t : tracks)
-    {
-        DynamicObject::Ptr o = new DynamicObject();
-        o->setProperty ("track", t->id);
-
-        Array<var> clips;
-        for (auto& c : t->clips)
-            clips.add (clipToVar (c));
-        o->setProperty ("clips", clips);
-        list.add (var (o.get()));
-    }
-    return list;
-}
-
-void Edit::clipsFromVar (const var& v)
-{
-    if (auto* arr = v.getArray())
-    {
-        for (auto& entry : *arr)
-        {
-            if (auto t = findTrack ((int) entry["track"]))
-            {
-                t->clips.clear();
-                if (auto* clips = entry["clips"].getArray())
-                    for (auto& c : *clips)
-                        t->clips.push_back (clipFromVar (c, File()));
-            }
-        }
-    }
 }
 
 //==============================================================================
@@ -1146,8 +1385,7 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
     lastId = maxId;
     colourIndex = (int) (tracks.size() + buses.size());
 
-    undoStack.clear();
-    redoStack.clear();
+    clearUndo();
     dirty = false;
     return Result::ok();
 }
