@@ -13,9 +13,10 @@
 # with a tag, or empty for the latest published release. An older tag only fills in
 # its own v1.2.3/ folder; "latest" always stays the newest release.
 #
-# Needs three repository variables (Settings -> Secrets and variables -> Actions ->
-# Variables). lathe-site's `terraform output github_variables` prints the commands.
-#   AWS_ROLE_ARN, SITE_BUCKET, SITE_DISTRIBUTION_ID
+# Needs (Settings -> Secrets and variables -> Actions); lathe-site's
+# `terraform output github_variables` prints the commands:
+#   secret   AWS_ROLE_ARN          (a secret so the AWS account id is masked in the public logs)
+#   variable SITE_BUCKET, SITE_DISTRIBUTION_ID
 
 name: Publish downloads
 
@@ -44,12 +45,12 @@ jobs:
     steps:
       - name: Check the settings
         env:
-          ROLE: ${{ vars.AWS_ROLE_ARN }}
+          ROLE: ${{ secrets.AWS_ROLE_ARN }}
           BUCKET: ${{ vars.SITE_BUCKET }}
           DIST: ${{ vars.SITE_DISTRIBUTION_ID }}
         run: |
           if [ -z "$ROLE" ] || [ -z "$BUCKET" ] || [ -z "$DIST" ]; then
-            echo "::error::Set the AWS_ROLE_ARN, SITE_BUCKET and SITE_DISTRIBUTION_ID repository variables (lathe-site: terraform output github_variables)."
+            echo "::error::Set the AWS_ROLE_ARN secret and the SITE_BUCKET and SITE_DISTRIBUTION_ID variables (lathe-site: terraform output github_variables)."
             exit 1
           fi
 
@@ -99,28 +100,15 @@ jobs:
           PY
           cat latest.json
 
-      # Prints the identity GitHub hands AWS (not the token itself). The publish role in
-      # lathe-site/terraform/github.tf must match "sub" exactly, capitals included.
-      - name: Show who GitHub says this run is
-        if: env.SKIP != '1'
-        run: |
-          curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" |
-          python3 -c '
-          import base64, json, sys
-          token = json.load(sys.stdin)["value"]
-          part = token.split(".")[1]
-          claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-          for k in ("sub", "aud", "repository", "ref", "event_name"):
-              print(f"{k}: {claims.get(k)}")
-          '
-
       - name: Sign in to AWS
         if: env.SKIP != '1'
-        uses: aws-actions/configure-aws-credentials@v4
+        # Pinned to a commit (v4.3.1): this step holds the publish role, so a moved tag
+        # mustn't be able to change what runs here. To update, pin the new release's commit.
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
+          mask-aws-account-id: true
 
       - name: Upload
         if: env.SKIP != '1'

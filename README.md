@@ -53,7 +53,7 @@ Publishing a release also puts it on the website: `.github/workflows/publish-dow
 
 Drafts and pre-releases never go to the site. To send a release again (or the current one for the first time), use **Actions > Publish downloads > Run workflow** from `main`, with a tag or empty for the latest. An older tag only fills in its own folder.
 
-It signs in to AWS with GitHub's OIDC token, so no AWS keys are stored in GitHub. It needs three repository variables, which `terraform output github_variables` in lathe-site prints as `gh variable set` commands: `AWS_ROLE_ARN`, `SITE_BUCKET` and `SITE_DISTRIBUTION_ID`.
+It signs in to AWS with GitHub's OIDC token, so no AWS keys are stored in GitHub. It needs the secret `AWS_ROLE_ARN` (a secret so your AWS account ID is masked in the public logs) and the variables `SITE_BUCKET` and `SITE_DISTRIBUTION_ID`. `terraform output github_variables` in lathe-site prints the `gh` commands. The AWS sign-in action is pinned to a commit, since it runs with the publish role.
 
 ### Signing and notarizing (macOS)
 
