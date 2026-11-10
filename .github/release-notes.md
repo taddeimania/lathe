@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.7.3
+
+- **The Mac version is signed and notarized by Apple.** Download it, unzip,
+  and double-click: no "unidentified developer" warning, no right-click.
+- Downloads now come from [getlathe.app](https://getlathe.app) as well as here.
+- The user guide is in the download, in the `docs` folder.
+
 ## New in 0.7.2
 
 - **`Lathe --screenshots <folder>`** draws a made-up demo song's windows (arrangement,
@@ -268,10 +275,8 @@ older versions of Lathe.
 
 ## Install
 
-**macOS**: unzip and move `Lathe.app` to Applications. The app isn't
-notarized, so the first time, right-click it and choose **Open** (or run
-`xattr -dr com.apple.quarantine /Applications/Lathe.app`). Allow microphone
-access when asked, or nothing will record.
+**macOS**: unzip and move `Lathe.app` to Applications, then double-click it.
+Allow microphone access when asked, or nothing will record.
 
 **Windows**: unzip anywhere and keep `Lathe.exe` and `LatheScanner.exe`
 together in the same folder. Install your audio interface's driver from its
