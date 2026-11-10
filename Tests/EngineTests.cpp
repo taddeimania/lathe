@@ -10,6 +10,7 @@
 #include "Cloud/Packing.h"
 #include "Assistant/AssistantServer.h"
 #include "Assistant/AssistantTools.h"
+#include "Bench/Benchmark.h"
 #if ! JUCE_WINDOWS
  #include <sys/stat.h>
 #endif
@@ -34,14 +35,14 @@ void check (bool ok, const String& what)
 class FakeDevice : public AudioIODevice
 {
 public:
-    FakeDevice (int ins, int outs, int inLat, int outLat)
-        : AudioIODevice ("Fake", "Fake"), numIns (ins), numOuts (outs), inLatency (inLat), outLatency (outLat) {}
+    FakeDevice (int ins, int outs, int inLat, int outLat, int block = 256)
+        : AudioIODevice ("Fake", "Fake"), numIns (ins), numOuts (outs), inLatency (inLat), outLatency (outLat), blockSize (block) {}
 
     StringArray getOutputChannelNames() override  { StringArray s; for (int i = 0; i < numOuts; ++i) s.add ("Out " + String (i + 1)); return s; }
     StringArray getInputChannelNames() override   { StringArray s; for (int i = 0; i < numIns; ++i) s.add ("In " + String (i + 1)); return s; }
     Array<double> getAvailableSampleRates() override { return { 48000.0 }; }
-    Array<int> getAvailableBufferSizes() override  { return { 256 }; }
-    int getDefaultBufferSize() override            { return 256; }
+    Array<int> getAvailableBufferSizes() override  { return { blockSize }; }
+    int getDefaultBufferSize() override            { return blockSize; }
     String open (const BigInteger&, const BigInteger&, double, int) override { return {}; }
     void close() override {}
     bool isOpen() override                         { return true; }
@@ -49,7 +50,7 @@ public:
     void stop() override {}
     bool isPlaying() override                      { return true; }
     String getLastError() override                 { return {}; }
-    int getCurrentBufferSizeSamples() override     { return 256; }
+    int getCurrentBufferSizeSamples() override     { return blockSize; }
     double getCurrentSampleRate() override         { return 48000.0; }
     int getCurrentBitDepth() override              { return 24; }
     BigInteger getActiveOutputChannels() const override { BigInteger b; b.setRange (0, numOuts, true); return b; }
@@ -58,7 +59,7 @@ public:
     int getInputLatencyInSamples() override        { return inLatency; }
 
 private:
-    int numIns, numOuts, inLatency, outLatency;
+    int numIns, numOuts, inLatency, outLatency, blockSize;
 };
 
 /** Pure delay "plug-in" that reports its latency, for testing compensation. */
@@ -240,11 +241,27 @@ File makeReleaseFolder (const File& dir, const String& name, const String& versi
     root.getChildFile ("README.md").replaceWithText ("readme");
     return root;
 }
+
 } // namespace
 
-int main()
+int main (int argc, char** argv)
 {
     ScopedJuceInitialiser_GUI juce;
+    if (argc >= 2 && String (argv[1]) == "--random")   // LatheTests --random [seeds] [threads]
+    {
+        const int seeds = argc >= 3 ? String (argv[2]).getIntValue() : 300, threads = argc >= 4 ? String (argv[3]).getIntValue() : 4;
+        const int failures = lathe::bench::checkRandom (seeds, threads, std::cout);
+        std::cout << seeds << " random sessions on " << threads << " threads: " << failures << " differ from one thread" << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+    if (argc >= 3 && String (argv[1]) == "--dump")    // LatheTests --dump <folder> [threads]
+        return lathe::bench::dump (File::getCurrentWorkingDirectory().getChildFile (argv[2]), argc >= 4 ? String (argv[3]).getIntValue() : 1, std::cout);
+    if (argc >= 2 && String (argv[1]) == "--bench")   // LatheTests --bench [out.csv] [1,full]
+    {
+        const File csv = File::getCurrentWorkingDirectory().getChildFile (argc >= 3 ? argv[2] : "lathe-bench.csv");
+        const auto modes = StringArray::fromTokens (argc >= 4 ? argv[3] : "1,full", ",", "");
+        return lathe::bench::run (csv, modes, std::cout);
+    }
     auto dir = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-tests");
     dir.deleteRecursively();
     dir.createDirectory();

@@ -195,9 +195,62 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Multi-core rendering (docs/multicore.md) under ThreadSanitizer: every engine test with
+  # each block shared over 4 threads, and random sessions compared with one thread. Any data
+  # race between the audio thread and the workers fails the build.
+  thread-check:
+    name: Thread check (Linux, ThreadSanitizer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore JUCE
+        id: juce-cache
+        uses: actions/cache@v6
+        with:
+          path: .juce
+          key: juce-${{ env.JUCE_VERSION }}-${{ runner.os }}
+
+      - name: Download JUCE
+        if: steps.juce-cache.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch "$JUCE_VERSION" https://github.com/juce-framework/JUCE.git .juce
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev libcurl4-openssl-dev
+
+      - name: Configure (ThreadSanitizer)
+        run: |
+          cmake -B build-tsan \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DLATHE_JUCE_DIR=.juce \
+            -DLATHE_BUILD_TESTS=ON \
+            -DLATHE_TEST_FIXTURES=OFF \
+            -DCMAKE_C_FLAGS=-fsanitize=thread -DCMAKE_CXX_FLAGS=-fsanitize=thread \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread \
+            -DCMAKE_MODULE_LINKER_FLAGS=-fsanitize=thread
+
+      - name: Build
+        run: cmake --build build-tsan --parallel 4 --target LatheTests
+
+      - name: Engine tests on 4 threads
+        env:
+          LATHE_TEST_THREADS: "4"
+          TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1"
+        run: ./build-tsan/LatheTests_artefacts/RelWithDebInfo/LatheTests
+
+      - name: Random sessions, 1 vs 4 threads
+        env:
+          TSAN_OPTIONS: "halt_on_error=1"
+        run: ./build-tsan/LatheTests_artefacts/RelWithDebInfo/LatheTests --random 60 4
+
   release:
     name: Draft release
-    needs: build
+    needs: [build, thread-check]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

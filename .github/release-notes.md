@@ -3,6 +3,19 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.8.0
+
+- **Lathe uses all your cores.** Tracks and their plug-ins now play on several cores at
+  once instead of one after another, so big sessions fit where one core used to run out.
+  On a 4-core Apple M1 Pro, twelve heavy synths went from 45% of the audio deadline to
+  13%. Exports get faster the same way. Nothing sounds different: the output is identical
+  to the sample.
+- **Options > Audio / MIDI Settings > Processing cores**: Auto (one per performance core) or
+  a number. 1 plays one track at a time, as before, in case a plug-in misbehaves.
+- **`Lathe --benchmark`** times the audio engine on one core and on all of them, with
+  made-up sessions full of heavy plug-ins, and saves the results as a CSV. See
+  docs/performance.md.
+
 ## New in 0.7.4
 
 - **Your AI assistant can play exactly what you ask for.** "Play bars 9 to 13" stops

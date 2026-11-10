@@ -1,3 +1,4 @@
+#include "Bench/Benchmark.h"
 #include "UI/MainComponent.h"
 
 #include <iostream>
@@ -55,7 +56,11 @@ public:
     const String getApplicationName() override       { return JUCE_APPLICATION_NAME_STRING; }
     const String getApplicationVersion() override    { return JUCE_APPLICATION_VERSION_STRING; }
     // A screenshot run (--screenshots) can go alongside a Lathe you have open.
-    bool moreThanOneInstanceAllowed() override       { return getCommandLineParameters().contains ("--screenshots"); }
+    bool moreThanOneInstanceAllowed() override
+    {
+        const auto params = getCommandLineParameters();
+        return params.contains ("--screenshots") || params.contains ("--benchmark");
+    }
 
     void initialise (const String& commandLine) override
     {
@@ -63,6 +68,20 @@ public:
         // (for the website) and quits. It uses its own throwaway settings, so it never
         // touches yours, your audio device or your plug-in list.
         const auto args = StringArray::fromTokens (commandLine, true);
+
+        // Lathe --benchmark [out.csv]: times the audio engine on one core and on all of them,
+        // with made-up sessions (no audio device, no plug-ins of yours), prints the comparison
+        // and quits. See docs/multicore.md.
+        if (const int benchArg = args.indexOf ("--benchmark"); benchArg >= 0)
+        {
+            const auto name = args[benchArg + 1].unquoted();
+            const auto csv = File::getCurrentWorkingDirectory().getChildFile (name.isNotEmpty() && ! name.startsWith ("-")
+                                                                                  ? name : String ("lathe-benchmark.csv"));
+            setApplicationReturnValue (bench::run (csv, { "1", "full" }, std::cout));
+            quit();
+            return;
+        }
+
         const int shotsArg = args.indexOf ("--screenshots");
         screenshotsDir = shotsArg >= 0 ? File::getCurrentWorkingDirectory().getChildFile (args[shotsArg + 1].unquoted())
                                        : File();

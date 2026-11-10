@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.7.4 LANGUAGES C CXX)
+project(Lathe VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -72,6 +72,7 @@ target_sources(Lathe PRIVATE
     Source/Engine/PluginHost.cpp
     Source/Engine/PluginStore.cpp
     Source/Engine/Engine.cpp
+    Source/Engine/RenderPool.cpp
     Source/Engine/ClipJoin.cpp
     Source/UI/Theme.cpp
     Source/UI/Widgets.cpp
@@ -90,6 +91,7 @@ target_sources(Lathe PRIVATE
     Source/UI/PluginBrowser.cpp
     Source/UI/AssistantDialog.cpp
     Source/Demo/DemoSong.cpp
+    Source/Bench/Benchmark.cpp
     Source/Assistant/AssistantShared.cpp
     Source/Assistant/AssistantServer.cpp
     Source/Assistant/AssistantTools.cpp
@@ -231,6 +233,7 @@ if(LATHE_BUILD_TESTS)
     juce_add_console_app(LatheTests PRODUCT_NAME "LatheTests")
     target_sources(LatheTests PRIVATE
         Tests/EngineTests.cpp
+        Source/Bench/Benchmark.cpp
         Source/Assistant/AssistantShared.cpp
         Source/Assistant/AssistantServer.cpp
         Source/Assistant/AssistantTools.cpp
@@ -244,6 +247,7 @@ if(LATHE_BUILD_TESTS)
         Source/Engine/PluginHost.cpp
         Source/Engine/PluginStore.cpp
         Source/Engine/Engine.cpp
+        Source/Engine/RenderPool.cpp
         Source/Engine/ClipJoin.cpp
         Source/Patcher/Updater.cpp)
     target_include_directories(LatheTests PRIVATE Source)
@@ -263,8 +267,15 @@ if(LATHE_BUILD_TESTS)
     # Three tiny VST3s for the scanning tests: one that works, one that crashes
     # while loading and one that never finishes loading. No moduleinfo.json, so
     # the scanner really has to load them.
+    # (Off for sanitizer builds: a plug-in can't link against the sanitizer's runtime, and the
+    # scanning tests they serve run in separate processes anyway.)
+    option(LATHE_TEST_FIXTURES "Build the test VST3s for the scanning tests" ON)
     set(LATHE_FIXTURE_DIR ${CMAKE_BINARY_DIR}/test-vst3)
-    foreach(fixture Gain Crash Hang)
+    set(LATHE_FIXTURE_LIST Gain Crash Hang)
+    if(NOT LATHE_TEST_FIXTURES)
+        set(LATHE_FIXTURE_LIST "")
+    endif()
+    foreach(fixture ${LATHE_FIXTURE_LIST})
         set(target LatheFixture${fixture})
         string(SUBSTRING ${fixture} 0 1 letter)
         juce_add_plugin(${target}
@@ -288,6 +299,11 @@ if(LATHE_BUILD_TESTS)
     endforeach()
 
     add_test(NAME engine COMMAND LatheTests)
+    # Multi-core (docs/multicore.md): every test again with each block shared out over 4
+    # threads, and random sessions compared sample for sample with one thread.
+    add_test(NAME engine-on-4-threads COMMAND LatheTests)
+    set_tests_properties(engine-on-4-threads PROPERTIES ENVIRONMENT "LATHE_TEST_THREADS=4;LATHE_TEST_VST3_DIR=${LATHE_FIXTURE_DIR}")
+    add_test(NAME random-routing-1-vs-4-threads COMMAND LatheTests --random 200 4)
     set_tests_properties(engine PROPERTIES ENVIRONMENT "LATHE_TEST_VST3_DIR=${LATHE_FIXTURE_DIR}")
 endif()
 

@@ -1,4 +1,8 @@
 #include "Engine.h"
+#include "RenderPool.h"
+#if JUCE_MAC
+ #include <sys/sysctl.h>
+#endif
 
 namespace lathe
 {
@@ -116,6 +120,9 @@ struct RenderTrack
     int numChannels = 2;
     AudioBuffer<float> buffer;
     MidiBuffer midi;
+    AudioBuffer<float> scratch;     // this track's own temp buffer (clip reading), so tracks can render at once
+    bool heardElsewhere = false;    // set while rendering, used while mixing (see renderTrack)
+    float costUs = 0.0f;            // how long rendering takes (running average), to hand out heavy tracks first
 
     RecordTake* take = nullptr;       // set while recording
     MidiTake* midiTake = nullptr;
@@ -144,6 +151,11 @@ struct RenderGraph
 
     std::vector<RenderTrack> tracks, buses;
     std::vector<size_t> order;     // processing order of tracks: a track's input source comes first
+    // For rendering in parallel: tracks grouped by dependency. Level 0 takes no other track as
+    // its input; level n takes its input from level n-1. Each level is sorted heaviest first
+    // before it's handed out (audio thread). Buses all depend only on the tracks.
+    std::vector<std::vector<size_t>> levels;
+    std::vector<size_t> busTasks;
     RenderTrack master;
     int trackLatency = 0, busLatency = 0, masterLatency = 0;
 
@@ -214,6 +226,15 @@ Engine::Engine (PluginHost& h, AudioPool& p, PropertiesFile& settings)
     deviceManager.addMidiInputDeviceCallback ({}, this);
     midiDeviceConnection = MidiDeviceListConnection::make ([this] { refreshMidiDevices(); });
     startTimer (500);
+
+    // For the thread checks (CI's ThreadSanitizer job): LATHE_TEST_THREADS=n renders on n
+    // threads and shares out every block, however small, so every test goes through the
+    // parallel path.
+    if (const auto forced = SystemStats::getEnvironmentVariable ("LATHE_TEST_THREADS", {}).getIntValue(); forced > 0)
+    {
+        requestedThreads = forced;
+        parallelMinimumUs = -1.0;
+    }
 }
 
 Engine::~Engine()
@@ -226,6 +247,7 @@ Engine::~Engine()
     deviceManager.removeMidiInputDeviceCallback ({}, this);
     deviceManager.closeAudioDevice();
 
+    renderPool.reset();
     graph.reset();
     diskThread.stopThread (2000);
 }
@@ -389,6 +411,17 @@ void Engine::audioDeviceAboutToStart (AudioIODevice* device)
     }
 
     clickRemaining = 0;
+
+    // The workers render to this device's deadline (and on macOS join its workgroup).
+    if (auto wg = device->getWorkgroup(); ! (wg == poolWorkgroup))
+    {
+        poolWorkgroup = wg;
+        poolWorkgroupChanged = true;
+    }
+    if (MessageManager::getInstanceWithoutCreating() != nullptr && MessageManager::getInstance()->isThisTheMessageThread())
+        updatePool();
+    else
+        poolDirty = true;
     triggerAsyncUpdate();
 }
 
@@ -399,6 +432,9 @@ void Engine::audioDeviceStopped()
 
 void Engine::handleAsyncUpdate()
 {
+    if (poolDirty.exchange (false))
+        updatePool();
+
     {
         SpinLock::ScopedLockType sl (midiLock);
         const double sr = deviceRate.load();
@@ -641,6 +677,7 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
         rt.buffer.setSize (rt.numChannels, bs);
         rt.buffer.clear();
         rt.midi.ensureSize (4096);
+        rt.scratch.setSize (2, bs);
 
         if (t->isMidi())
         {
@@ -827,6 +864,21 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
             }
     }
 
+    // --- dependency levels for parallel rendering (sources come first in g->order)
+    {
+        std::vector<int> level (g->tracks.size(), 0);
+        for (auto i : g->order)
+        {
+            const int src = g->tracks[i].inputTrack;
+            level[i] = src >= 0 ? level[(size_t) src] + 1 : 0;
+            if ((size_t) level[i] >= g->levels.size())
+                g->levels.resize ((size_t) level[i] + 1);
+            g->levels[(size_t) level[i]].push_back (i);
+        }
+        for (size_t b = 0; b < g->buses.size(); ++b)
+            g->busTasks.push_back (b);
+    }
+
     // --- plug-in delay compensation
     for (auto& rt : g->tracks) g->trackLatency = jmax (g->trackLatency, rt.latency);
     for (auto& rt : g->buses)  g->busLatency = jmax (g->busLatency, rt.latency);
@@ -973,6 +1025,28 @@ void Engine::seekTo (double beats)
     positionSamples = s;
     seekRequest = s;
     clearAutoStop();   // a seek means someone else took over the transport
+}
+
+void Engine::setProcessingThreads (int threads)
+{
+    requestedThreads = jlimit (0, 64, threads);
+    if (MessageManager::getInstanceWithoutCreating() == nullptr || MessageManager::getInstance()->isThisTheMessageThread())
+        updatePool();
+    else
+        poolDirty = true;
+}
+
+int Engine::autoProcessingThreads()
+{
+    int cores = SystemStats::getNumPhysicalCpus();
+   #if JUCE_MAC
+    // Apple silicon: only the performance cores (hw.perflevel0); efficiency cores would set the pace.
+    int perf = 0;
+    size_t size = sizeof (perf);
+    if (sysctlbyname ("hw.perflevel0.physicalcpu", &perf, &size, nullptr, 0) == 0 && perf > 0)
+        cores = perf;
+   #endif
+    return jlimit (1, 16, cores);
 }
 
 void Engine::setAutoStop (double stopAtBeats, int loopPasses)
@@ -1460,6 +1534,146 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
     positionSamples = pos;
 }
 
+namespace
+{
+/** What one block's parallel tasks need (lives on the rendering thread's stack). */
+struct BlockJob
+{
+    Engine* engine;
+    RenderGraph* g;
+    const std::vector<size_t>* tasks;
+    int64 pos;
+    int len, offset, numIn;
+    bool rolling, realtime, notesOff;
+    const float* const* inDev;
+};
+
+inline double ticksToUs (int64 ticks) noexcept
+{
+    static const double scale = 1.0e6 / (double) Time::getHighResolutionTicksPerSecond();
+    return (double) ticks * scale;
+}
+
+/** Heaviest first, so the long tasks start early and the short ones fill the gaps. */
+void sortByCost (std::vector<size_t>& tasks, const std::vector<RenderTrack>& tracks) noexcept
+{
+    for (size_t i = 1; i < tasks.size(); ++i)   // insertion sort: no allocation, few items
+        for (size_t j = i; j > 0 && tracks[tasks[j]].costUs > tracks[tasks[j - 1]].costUs; --j)
+            std::swap (tasks[j], tasks[j - 1]);
+}
+
+inline void noteCost (RenderTrack& rt, int64 start) noexcept
+{
+    const auto us = (float) ticksToUs (Time::getHighResolutionTicks() - start);
+    rt.costUs = rt.costUs <= 0.0f ? us : 0.9f * rt.costUs + 0.1f * us;
+}
+}
+
+void Engine::renderTrackTimed (RenderGraph& g, RenderTrack& rt, int64 pos, int len, int offset, bool rolling,
+                               const float* const* inDev, int numIn, bool realtime, bool notesOff)
+{
+    const auto start = Time::getHighResolutionTicks();
+    renderTrack (g, rt, pos, len, offset, rolling, inDev, numIn, realtime, notesOff);
+    noteCost (rt, start);
+}
+
+void Engine::renderBusTimed (RenderGraph& g, RenderTrack& rt, int len)
+{
+    const auto start = Time::getHighResolutionTicks();
+    renderBus (g, rt, len);
+    noteCost (rt, start);
+}
+
+bool Engine::worthSharing (const std::vector<RenderTrack>& tracks) const noexcept
+{
+    if (renderPool == nullptr || renderPool->getNumWorkers() == 0 || tracks.size() < 2)
+        return false;
+    // Waking the workers costs a few tens of microseconds: only worth it for real work.
+    double total = 0.0;
+    for (auto& rt : tracks)
+        total += rt.costUs;
+    return total >= parallelMinimumUs.load (std::memory_order_relaxed);
+}
+
+void Engine::renderTracks (RenderGraph& g, int64 pos, int len, int offset, bool rolling,
+                           const float* const* inDev, int numIn, bool realtime, bool notesOff)
+{
+    if (! worthSharing (g.tracks))
+    {
+        for (auto i : g.order)   // sources before the tracks that take them as their input
+            renderTrackTimed (g, g.tracks[i], pos, len, offset, rolling, inDev, numIn, realtime, notesOff);
+        return;
+    }
+
+    BlockJob job { this, &g, nullptr, pos, len, offset, numIn, rolling, realtime, notesOff, inDev };
+    for (auto& level : g.levels)   // a level only starts once the one it listens to is done
+    {
+        if (level.size() == 1)
+        {
+            renderTrackTimed (g, g.tracks[level[0]], pos, len, offset, rolling, inDev, numIn, realtime, notesOff);
+            continue;
+        }
+        sortByCost (level, g.tracks);
+        job.tasks = &level;
+        renderPool->run ((int) level.size(), [] (void* context, int i)
+        {
+            auto& j = *static_cast<BlockJob*> (context);
+            j.engine->renderTrackTimed (*j.g, j.g->tracks[(*j.tasks)[(size_t) i]], j.pos, j.len, j.offset, j.rolling,
+                                        j.inDev, j.numIn, j.realtime, j.notesOff);
+        }, &job);
+    }
+}
+
+void Engine::renderBuses (RenderGraph& g, int len)
+{
+    if (! worthSharing (g.buses))
+    {
+        for (auto& rt : g.buses)
+            renderBusTimed (g, rt, len);
+        return;
+    }
+
+    BlockJob job { this, &g, &g.busTasks, 0, len, 0, 0, false, false, false, nullptr };
+    sortByCost (g.busTasks, g.buses);
+    renderPool->run ((int) g.busTasks.size(), [] (void* context, int i)
+    {
+        auto& j = *static_cast<BlockJob*> (context);
+        j.engine->renderBusTimed (*j.g, j.g->buses[(*j.tasks)[(size_t) i]], j.len);
+    }, &job);
+}
+
+//==============================================================================
+int Engine::getActiveProcessingThreads() const noexcept
+{
+    return 1 + poolWorkers;
+}
+
+void Engine::updatePool()
+{
+    const int wanted = requestedThreads.load() == 0 ? autoProcessingThreads() : requestedThreads.load();
+    const int workers = jmax (0, wanted - 1);
+    const double sr = deviceRate.load();
+    const int bs = deviceBlock.load();
+    if (workers == poolWorkers && poolRate == sr && poolBlock == bs && ! poolWorkgroupChanged)
+        return;
+
+    std::unique_ptr<RenderPool> fresh = workers > 0 ? std::make_unique<RenderPool> (workers, poolWorkgroup, sr, bs) : nullptr;
+    {
+        const ScopedLock sl (graphLock);
+        if (exporting)
+        {
+            poolDirty = true;   // the export thread is using the pool: swap after it's done
+            return;             // (fresh is discarded outside the lock)
+        }
+        std::swap (renderPool, fresh);
+        poolWorkers = workers;
+        poolRate = sr;
+        poolBlock = bs;
+        poolWorkgroupChanged = false;
+    }
+    // the old pool's threads stop here, outside the lock
+}
+
 void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool rolling,
                           const float* const* inDev, int numIn, float* const* outDev, int numOut,
                           bool realtime, bool notesOff)
@@ -1480,8 +1694,9 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
             c.sum.clear (0, len);
         }
 
+    renderTracks (g, pos, len, offset, rolling, inDev, numIn, realtime, notesOff);
     for (auto i : g.order)
-        processTrack (g, g.tracks[i], pos, len, offset, rolling, inDev, numIn, outDev, numOut, realtime, notesOff, anySoloTrack);
+        mixTrack (g, g.tracks[i], len, offset, outDev, numOut, realtime, anySoloTrack);
 
     if (realtime)
         for (auto& c : g.cues)
@@ -1491,8 +1706,9 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
                 c.sum.addFrom (ch, 0, c.trackSum, ch, 0, len);
         }
 
+    renderBuses (g, len);
     for (auto& rt : g.buses)
-        processBus (g, rt, len, offset, outDev, numOut, anySoloBus, realtime);
+        mixBus (g, rt, len, offset, outDev, numOut, anySoloBus, realtime);
 
     // master
     auto& m = g.master;
@@ -1630,9 +1846,13 @@ void Engine::addToOutput (const AudioBuffer<float>& buf, int len, int offset, in
     }
 }
 
-void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, int offset, bool rolling,
-                           const float* const* inDev, int numIn, float* const* outDev, int numOut,
-                           bool realtime, bool notesOff, bool anySolo)
+// A track's block is two halves. renderTrack makes its sound (clips, input, plug-ins, EQ) and
+// writes only to the track itself, plus its own tap and record take, so tracks can render on
+// different threads at once. mixTrack then adds it into the shared places (cue mixes, sends,
+// buses, master, hardware) and has to run in g.order, one track at a time: always summing in
+// the same order keeps the output identical to the bit, however the rendering was shared out.
+void Engine::renderTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, int offset, bool rolling,
+                          const float* const* inDev, int numIn, bool realtime, bool notesOff)
 {
     auto& t = *rt.track;
     auto& buf = rt.buffer;
@@ -1811,6 +2031,15 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
         for (int ch = 0; ch < 2; ++ch)
             rt.tap.copyFrom (ch, 0, buf, ch, 0, len);
     rt.align.process (buf, len);
+    rt.heardElsewhere = heardElsewhere;
+}
+
+void Engine::mixTrack (RenderGraph& g, RenderTrack& rt, int len, int offset, float* const* outDev, int numOut,
+                       bool realtime, bool anySolo)
+{
+    auto& t = *rt.track;
+    auto& buf = rt.buffer;
+    const bool heardElsewhere = rt.heardElsewhere;
 
     if (realtime && ! g.cues.empty())
     {
@@ -1870,7 +2099,10 @@ void Engine::processTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, 
     }
 }
 
-void Engine::processBus (RenderGraph& g, RenderTrack& rt, int len, int offset, float* const* outDev, int numOut, bool anySolo, bool realtime)
+// A bus's block, in the same two halves as a track's: renderBus (its plug-ins, on any thread,
+// once every track has been mixed into it) and mixBus (into the cue mixes and the master, in
+// order).
+void Engine::renderBus (RenderGraph& g, RenderTrack& rt, int len)
 {
     auto& t = *rt.track;
     rt.midi.clear();
@@ -1885,6 +2117,11 @@ void Engine::processBus (RenderGraph& g, RenderTrack& rt, int len, int offset, f
 
     t.rtEq.process (t.eq, rt.buffer, len, g.sampleRate);
     rt.align.process (rt.buffer, len);
+}
+
+void Engine::mixBus (RenderGraph& g, RenderTrack& rt, int len, int offset, float* const* outDev, int numOut, bool anySolo, bool realtime)
+{
+    auto& t = *rt.track;
 
     if (realtime && ! g.cues.empty())
     {
@@ -1906,7 +2143,7 @@ void Engine::processBus (RenderGraph& g, RenderTrack& rt, int len, int offset, f
 void Engine::renderClips (RenderGraph& g, RenderTrack& rt, int64 pos, int len)
 {
     const int64 windowEnd = pos + len;
-    float* tmp[2] = { g.scratch.getWritePointer (0), g.scratch.getWritePointer (1) };
+    float* tmp[2] = { rt.scratch.getWritePointer (0), rt.scratch.getWritePointer (1) };
 
     for (auto& c : rt.clips)
     {
@@ -2026,7 +2263,7 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
         exporting = false;
         if (graph == nullptr)
             graph = std::move (g);
-        if (rebuildAfterExport)
+        if (rebuildAfterExport || poolDirty)
         {
             rebuildAfterExport = false;
             triggerAsyncUpdate();

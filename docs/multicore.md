@@ -1,12 +1,13 @@
-# Plan: multi-core audio
+# Multi-core audio
 
-**Status: planned.** Today Lathe renders every track one after another on the single audio
-thread Core Audio (or ASIO, or ALSA) calls. On an 8- or 10-core machine that means plug-in-heavy
+**Status: done in 0.8.0** (the plan below, as built; see "As built" at the end). Before
+0.8.0 Lathe rendered every track one after another on the single audio thread Core Audio
+(or ASIO, or ALSA) calls. On an 8- or 10-core machine that means plug-in-heavy
 sessions hit their limit on one core while the others sit idle, and a heavy synth shows up as
 10% of the CPU meter where Live, which spreads tracks over several threads, shows a couple of
 percent. This plan spreads the work over the cores without changing what anything sounds like.
 
-## What the engine does today
+## What the engine did before 0.8.0
 
 Per audio block, `Engine::renderChunk`:
 
@@ -103,3 +104,45 @@ faster on the same machine, with the same bit-identical result.
 - **Recording.** A track's take is only ever written by the thread rendering that track in
   that block, and the barrier orders blocks, so the disk writers see one writer at a time, as
   today.
+
+## As built (0.8.0)
+
+- `Engine::renderTrack` / `mixTrack` and `renderBus` / `mixBus` are the two halves.
+  `renderTracks` hands out each dependency level (`RenderGraph::levels`, built in
+  `buildGraph` from `inputTrack`) heaviest first; `renderBuses` does the same for the buses.
+  The mix passes run in `g.order` and bus order, as before.
+- `Source/Engine/RenderPool.{h,cpp}`: the workers. One atomic task counter; each worker has
+  a state (idle, woken, busy) so `run()` can take back a wake-up that hasn't started and
+  only waits for workers in the middle of a task. Workers spin for a short while after a
+  block, then sleep on a semaphore. Realtime priority, `ScopedNoDenormals`, and on macOS
+  they join the device's `AudioWorkgroup`.
+- Per track, a running average of its render time (`RenderTrack::costUs`) orders the tasks
+  and decides whether a block is worth sharing (60 µs of work or more).
+- The pool is swapped only under `graphLock` and never during an export (the export thread
+  uses it without the lock); a change asked for then waits for `handleAsyncUpdate`.
+- `Options > Audio / MIDI Settings > Processing cores` (setting `processingThreads`,
+  0 = Auto = `Engine::autoProcessingThreads()`, performance cores on Apple silicon).
+
+**How it's tested**
+
+- `LatheTests --dump <folder> [threads]` writes 30 outputs (four sessions covering every
+  routing path at buffer sizes 64 to 512, an export mix and its stems). The old
+  single-threaded engine's files and the new engine's, on 1, 2 and more threads, are
+  identical byte for byte.
+- `LatheTests --random [seeds] [threads]`: random sessions (chains of tracks feeding tracks,
+  sends, group buses, hardware outputs, cue mixes, mutes, solos, live input) rendered on one
+  thread and on several, compared sample for sample. In ctest: 200 sessions on 4 threads.
+- `LATHE_TEST_THREADS=n` makes every engine test share out every block on n threads (ctest
+  runs the whole suite that way on 4), and CI's **Thread check** job runs both of the
+  above under ThreadSanitizer.
+- `Lathe --benchmark` / `LatheTests --bench` time it (docs/performance.md).
+
+**Results** (share of the audio deadline at 128 samples, 1 core → all cores)
+
+| Session | 2-core Intel Xeon (whole engine) | 4-core Apple M1 Pro (scheduler + same workload) |
+|---|---|---|
+| 12 heavy synths | 87% (peaks 121%, dropouts) → 49% | 45% → 13% |
+| 8 synths | 59% → 30% | 30% → 9.5% |
+| Band: 8 audio + 4 synths + 2 returns | 45% → 26% | 24% → 9% |
+| 4 synths printed to audio (chained) | 38% → 21% | 19% → 8% |
+| 32-bar export | 34.3 s → 19.0 s | |

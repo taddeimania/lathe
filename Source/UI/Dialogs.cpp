@@ -60,6 +60,28 @@ public:
         rate.onChange = [this] { ctx.settings.setValue ("newProjectRate", rate.getSelectedId() == 1 ? 0.0 : (double) rate.getSelectedId()); };
         addAndMakeVisible (rate);
 
+        // How many cores render tracks at once (docs/multicore.md). Auto: one per performance core.
+        processingHeading = makeHeading (*this, labels, "Processing");
+        coresLabel = makeNote (*this, labels, "Processing cores");
+        cores.addItem ("Auto (" + String (Engine::autoProcessingThreads()) + ")", 1000);
+        cores.addItem ("1 (one track at a time)", 1);
+        for (int n = 2; n <= jmax (2, SystemStats::getNumCpus()); ++n)
+            cores.addItem (String (n), n);
+        const int savedCores = ctx.settings.getIntValue ("processingThreads", 0);
+        cores.setSelectedId (savedCores <= 0 ? 1000 : savedCores, dontSendNotification);
+        if (cores.getSelectedId() == 0)
+            cores.setSelectedId (1000, dontSendNotification);
+        cores.onChange = [this]
+        {
+            const int n = cores.getSelectedId() == 1000 ? 0 : cores.getSelectedId();
+            ctx.settings.setValue ("processingThreads", n);
+            ctx.engine.setProcessingThreads (n);
+            updateNotes();
+        };
+        addAndMakeVisible (cores);
+        coresNote = makeNote (*this, labels, "Lathe plays tracks and their plug-ins on several cores at once, so big sessions "
+                                             "fit where one core runs out. If a plug-in misbehaves, try 1.");
+
         pluginHeading = makeHeading (*this, labels, "VST3 plug-ins");
         pluginNote = makeNote (*this, labels, {});
         folders.setText (ctx.host.getExtraFolders().joinIntoString ("; "), false);
@@ -102,7 +124,7 @@ public:
         ctx.engine.deviceManager.addChangeListener (this);
         updateNotes();
         startTimer (500);
-        setSize (640, 820);
+        setSize (640, 900);
     }
 
     ~SettingsPanel() override
@@ -144,6 +166,14 @@ public:
         rate.setBounds (rateRow.removeFromLeft (260));
         r.removeFromTop (14);
 
+        processingHeading->setBounds (r.removeFromTop (22));
+        auto coresRow = r.removeFromTop (24);
+        coresLabel->setBounds (coresRow.removeFromLeft (160));
+        cores.setBounds (coresRow.removeFromLeft (260));
+        r.removeFromTop (4);
+        coresNote->setBounds (r.removeFromTop (34));
+        r.removeFromTop (10);
+
         pluginHeading->setBounds (r.removeFromTop (22));
         pluginNote->setBounds (r.removeFromTop (62));
         folders.setBounds (r.removeFromTop (24));
@@ -171,10 +201,11 @@ private:
     AudioDeviceSelectorComponent devices;
     OwnedArray<Label> labels;
     Label *audioHeading {}, *offsetNote {}, *pluginHeading {}, *pluginNote {}, *startupHeading {}, *rateLabel {};
+    Label *processingHeading {}, *coresLabel {}, *coresNote {};
     Slider offset;
     TextEditor folders;
     TextButton scan { "Scan for new plug-ins" }, rescan { "Clear list and rescan all" }, retry { "Retry skipped plug-ins" };
-    ComboBox startup, templateBox, rate;
+    ComboBox startup, templateBox, rate, cores;
 };
 
 //==============================================================================

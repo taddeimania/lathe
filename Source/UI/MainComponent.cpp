@@ -160,6 +160,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
     edit.addChangeListener (this);
     engine.setEdit (&edit);
+    engine.setProcessingThreads (settings.getIntValue ("processingThreads", 0));   // 0 = auto (Settings > Processing)
     if (! forScreenshots)
     {
         engine.openDevice();

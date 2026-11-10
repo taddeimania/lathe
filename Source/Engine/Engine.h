@@ -6,6 +6,7 @@
 
 namespace lathe
 {
+class RenderPool;
 struct RenderGraph;
 struct RenderTrack;
 struct RecordSession;
@@ -76,6 +77,18 @@ public:
     double getAutoStopBeats() const;
     /** Loop passes left (this one included) before playback stops at the loop end; 0 = no limit. */
     int getLoopPassesLeft() const noexcept  { return loopPassesLeft.load(); }
+
+    // --- multi-core (docs/multicore.md)
+    /** How many threads render tracks: 1 = only the audio thread (the old engine), 0 = auto
+        (autoProcessingThreads()), or a number. Safe to call any time; takes effect at the next block. */
+    void setProcessingThreads (int threads);
+    int getProcessingThreads() const noexcept   { return requestedThreads.load(); }
+    /** What "auto" means on this machine: one per performance core (all cores elsewhere), at most 16. */
+    static int autoProcessingThreads();
+    /** For tests: share out even tiny blocks (normally only blocks with real work are). */
+    void setAlwaysShareWork (bool always) noexcept   { parallelMinimumUs = always ? -1.0 : 60.0; }
+    /** Threads rendering right now (1 = only the audio thread). */
+    int getActiveProcessingThreads() const noexcept;
 
     // --- device info
     double getSampleRate() const noexcept   { return deviceRate.load(); }
@@ -151,10 +164,19 @@ private:
     void renderChunk (RenderGraph&, int64 pos, int len, int offset, bool rolling,
                       const float* const* inDev, int numIn, float* const* outDev, int numOut,
                       bool realtime, bool notesOff);
-    void processTrack (RenderGraph&, RenderTrack&, int64 pos, int len, int offset, bool rolling,
-                       const float* const* inDev, int numIn, float* const* outDev, int numOut,
-                       bool realtime, bool notesOff, bool anySolo);
-    void processBus (RenderGraph&, RenderTrack&, int len, int offset, float* const* outDev, int numOut, bool anySolo, bool realtime);
+    void renderTracks (RenderGraph&, int64 pos, int len, int offset, bool rolling,
+                       const float* const* inDev, int numIn, bool realtime, bool notesOff);
+    void renderTrack (RenderGraph&, RenderTrack&, int64 pos, int len, int offset, bool rolling,
+                      const float* const* inDev, int numIn, bool realtime, bool notesOff);
+    void mixTrack (RenderGraph&, RenderTrack&, int len, int offset, float* const* outDev, int numOut, bool realtime, bool anySolo);
+    void renderBuses (RenderGraph&, int len);
+    void renderTrackTimed (RenderGraph&, RenderTrack&, int64 pos, int len, int offset, bool rolling,
+                           const float* const* inDev, int numIn, bool realtime, bool notesOff);
+    void renderBusTimed (RenderGraph&, RenderTrack&, int len);
+    bool worthSharing (const std::vector<RenderTrack>&) const noexcept;
+    void updatePool();
+    void renderBus (RenderGraph&, RenderTrack&, int len);
+    void mixBus (RenderGraph&, RenderTrack&, int len, int offset, float* const* outDev, int numOut, bool anySolo, bool realtime);
     void applyFader (RenderTrack&, int len, bool silenced);
     void renderClips (RenderGraph&, RenderTrack&, int64 pos, int len);
     void renderMetronome (RenderGraph&, int64 pos, int len);   // into RenderGraph::click
@@ -180,6 +202,16 @@ private:
     std::atomic<bool> playing { false }, recording { false }, exporting { false };
     std::set<int> exportOnly;   // during an export of some tracks: the ids that play (export thread only)
     std::atomic<bool> notesOffRequest { false };
+    std::atomic<int> requestedThreads { 0 };
+    // multi-core: the worker pool. Swapped only under graphLock, and never while exporting
+    // (the export thread uses it without the lock); poolDirty asks for a swap later.
+    std::unique_ptr<RenderPool> renderPool;
+    int poolWorkers = 0, poolBlock = 0;
+    double poolRate = 0.0;
+    AudioWorkgroup poolWorkgroup;
+    bool poolWorkgroupChanged = false;
+    std::atomic<bool> poolDirty { false };
+    std::atomic<double> parallelMinimumUs { 60.0 };
     // auto-stop (setAutoStop): set on the message thread, reached and cleared by the audio thread
     std::atomic<int64> stopAtSamples { -1 };
     std::atomic<int> loopPassesLeft { 0 };
