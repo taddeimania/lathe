@@ -1,0 +1,145 @@
+# Copies a published Lathe release to the website, so getlathe.app offers the
+# downloads itself:
+#
+#   https://getlathe.app/downloads/Lathe-macOS.zip       always the newest release
+#   https://getlathe.app/downloads/Lathe-Windows.zip
+#   https://getlathe.app/downloads/Lathe-Linux.tar.gz
+#   https://getlathe.app/downloads/latest.json           version, date and file sizes (the page reads it)
+#   https://getlathe.app/downloads/v1.2.3/...            every version, kept
+#
+# Runs by itself when you publish a release: "Build" makes a draft, and publishing
+# it on the Releases page is the go-ahead. Drafts and pre-releases never go to the
+# site. To send one again: Actions -> "Publish downloads" -> Run workflow (from main),
+# with a tag, or empty for the latest published release. An older tag only fills in
+# its own v1.2.3/ folder; "latest" always stays the newest release.
+#
+# Needs three repository variables (Settings -> Secrets and variables -> Actions ->
+# Variables). lathe-site's `terraform output github_variables` prints the commands.
+#   AWS_ROLE_ARN, SITE_BUCKET, SITE_DISTRIBUTION_ID
+
+name: Publish downloads
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v0.7.2 (empty = the latest published release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write   # GitHub's sign-in token for AWS; no AWS keys are stored here
+
+concurrency:
+  group: publish-downloads
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Copy the release to getlathe.app
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the settings
+        env:
+          ROLE: ${{ vars.AWS_ROLE_ARN }}
+          BUCKET: ${{ vars.SITE_BUCKET }}
+          DIST: ${{ vars.SITE_DISTRIBUTION_ID }}
+        run: |
+          if [ -z "$ROLE" ] || [ -z "$BUCKET" ] || [ -z "$DIST" ]; then
+            echo "::error::Set the AWS_ROLE_ARN, SITE_BUCKET and SITE_DISTRIBUTION_ID repository variables (lathe-site: terraform output github_variables)."
+            exit 1
+          fi
+
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          newest=$(gh release view --repo "$repo" --json tagName -q .tagName)
+          tag="${TAG:-$newest}"
+
+          read -r draft pre published < <(gh release view "$tag" --repo "$repo" \
+            --json isDraft,isPrerelease,publishedAt -q '"\(.isDraft) \(.isPrerelease) \(.publishedAt)"')
+          if [ "$draft" = "true" ] || [ "$pre" = "true" ]; then
+            echo "::notice::$tag is a draft or a pre-release, so it doesn't go to the site."
+            echo "SKIP=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          version="${tag#v}"
+          mkdir dist
+          gh release download "$tag" --repo "$repo" --dir dist --pattern "Lathe-${version}-*"
+          for f in "Lathe-${version}-macOS.zip" "Lathe-${version}-Windows.zip" "Lathe-${version}-Linux.tar.gz"; do
+            test -s "dist/$f" || { echo "::error::$tag has no $f"; exit 1; }
+          done
+          ls -la dist
+
+          latest=false
+          [ "$tag" = "$newest" ] && latest=true
+          {
+            echo "TAG=$tag"
+            echo "VERSION=$version"
+            echo "LATEST=$latest"
+          } >> "$GITHUB_ENV"
+
+          python3 - "$version" "$tag" "$published" > latest.json <<'PY'
+          import json, os, sys
+          version, tag, published = sys.argv[1:]
+          files = {}
+          for system, ext in (("macOS", "zip"), ("Windows", "zip"), ("Linux", "tar.gz")):
+              name = f"Lathe-{version}-{system}.{ext}"
+              files[system] = {"url": f"/downloads/Lathe-{system}.{ext}", "name": name,
+                               "bytes": os.path.getsize(os.path.join("dist", name))}
+          print(json.dumps({"version": version, "tag": tag, "published": published, "files": files}, indent=2))
+          PY
+          cat latest.json
+
+      - name: Sign in to AWS
+        if: env.SKIP != '1'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload
+        if: env.SKIP != '1'
+        env:
+          BUCKET: ${{ vars.SITE_BUCKET }}
+          DIST: ${{ vars.SITE_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          type_of() { case "$1" in *.zip) echo application/zip ;; *.tar.gz) echo application/gzip ;; esac; }
+
+          # Every version keeps its own folder; those files never change.
+          for f in dist/*; do
+            name=$(basename "$f")
+            aws s3 cp "$f" "s3://$BUCKET/downloads/$TAG/$name" --only-show-errors \
+              --content-type "$(type_of "$name")" \
+              --cache-control "public, max-age=31536000, immutable"
+          done
+
+          if [ "$LATEST" != "true" ]; then
+            echo "$TAG isn't the newest release: only downloads/$TAG/ was updated."
+            exit 0
+          fi
+
+          # The site's buttons: same address every release, saved under the real name.
+          for system in macOS Windows Linux; do
+            ext=zip; [ "$system" = Linux ] && ext=tar.gz
+            name="Lathe-${VERSION}-${system}.${ext}"
+            aws s3 cp "dist/$name" "s3://$BUCKET/downloads/Lathe-${system}.${ext}" --only-show-errors \
+              --content-type "$(type_of "$name")" \
+              --content-disposition "attachment; filename=\"$name\"" \
+              --cache-control "public, max-age=300, must-revalidate"
+          done
+          aws s3 cp latest.json "s3://$BUCKET/downloads/latest.json" --only-show-errors \
+            --content-type application/json --cache-control "public, max-age=60, must-revalidate"
+
+          aws cloudfront create-invalidation --distribution-id "$DIST" \
+            --paths "/downloads/Lathe-*" "/downloads/latest.json" --query 'Invalidation.Id' --output text
+          echo "Published $TAG to https://getlathe.app/downloads/"

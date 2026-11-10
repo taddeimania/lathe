@@ -43,6 +43,32 @@ ASIO support is built in automatically. Steinberg's ASIO SDK has been GPLv3 sinc
 
 Each archive holds the app, `LatheScanner` (next to `Lathe.exe`, or inside `Lathe.app`), `README.md` and `LICENSE`.
 
+### Downloads on getlathe.app
+
+Publishing a release also puts it on the website: `.github/workflows/publish-downloads.yml` copies the three archives to the site's bucket, so the download buttons on [getlathe.app](https://getlathe.app) always get the newest published release:
+
+- `https://getlathe.app/downloads/Lathe-macOS.zip`, `Lathe-Windows.zip` and `Lathe-Linux.tar.gz`. These addresses stay the same every release, and the file saves under its real name, e.g. `Lathe-0.7.2-macOS.zip`.
+- `https://getlathe.app/downloads/latest.json`: the version, release date and file sizes. The page reads it to show "Version 0.7.2, released …".
+- `https://getlathe.app/downloads/v0.7.2/…`: every version, kept.
+
+Drafts and pre-releases never go to the site. To send a release again (or the current one for the first time), use **Actions > Publish downloads > Run workflow** from `main`, with a tag or empty for the latest. An older tag only fills in its own folder.
+
+It signs in to AWS with GitHub's OIDC token, so no AWS keys are stored in GitHub. It needs three repository variables, which `terraform output github_variables` in lathe-site prints as `gh variable set` commands: `AWS_ROLE_ARN`, `SITE_BUCKET` and `SITE_DISTRIBUTION_ID`.
+
+### Signing and notarizing (macOS)
+
+Release builds are signed with a Developer ID and notarized by Apple, so Lathe opens with a double-click. The build workflow does it when these repository secrets exist (until then it keeps the ad-hoc signature):
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERT_P12` | your "Developer ID Application" certificate and key, exported as .p12, base64 (`base64 -i cert.p12`) |
+| `MACOS_CERT_PASSWORD` | the .p12's password |
+| `MACOS_SIGN_IDENTITY` | the certificate's name, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `NOTARY_KEY_P8` | an App Store Connect API key (.p8), base64 |
+| `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID` | that key's ID and issuer ID |
+
+`Resources/Lathe.entitlements` lists what Lathe needs under the hardened runtime: loading other developers' plug-ins, plug-ins that generate code, and recording audio.
+
 ### Tests
 
 ```sh
