@@ -14,6 +14,8 @@
 #include "Assistant/AssistantTools.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
+#include "Demo/Welcome.h"
+#include "UI/CloudLinks.h"
 #if ! JUCE_WINDOWS
  #include <sys/stat.h>
 #endif
@@ -1556,6 +1558,80 @@ int main (int argc, char** argv)
         check (host.allTypes().size() == (int) all().size() + host.known.getNumTypes(), "allTypes is the built-ins plus the scanned plug-ins");
     }
 
+    std::cout << "The welcome song" << std::endl;
+    {
+        // A new install opens it: every device in it must be one of Lathe's own (nothing to
+        // install), and it must play loud enough to hear and never clip.
+        const auto projects = dir.getChildFile ("Welcome projects");
+        File song;
+        check (welcome::write (projects, song).wasOk() && song.existsAsFile(), "the welcome song is written to the projects folder");
+        check (song == projects.getChildFile ("Welcome to Lathe").getChildFile ("Welcome to Lathe.lathe"), "as Welcome to Lathe/Welcome to Lathe.lathe");
+        song.appendText (" ");   // changed by its owner
+        File again;
+        welcome::write (projects, again);
+        check (again == song && song.loadFileAsString().endsWithChar (' '), "writing it again opens the copy already there, untouched");
+
+        Edit w;
+        w.projectFile = song;
+        w.workDir = song.getParentDirectory();
+        StringArray foreign;
+        const auto loaded = w.loadFrom (JSON::parse (song), w.workDir, [&] (const PluginDescription& d, const MemoryBlock& s)
+        {
+            if (! devices::isBuiltIn (d))
+                foreign.add (d.name);
+            String error;
+            return engine.makeSlot (d, s, error);
+        });
+        int devicesUp = 0, devicesAll = 0;
+        auto count = [&] (const Track& tr)
+        {
+            for (auto& slot : tr.plugins)
+            {
+                ++devicesAll;
+                devicesUp += slot->instance != nullptr ? 1 : 0;
+            }
+        };
+        for (auto& tr : w.tracks)  count (*tr);
+        for (auto& tr : w.buses)   count (*tr);
+        count (*w.master);
+        check (loaded.wasOk() && foreign.isEmpty() && devicesAll >= 5 && devicesUp == devicesAll,
+               "the welcome song uses only built-in devices, and they all load (" + String (devicesUp) + " of " + String (devicesAll)
+                 + (foreign.isEmpty() ? String() : "; not built in: " + foreign.joinIntoString (", ")) + ")");
+
+        Engine eng (host, pool, props);
+        eng.setEdit (&w);
+        FakeDevice dev (2, 2, 0, 0);
+        eng.audioDeviceAboutToStart (&dev);
+        eng.rebuild();
+        Engine::ExportSettings s;
+        s.mix = true;
+        s.stems = false;
+        s.startBeat = 0.0;
+        s.endBeat = 32.0;
+        s.tailSeconds = 1.0;
+        s.bitDepth = 32;
+        s.folder = dir.getChildFile ("Welcome mix");
+        s.baseName = "Welcome";
+        StringArray files;
+        eng.exportAudio (s, [] (double) { return true; }, files);
+        float peak = 0.0f;
+        if (files.size() == 1)
+        {
+            AudioFormatManager fm;
+            fm.registerBasicFormats();
+            std::unique_ptr<AudioFormatReader> r (fm.createReaderFor (File (files[0])));
+            if (r != nullptr)
+            {
+                AudioBuffer<float> b (2, (int) r->lengthInSamples);
+                r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+                peak = b.getMagnitude (0, 0, b.getNumSamples());
+            }
+        }
+        check (peak > 0.1f && peak <= 1.0f, "the welcome song's first 8 bars are audible and don't clip (peak " + String (peak, 3) + ")");
+        eng.audioDeviceStopped();
+        eng.setEdit (nullptr);
+    }
+
     std::cout << "Out-of-process plug-in scanning" << std::endl;
     if (auto fixtures = File (SystemStats::getEnvironmentVariable ("LATHE_TEST_VST3_DIR", {})); fixtures.isDirectory())
     {
@@ -2405,6 +2481,67 @@ int main (int argc, char** argv)
 
         // The Cloud menu and the account state behind it (what you see in Lathe).
         {
+            std::cout << "Cloud: invite and listening links" << std::endl;
+            {
+                // Invite links: Mara makes one for the song, Dev (already a friend) pastes it.
+                DynamicObject::Ptr ask = new DynamicObject();
+                ask->setProperty ("song", maraStore.getProjectId());
+                ask->setProperty ("role", "viewer");
+                cloud::ApiError linkErr;
+                const auto invite = mara.call ("POST", "/v2/invites", var (ask.get()), linkErr);
+                const auto inviteUrl = invite["url"].toString();
+                check (linkErr.status == 0 && inviteUrl.contains ("/join.html#"), "Mara makes an invite link (" + inviteUrl + linkErr.message + ")");
+                const auto code = cloudlinks::inviteCode ("  " + inviteUrl + "\n");
+                check (code.isNotEmpty() && code == invite["code"].toString(), "the code is read back out of a pasted link");
+                check (cloudlinks::inviteCode ("https://getlathe.app/").isEmpty() && cloudlinks::inviteCode ("hello").isEmpty(),
+                       "and something that isn't a link isn't mistaken for one");
+                const auto joined = dev.call ("POST", "/v2/invites/" + code + "/accept", {}, linkErr);
+                check (linkErr.status == 0 && joined["song"]["id"].toString() == maraStore.getProjectId(),
+                       "Dev accepts it and gets the song (" + linkErr.message + ")");
+                check (joined["song"]["role"].toString() == "editor", "keeping the editor role Dev already had, not the link's viewer role");
+
+                // Listening links: render, FLAC, upload, register.
+                Engine eng (host, pool, props);
+                eng.setEdit (&maraEdit);
+                FakeDevice dev2 (2, 2, 0, 0);
+                eng.audioDeviceAboutToStart (&dev2);
+                eng.rebuild();
+                Engine::ExportSettings s;
+                s.startBeat = 0.0;
+                s.endBeat = 4.0;
+                s.tailSeconds = 0.5;
+                s.bitDepth = 16;
+                s.folder = dir.getChildFile ("listen-temp");
+                s.baseName = "mix";
+                String listenUrl;
+                const auto shared = cloudlinks::shareMix (mara, eng, s, maraEdit.tempo, maraStore.getProjectId(), {}, listenUrl);
+                check (shared.wasOk() && listenUrl.contains ("/listen.html#"), "Mara shares the mix (" + listenUrl + shared.getErrorMessage() + ")");
+                check (! s.folder.exists(), "the render's temporary folder is cleaned up");
+                eng.audioDeviceStopped();
+                eng.setEdit (nullptr);
+
+                // What the website's listen.html sees, with no token.
+                const auto token = listenUrl.fromLastOccurrenceOf ("#", false, false);
+                const auto page = cloud::httpRequest ("GET", config.apiUrl + "/listen/" + token, nullptr, {});
+                const auto info = page.json();
+                check (page.ok() && info["song"].toString() == "Jam" && (double) info["seconds"] > 2.0,
+                       "the listening page gets the song, without signing in (" + page.body.toString().substring (0, 200) + ")");
+                const auto audio = cloud::httpRequest ("GET", info["audio"].toString(), nullptr, {});
+                check (audio.ok() && audio.body.getSize() > 100 && audio.body.toString().startsWith ("fLaC"),
+                       "and the mix itself, as FLAC (" + String ((int) audio.body.getSize()) + " bytes)");
+
+                const MemoryBlock note (String ("{\"name\": \"Sam\", \"text\": \"Love the hats\", \"at\": 1.2}").toRawUTF8(),
+                                        strlen ("{\"name\": \"Sam\", \"text\": \"Love the hats\", \"at\": 1.2}"));
+                const auto posted = cloud::httpRequest ("POST", config.apiUrl + "/listen/" + token + "/notes", &note,
+                                                        "Content-Type: application/json\r\n");
+                const auto notesNow = mara.call ("GET", "/v2/songs/" + maraStore.getProjectId() + "/notes", {}, linkErr);
+                bool found = false;
+                if (auto* a = notesNow["notes"].getArray())
+                    for (auto& n : *a)
+                        found = found || (n["text"].toString() == "At 0:01: Love the hats" && n["author"].toString() == "Sam (listening link)");
+                check (posted.status == 201 && found, "a listener's note lands on the song (" + String (posted.status) + ")");
+            }
+
             std::cout << "Cloud: the Cloud menu, signing out" << std::endl;
             PropertiesFile cloudProps (dir.getChildFile ("cloud-ui.settings"), opts);
             {

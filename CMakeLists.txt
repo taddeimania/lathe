@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.10.3 LANGUAGES C CXX)
+project(Lathe VERSION 0.11.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,6 +65,12 @@ juce_add_gui_app(Lathe
     ICON_BIG                     "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
     ICON_SMALL                   "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-small.png")
 
+# Files built into the app: the song a new install opens with (Source/Demo/Welcome.h).
+juce_add_binary_data(LatheData
+    HEADER_NAME BinaryData.h
+    NAMESPACE   BinaryData
+    SOURCES     Resources/Welcome.lathe)
+
 # Lathe's built-in devices (instruments and effects), shared by the app and the tests.
 set(LATHE_DEVICE_SOURCES
     Source/Devices/Device.cpp
@@ -107,6 +113,7 @@ target_sources(Lathe PRIVATE
     Source/UI/EqEditor.cpp
     Source/UI/CloudUI.cpp
     Source/UI/CloudLibrary.cpp
+    Source/UI/CloudLinks.cpp
     Source/UI/Notes.cpp
     Source/UI/UpdateNotice.cpp
     Source/Patcher/Updater.cpp
@@ -115,6 +122,7 @@ target_sources(Lathe PRIVATE
     Source/UI/PluginBrowser.cpp
     Source/UI/AssistantDialog.cpp
     Source/Demo/DemoSong.cpp
+    Source/Demo/Welcome.cpp
     Source/Bench/Benchmark.cpp
     Source/Assistant/AssistantShared.cpp
     Source/Assistant/AssistantServer.cpp
@@ -279,12 +287,16 @@ if(LATHE_BUILD_TESTS)
         Source/UI/CloudLibrary.cpp
         Source/UI/Theme.cpp
         Source/UI/Widgets.cpp
-        Source/UI/Dialogs.cpp)
+        Source/UI/Dialogs.cpp
+        Source/UI/CloudLinks.cpp
+        # The welcome song (Resources/Welcome.lathe).
+        Source/Demo/Welcome.cpp)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=1 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
         JUCE_MODAL_LOOPS_PERMITTED=1 LATHE_CLOUD_DEV_OVERRIDES=1)
     target_link_libraries(LatheTests PRIVATE
+        LatheData
         juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra juce::juce_cryptography juce::juce_dsp
         juce::juce_recommended_config_flags)
     if(MSVC)
@@ -339,6 +351,7 @@ endif()
 
 target_link_libraries(Lathe
     PRIVATE
+        LatheData
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_audio_devices

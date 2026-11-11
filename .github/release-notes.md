@@ -3,6 +3,22 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.11.0
+
+- **Invite anyone with a link.** Cloud > Invite Someone by Link makes a link to a page on
+  getlathe.app. Whoever opens it types their email: if they're new, Lathe Cloud makes them an
+  account and emails a password. You become friends, and if the link is for the open song, it's
+  shared with them (to edit, or view only). When they sign in, Lathe offers to open it. Links
+  work for 14 days, for up to 10 people.
+- **Cloud > Join with an Invite Link**, for someone already in Lathe: paste the link.
+- **Share a listening link.** Cloud > Share a Listening Link renders the song's mix, uploads it,
+  and gives you a link anyone can play in a browser, without Lathe or an account. Listeners can
+  leave a note at a moment in the song; it shows up in Notes for everyone on it. Share the
+  latest mix again after changes and the link stays the same; Stop Sharing ends it.
+- **A new install opens a song.** "Welcome to Lathe" is four tracks made with Lathe's own Drums,
+  Bass Synth and Poly Synth through its Reverb and Delay, so there's something to play straight
+  away. It's in your projects folder, and File > Open the Welcome Song brings it back.
+
 ## New in 0.10.3
 
 - **Signing out of Lathe Cloud works properly.** On the Mac the Cloud menu didn't update after

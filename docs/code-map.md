@@ -7,7 +7,8 @@ Source/
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
-  Demo/                 the "Night Drive" demo song and pretend audio interface, for --screenshots
+  Demo/                 the "Night Drive" demo song and pretend audio interface, for --screenshots; Welcome.*
+                        writes "Welcome to Lathe" (Resources/Welcome.lathe), the song a new install opens
   Assistant/            AI assistant (MCP): Server (127.0.0.1 HTTP, key, JSON-RPC), Tools (what the AI can
                         read and do), Service (on/off, message thread), BridgeMain (LatheMCP, stdio <-> Lathe)
   Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,
@@ -17,6 +18,7 @@ Source/
                         (Reverb, Delay, Compressor, Saturator, Mastering), and their engines in
                         Reverb/, Delay/ and Master/
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
+  UI/CloudLinks.*       invite links and listening links (pages on getlathe.app), Cloud menu
   UI/                   transport, arrangement, mixer (+ mix tabs), device chain, EQ editor, piano roll, dialogs
 Tests/EngineTests.cpp   headless engine checks
 ```

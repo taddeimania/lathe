@@ -11,7 +11,7 @@ namespace
 enum MenuIds
 {
     signInId = CloudController::menuBase, signOutId, openSharedId, shareId, inviteId,
-    pushId, pullId, historyId, libraryId, friendsId, unlinkId, uploadId,
+    pushId, pullId, historyId, libraryId, friendsId, unlinkId, uploadId, inviteLinkId, joinLinkId, listenId,
     parallelBase = CloudController::menuBase + 20   // + 1, 2, 4, 6, 8
 };
 
@@ -83,8 +83,8 @@ public:
         message.setFont (theme::font (12.5f));
         message.setJustificationType (Justification::topLeft);
         message.setColour (Label::textColourId, theme::textDim);
-        message.setText ("New here? Ask the person who runs your Lathe cloud to add you. You'll get an email "
-                         "with a temporary password.", dontSendNotification);
+        message.setText ("New here? Ask a friend on Lathe Cloud for an invite link, or join the beta at getlathe.app. "
+                         "You'll get an email with a temporary password.", dontSendNotification);
         addAndMakeVisible (message);
 
         signIn.setButtonText ("Sign In");
@@ -633,6 +633,8 @@ void CloudController::addMenuItems (PopupMenu& m)
     m.addItem (libraryId, "Projects...", configured);
     m.addItem (friendsId, friendRequests > 0 ? "Friends (" + String (friendRequests) + (friendRequests == 1 ? " request)..." : " requests)...")
                                              : String ("Friends..."), configured);
+    m.addItem (inviteLinkId, "Invite Someone by Link...", configured);
+    m.addItem (joinLinkId, "Join with an Invite Link...", configured);
     m.addSeparator();
     if (! linked)
         m.addItem (uploadId, "Put This Song in the Cloud...", configured && idle);
@@ -646,6 +648,7 @@ void CloudController::addMenuItems (PopupMenu& m)
                linked && signedIn && idle && ! viewer && ! lostAccess);
     m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle && ! lostAccess);
     m.addItem (historyId, "History...", linked);
+    m.addItem (listenId, "Share a Listening Link...", configured && idle && ! viewer && ! lostAccess);
     if (linked)
         m.addItem (unlinkId, "Disconnect This Song from the Cloud...", idle);
     m.addSeparator();
@@ -672,6 +675,9 @@ bool CloudController::handleMenuItem (int id)
         case pushId:        push(); return true;
         case pullId:        pull(); return true;
         case historyId:     showHistory(); return true;
+        case inviteLinkId:  showInviteLink(); return true;
+        case joinLinkId:    joinWithLink(); return true;
+        case listenId:      shareListeningLink(); return true;
         default:
             if (id > parallelBase && id <= parallelBase + 8)
             {
@@ -1379,10 +1385,34 @@ void CloudController::showNotices (const Array<var>& notices)
     }
     hooks.setStatus (notices.getFirst()["text"].toString());
 
+    // Joined from an invite link: offer to open the song it was for.
+    String joinedSong;
+    for (auto& n : notices)
+        if (n["kind"].toString() == "joined" && n["song"].toString().isNotEmpty())
+            joinedSong = n["song"].toString();
+
     WeakReference<CloudController> weak (this);
-    AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::NoIcon)
-                                .withTitle ("Lathe Cloud").withMessage (text).withButton ("OK"),
-                            [weak] (int) { if (auto* self = weak.get()) self->showingNotices = false; });
+    auto options = MessageBoxOptions().withIconType (MessageBoxIconType::NoIcon).withTitle ("Lathe Cloud").withMessage (text);
+    options = joinedSong.isNotEmpty() ? options.withButton ("Open the Song").withButton ("Later") : options.withButton ("OK");
+    AlertWindow::showAsync (options, [weak, joinedSong] (int button)
+    {
+        auto* self = weak.get();
+        if (self == nullptr)
+            return;
+        self->showingNotices = false;
+        if (joinedSong.isEmpty() || button != 1)
+            return;
+        self->request ("GET", "/v2/songs/" + joinedSong, {}, [weak] (const var& song, const cloud::ApiError& err)
+        {
+            if (auto* me = weak.get())
+            {
+                if (err.status != 0)
+                    alert ("Couldn't open the song", err.message);
+                else
+                    me->openCloudSong (song);
+            }
+        });
+    });
 
     if (isLinked() && isSignedIn() && ! busy)
         poll();   // our access to the open song may have changed

@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "../Assistant/AssistantService.h"
 #include "../Demo/DemoSong.h"
+#include "../Demo/Welcome.h"
 
 #include <iostream>
 
@@ -10,7 +11,7 @@ namespace menu
 {
     enum
     {
-        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, exportTracks, showFolder, quit,
+        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, exportTracks, showFolder, quit, openWelcome,
         undo = 100, redo, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
@@ -225,6 +226,19 @@ void MainComponent::startup (const String& commandLine)
     }
 
     const auto last = File (settings.getValue ("lastProject"));
+
+    // A new install: open a finished-sounding song, made with Lathe's own instruments, so the
+    // first thing anyone does is press play. Once only; File > Open the Welcome Song brings it back.
+    if (! settings.containsKey ("welcomeSongShown"))
+    {
+        settings.setValue ("welcomeSongShown", true);
+        if (! last.existsAsFile())
+        {
+            openWelcomeSong();
+            return;
+        }
+    }
+
     if (settings.getValue ("startup", "last") == "last" && last.existsAsFile())
     {
         openProject (last);
@@ -232,6 +246,19 @@ void MainComponent::startup (const String& commandLine)
     }
 
     newProject (getTemplatesDir().getChildFile (settings.getValue ("defaultTemplate", "Basic") + kProjectExtension));
+}
+
+void MainComponent::openWelcomeSong()
+{
+    File song;
+    if (const auto r = welcome::write (getProjectsDir(), song); r.failed())
+    {
+        setStatus ("Couldn't open the welcome song: " + r.getErrorMessage());
+        return;
+    }
+    openProject (song);
+    setStatus ("This song was made in Lathe with its built-in instruments. Press Space to play it, "
+               "then change anything: it's yours.");
 }
 
 Array<File> MainComponent::templateFiles()
@@ -883,6 +910,7 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
             recentMenuFiles.add (f);
         }
         m.addSubMenu ("Open Recent", recent, recent.getNumItems() > 0);
+        item (menu::openWelcome, "Open the Welcome Song");
         m.addSeparator();
         item (menu::save, "Save", cmd + "S");
         item (menu::saveAs, "Save As...", cmd + "Shift+S");
@@ -1024,6 +1052,9 @@ void MainComponent::menuItemSelected (int id, int)
             {
                 newProject (getTemplatesDir().getChildFile (settings.getValue ("defaultTemplate", "Basic") + kProjectExtension));
             });
+            break;
+        case menu::openWelcome:
+            confirmDiscard ([this] { openWelcomeSong(); });
             break;
         case menu::open:
             confirmDiscard ([this]

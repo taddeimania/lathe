@@ -61,6 +61,16 @@ public:
     /** Forgets this song's cloud link (after losing access, say). The local copy stays. */
     void unlinkSong();
 
+    // --- links for the website (CloudLinks.cpp)
+    /** Cloud > Invite Someone by Link: a getlathe.app/join.html link that makes an account if
+        they need one, makes you friends and, for the open song (if it's yours), shares it. */
+    void showInviteLink();
+    /** Cloud > Join with an Invite Link: paste one someone sent you. */
+    void joinWithLink();
+    /** Cloud > Share a Listening Link: renders the mix, uploads it, and gives you a
+        getlathe.app/listen.html link anyone can play (and leave notes on) in a browser. */
+    void shareListeningLink();
+
     /** A quick API call on its own thread (doesn't wait behind a push), then done() on
         the message thread. Notices the server being too old for /v2. */
     void request (const String& method, const String& path, const var& body,

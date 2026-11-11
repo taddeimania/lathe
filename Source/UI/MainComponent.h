@@ -33,6 +33,8 @@ public:
 
     void newProject (const File& templateFile);
     void openProject (const File&);
+    /** Writes "Welcome to Lathe" to the projects folder (if it isn't there) and opens it. */
+    void openWelcomeSong();
     void save (std::function<void (bool)> done = {});
     void saveAs (std::function<void (bool)> done = {});
     void saveAsTemplate();
