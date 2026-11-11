@@ -3,6 +3,17 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.2
+
+- **Your AI assistant can listen to the mix.** A new tool, analyze_mix, renders the song (or some
+  bars) without playing it and tells the assistant what you'd check by ear: loudness by section,
+  clipping and true peak, the balance across the frequency range, stereo width (and whether the low
+  end is mono), which tracks you can't hear, and which ones fight over the same frequencies. So it can
+  mix, then check what its change did.
+- The AI assistant page on getlathe.app now has the whole session: the assistant listens to its
+  mix, masters it and exports it.
+- The export status line names the export folder instead of its whole path.
+
 ## New in 0.12.1
 
 - **A page for the AI assistant**, getlathe.app/ai.html, where an assistant builds a song in Lathe

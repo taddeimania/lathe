@@ -455,6 +455,20 @@ var toolDefinitions()
                                { "bit_depth", prop ("integer", "16, 24 (default) or 32 (float)") },
                                { "tail_seconds", prop ("number", "Time after the end for reverb and delay tails, 0 to 30 (default 2)") } }),
                      false));
+    tools.add (tool ("analyze_mix", "Listen to the mix",
+                     "Renders bars of the song offline (nothing plays; nothing is written) and measures what you'd check by "
+                     "ear when mixing. The mix: peak, true peak, integrated loudness (LUFS), crest factor, balance across "
+                     "seven frequency bands, stereo width and correlation (also below 250 Hz). Each section: its loudness and "
+                     "the loudest tracks. Each track and return: its loudness (LUFS) and level while it plays, its share of the "
+                     "tracks' loudness (K-weighted, as ears and meters hear it, not raw energy, which the bass always wins), the "
+                     "bars it plays in, where most of its energy is, and its stereo width. Masking: pairs of tracks loud in the "
+                     "same band at the same time, within 6 dB of each other, and for how much of the time. Plus notes on "
+                     "anything measurably off (clipping, true peak above -1 dBTP, a wide or out-of-phase low end). The loop if "
+                     "it's on, else the whole song, unless bars are given. Use it after changing a mix to check the change.",
+                     schema ({ { "from_bar", prop ("number", "First bar (1-based)") },
+                               { "to_bar", prop ("number", "Where it ends (the bar it stops at)") },
+                               { "section_bars", prop ("integer", "Bars per entry in sections (default 4)") } }),
+                     true));
     tools.add (tool ("get_plugin_params", "Get a plug-in's settings",
                      "Every setting a plug-in on a track publishes (Lathe's own devices and VST3s): number, name, id, the "
                      "current value as the plug-in shows it, and either its choices (a menu or a switch) or its range "

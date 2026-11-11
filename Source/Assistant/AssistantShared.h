@@ -43,7 +43,8 @@ constexpr int kMaxBody = 1024 * 1024;
 constexpr int kLongToolSeconds = 120;
 inline bool isLongTool (const String& name)
 {
-    return name == "measure_performance" || name == "compare_processing_cores" || name == "export_audio";
+    return name == "measure_performance" || name == "compare_processing_cores" || name == "export_audio"
+        || name == "analyze_mix";
 }
 
 //==============================================================================

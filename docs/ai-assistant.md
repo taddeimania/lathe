@@ -6,6 +6,7 @@ Lathe can let an AI app on your computer, like Claude Desktop or Claude Code, lo
 - "play bars 9 to 13" or "loop the chorus and play it three times"
 - "add a MIDI track with an arpeggiator into a synth, and a reverb return the drums send to"
 - "what's using the most CPU in this song?" or "compare 1 core with all cores on bars 1 to 9"
+- "is anything clipping, and what's fighting the bass?" or "mix this so the vocal sits on top, then check it"
 
 Everything it changes in one go is a single undo step: Cmd/Ctrl+Z takes it all back.
 
@@ -34,6 +35,7 @@ What it can do:
 | `open_project` | Opens a project from your projects folder by name (or any project by path), like File > Open. Without a name it lists them, newest first. |
 | `save_project` | Saves the project. With a name it saves it as a new project in your projects folder (its own folder, audio copied in), like Save As; it never saves over another project. |
 | `export_audio` | Renders the mix (and stems, if asked) to WAV in the project's Exports folder, like File > Export, and reports each file's length and the mix's peak and loudness (LUFS). |
+| `analyze_mix` | Listens to the mix without playing it: renders the loop (or the song, or the bars given) offline and measures the mix and every track. The mix: peak, true peak, loudness (LUFS), crest factor, balance across seven frequency bands, stereo width and correlation, also below 250 Hz. Each section: its loudness and loudest tracks. Each track and return: its loudness (LUFS) and level while it plays, its share of the tracks' loudness (K-weighted, as ears and meters hear it, not raw energy, which the bass always wins), the bars it plays in, where most of its energy is, and its width. Masking: pairs of tracks loud in the same band at the same time, within 6 dB of each other, and for how much of the time. And notes on anything measurably off: clipping, a true peak above -1 dBTP, a wide or out-of-phase low end. Nothing is written. |
 | `measure_performance` | Plays some bars for real and times every audio block, as the CPU meter does: average, worst 1 in 100, peak, blocks that missed their deadline, and each track's own cost with its plug-ins. It also notes the conditions: computer, CPU and cores, interface and buffer size. |
 | `compare_processing_cores` | The same bars on 1 core and on all cores, in turn (1, all, 1, all), side by side with the speed-up. Your Processing cores setting is put back afterwards. |
 

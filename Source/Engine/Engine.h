@@ -152,6 +152,24 @@ public:
     };
     /** Renders offline. Runs on a background thread; progress returns false to cancel. */
     Result exportAudio (const ExportSettings&, const std::function<bool (double)>& progress, StringArray& writtenFiles);
+
+    /** One signal an offline render hands out: the mix, or one track's, return's or bus's own (its stem). */
+    struct RenderTap
+    {
+        String name;          // "Mix", or the track's name
+        int trackId = -1;     // -1 for the mix
+        bool isMix = false;
+        bool isReturn = false;
+    };
+    /** Receives a stretch of one tap's audio: the tap's index, the buffer, where in it, how many
+        samples, and where that is on the timeline (samples from the start of the render). */
+    using RenderListener = std::function<void (int tap, const AudioBuffer<float>&, int start, int count, int64 timelineSample)>;
+    /** Renders offline exactly as exportAudio does (s.mix and s.stems say which taps; folder,
+        baseName and bitDepth aren't used), handing every tap to `listen` instead of writing files.
+        `prepare` gets the taps before the render starts and can refuse it. Background thread. */
+    Result renderOffline (const ExportSettings&, const std::function<bool (double)>& progress,
+                          const std::function<Result (const std::vector<RenderTap>&, int64 lengthSamples)>& prepare,
+                          const RenderListener& listen);
     bool isExporting() const noexcept   { return exporting.load(); }
     /** The mix file name for an export of some tracks: "Song - Drums + Bass", "Song (5 tracks)". */
     static String exportMixName (const String& baseName, const Edit&, const std::set<int>& trackIds);

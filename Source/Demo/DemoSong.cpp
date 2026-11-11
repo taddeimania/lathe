@@ -414,30 +414,101 @@ public:
 
 Result writeGuitarTake (const File& wav, double bpm)
 {
+    // Strummed chords on six plucked strings (Karplus-Strong): open C for two bars, then G, in the
+    // usual down, down-up, up-down-up pattern, played a little loosely. Each string rings until it's
+    // struck again. Then a guitar body: a few resonances under the strings, and the top end rolled off.
     Random rnd (11);
     const auto at = [bpm] (double beats) { return (int64) std::llround (beats * 60.0 / bpm * kRate); };
-    std::vector<float> take ((size_t) at (16.0));
-    // C (C E G C E) for two bars, then G (G B D G B): picked up and down in eighths, a little loose.
-    const int chords[2][5] = { { 48, 52, 55, 60, 64 }, { 43, 47, 50, 55, 59 } };
-    const int order[8] = { 0, 2, 3, 4, 3, 2, 1, 3 };
+    const int64 total = at (16.0);
+    const int chords[2][6] = { { 0, 48, 52, 55, 60, 64 }, { 43, 47, 50, 55, 59, 67 } };   // 0: string not played
+    struct Pluck { int64 at; int midi; float amp; float bright; };
+    std::vector<Pluck> strings[6];
+
+    const int hits[6] = { 0, 2, 3, 5, 6, 7 };
+    const bool down[6] = { true, true, false, false, true, false };
     for (int bar = 0; bar < 4; ++bar)
-        for (int k = 0; k < 8; ++k)
+        for (int h = 0; h < 6; ++h)
         {
-            const auto start = at (jmax (0.0, bar * 4.0 + k * 0.5 + (rnd.nextDouble() - 0.5) * 0.04));
-            const double f = hz (chords[bar / 2][order[k]]);
-            const auto n = at (1.2);
-            const double amp = (k % 2 == 0 ? 1.0 : 0.7) * (0.85 + 0.3 * rnd.nextDouble());
-            for (int64 i = 0; i < n && start + i < (int64) take.size(); ++i)
+            const double beat = bar * 4.0 + hits[h] * 0.5 + (rnd.nextDouble() - 0.5) * 0.06;   // a hand, not a grid
+            const float strength = (down[h] ? 0.9f : 0.55f) * (0.75f + 0.4f * (float) rnd.nextDouble()) * (h == 0 ? 1.15f : 1.0f);
+            const double spread = 0.008 + 0.010 * rnd.nextDouble() + (down[h] ? 0.004 : 0.0);  // seconds between strings
+            const int strummed = down[h] ? 6 : 3 + rnd.nextInt (2);
+            for (int s = 0; s < strummed; ++s)
             {
-                const double t = (double) i / kRate;
-                double s = 0.0;
-                for (int h = 1; h <= 5; ++h)
-                    s += std::sin (MathConstants<double>::twoPi * f * h * t) * std::exp (-t * (1.5 + h * 1.2)) / h;
-                s += 0.1 * (rnd.nextDouble() * 2.0 - 1.0) * std::exp (-t * 60.0);
-                take[(size_t) (start + i)] += (float) (amp * s);
+                const int string = down[h] ? s : 5 - s;
+                const int midi = chords[bar / 2][string];
+                if (midi == 0)
+                    continue;
+                const auto when = at (jmax (0.0, beat)) + (int64) (s * spread * kRate);
+                // The pick catches the first strings hardest; harder hits are brighter.
+                const float amp = strength * (1.0f - 0.08f * (float) s) * (0.85f + 0.3f * (float) rnd.nextDouble());
+                strings[string].push_back ({ when, midi, amp, jlimit (0.2f, 0.5f, 0.25f + 0.25f * strength) });
             }
         }
-    return writeWav (wav, take);
+
+    std::vector<float> take ((size_t) total, 0.0f);
+    for (int str = 0; str < 6; ++str)
+    {
+        auto& plucks = strings[str];
+        std::vector<float> loop;
+        size_t pos = 0, next = 0;
+        float bright = 0.5f, loss = 0.996f;
+        for (int64 i = 0; i < total; ++i)
+        {
+            if (next < plucks.size() && plucks[next].at == i)
+            {
+                // A pluck: noise one period long, shaped by where the pick hits the string (a comb).
+                const auto& p = plucks[next++];
+                const int n = jmax (4, (int) std::lround (kRate / hz (p.midi)));
+                std::vector<float> noise ((size_t) n);
+                for (auto& v : noise)
+                    v = (float) (rnd.nextDouble() * 2.0 - 1.0);
+                const int pick = jmax (1, (int) std::lround (n * 0.13));
+                loop.assign ((size_t) n, 0.0f);
+                for (int k = 0; k < n; ++k)
+                    loop[(size_t) k] = p.amp * 0.5f * (noise[(size_t) k] - noise[(size_t) ((k + n - pick) % n)]);
+                pos = 0;
+                bright = p.bright;
+                loss = 0.9955f + 0.002f * (float) str / 5.0f;   // the thin strings ring a little longer
+            }
+            if (loop.empty())
+                continue;
+            const size_t n2 = (pos + 1) % loop.size();
+            const float out = loop[pos];
+            loop[pos] = loss * ((1.0f - bright) * loop[pos] + bright * loop[n2]);
+            pos = n2;
+            take[(size_t) i] += out;
+        }
+    }
+
+    // The body: three resonances (the air and the top), blended under the strings, then a gentle
+    // roll-off of the top end like a microphone a little way off.
+    struct Res { double hz, q, gain; };
+    const Res body[3] = { { 102.0, 6.0, 0.9 }, { 205.0, 8.0, 0.6 }, { 410.0, 5.0, 0.35 } };
+    std::vector<float> out (take.size(), 0.0f);
+    for (auto& r : body)
+    {
+        const double w = MathConstants<double>::twoPi * r.hz / kRate, alpha = std::sin (w) / (2.0 * r.q), a0 = 1.0 + alpha;
+        const double b0 = alpha / a0, b2 = -alpha / a0, a1 = -2.0 * std::cos (w) / a0, a2 = (1.0 - alpha) / a0;
+        double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        for (size_t i = 0; i < take.size(); ++i)
+        {
+            const double x = take[i];
+            const double y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1; x1 = x; y2 = y1; y1 = y;
+            out[i] += (float) (r.gain * y);
+        }
+    }
+    float lp = 0.0f, hp = 0.0f, prev = 0.0f;
+    const float cut = 1.0f - std::exp (-MathConstants<float>::twoPi * 5500.0f / (float) kRate);
+    for (size_t i = 0; i < take.size(); ++i)
+    {
+        lp += cut * (take[i] + out[i] - lp);
+        hp = 0.995f * (hp + lp - prev);   // and no DC
+        prev = lp;
+        take[i] = hp;
+    }
+    return writeWav (wav, take);   // it sets the level
 }
 
 std::unique_ptr<AudioIODeviceType> makeDeviceType()

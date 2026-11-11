@@ -77,6 +77,9 @@ private:
     /** The tool can't run while Lathe records, measures or exports. Empty if it can. */
     String busyReason() const;
     std::shared_ptr<Job> startExport (const var& args, var& immediate);
+    std::shared_ptr<Job> startAnalysis (const var& args, var& immediate);
+    /** An export or an analysis is rendering (they take the engine over, one at a time). */
+    bool isRendering() const;
     var getPluginParams (const var& args) const;
     var setPluginParams (const var& args, String& status);
 
@@ -92,6 +95,8 @@ private:
     std::unique_ptr<Measurer> measurer;
     class Exporter;
     std::unique_ptr<Exporter> exporter;
+    class Analyser;
+    std::unique_ptr<Analyser> analyser;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
     void measurerFinished (const Measurer*);
 

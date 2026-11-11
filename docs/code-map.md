@@ -10,7 +10,8 @@ Source/
   Demo/                 the "Night Drive" demo song and pretend audio interface, for --screenshots; Welcome.*
                         writes "Welcome to Lathe" (Resources/Welcome.lathe), the song a new install opens
   Assistant/            AI assistant (MCP): Server (127.0.0.1 HTTP, key, JSON-RPC), Tools (what the AI can
-                        read and do), Service (on/off, message thread), BridgeMain (LatheMCP, stdio <-> Lathe)
+                        read and do), MixAnalysis (what analyze_mix measures in an offline render), Service
+                        (on/off, message thread), BridgeMain (LatheMCP, stdio <-> Lathe)
   Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,
                         snapshots, push / pull), ProjectDiff (change summaries)
   Patcher/              Lathe Patcher: Updater.* (GitHub lookup, download, verify, swap in place) + its window

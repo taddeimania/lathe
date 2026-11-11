@@ -2350,6 +2350,85 @@ String Engine::exportMixName (const String& base, const Edit& edit, const std::s
 
 Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (double)>& progress, StringArray& written)
 {
+    struct Output
+    {
+        File file;
+        std::unique_ptr<AudioFormatWriter> writer;
+        float peak = 0.0f;
+        bool isStem = false;
+    };
+    std::vector<Output> outputs;
+    double sr = 0.0;
+
+    auto makeWriter = [&] (const File& f) -> std::unique_ptr<AudioFormatWriter>
+    {
+        f.deleteFile();
+        std::unique_ptr<OutputStream> stream (f.createOutputStream());
+        if (stream == nullptr)
+            return {};
+        WavAudioFormat wav;
+        auto options = AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2).withBitsPerSample (s.bitDepth);
+        if (s.bitDepth == 32)
+            options = options.withSampleFormat (AudioFormatWriterOptions::SampleFormat::floatingPoint);
+        return wav.createWriterFor (stream, options);
+    };
+
+    auto prepare = [&] (const std::vector<RenderTap>& taps, int64) -> Result
+    {
+        sr = getSampleRate();
+        s.folder.createDirectory();
+        // Stems are numbered by position in the whole song, so a track's file name never changes.
+        std::map<int, int> number;
+        int index = 1;
+        for (auto& t : edit->tracks) number[t->id] = index++;
+        for (auto& t : edit->buses)  number[t->id] = index++;
+        for (auto& tap : taps)
+        {
+            Output o;
+            o.isStem = ! tap.isMix;
+            if (tap.isMix)
+            {
+                const auto name = s.trackIds.empty() ? s.baseName : exportMixName (s.baseName, *edit, s.trackIds);
+                o.file = s.folder.getChildFile (File::createLegalFileName (name) + ".wav");
+            }
+            else
+            {
+                const auto name = String (number[tap.trackId]).paddedLeft ('0', 2) + " " + tap.name;
+                o.file = s.folder.getChildFile (File::createLegalFileName (s.baseName + " - " + name) + ".wav");
+            }
+            o.writer = makeWriter (o.file);
+            if (o.writer == nullptr)
+                return Result::fail ("Couldn't write " + o.file.getFullPathName());
+            outputs.push_back (std::move (o));
+        }
+        return Result::ok();
+    };
+
+    auto listen = [&] (int tap, const AudioBuffer<float>& buffer, int start, int count, int64)
+    {
+        auto& o = outputs[(size_t) tap];
+        o.writer->writeFromAudioSampleBuffer (buffer, start, count);
+        o.peak = jmax (o.peak, buffer.getMagnitude (start, count));
+    };
+
+    const auto result = renderOffline (s, progress, prepare, listen);
+
+    for (auto& o : outputs)
+    {
+        o.writer.reset();
+        // Silent stems (empty tracks, unused returns) aren't worth a file.
+        if (result.failed() || (o.isStem && o.peak <= 0.0f))
+            o.file.deleteFile();
+        else
+            written.add (o.file.getFullPathName());
+    }
+    return result;
+}
+
+Result Engine::renderOffline (const ExportSettings& s, const std::function<bool (double)>& progress,
+                              const std::function<Result (const std::vector<RenderTap>&, int64)>& prepare,
+                              const RenderListener& listen)
+{
     if (playing || recording)
         return Result::fail ("Stop playback before exporting.");
 
@@ -2391,44 +2470,19 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
     for (auto& rt : g->buses)  collect (rt);
     collect (g->master);
 
-    for (auto* p : processors)
-    {
-        p->setNonRealtime (true);
-        p->reset();
-    }
-
-    const double sr = g->sampleRate;
     const int64 start = (int64) std::llround (s.startBeat * g->samplesPerBeat);
-    const int64 length = (int64) std::llround ((s.endBeat - s.startBeat) * g->samplesPerBeat) + (int64) (s.tailSeconds * sr);
+    const int64 length = (int64) std::llround ((s.endBeat - s.startBeat) * g->samplesPerBeat) + (int64) (s.tailSeconds * g->sampleRate);
     const int mixLatency = g->trackLatency + g->busLatency + g->masterLatency;
     const int stemLatency = g->trackLatency + g->busLatency;
     const int64 total = length + mixLatency;
 
-    s.folder.createDirectory();
-
-    auto makeWriter = [&] (const File& f) -> std::unique_ptr<AudioFormatWriter>
-    {
-        f.deleteFile();
-        std::unique_ptr<OutputStream> stream (f.createOutputStream());
-        if (stream == nullptr)
-            return {};
-        WavAudioFormat wav;
-        auto options = AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2).withBitsPerSample (s.bitDepth);
-        if (s.bitDepth == 32)
-            options = options.withSampleFormat (AudioFormatWriterOptions::SampleFormat::floatingPoint);
-        return wav.createWriterFor (stream, options);
-    };
-
     struct Output
     {
         const AudioBuffer<float>* buffer;
-        File file;
-        std::unique_ptr<AudioFormatWriter> writer;
         int latency;
-        float peak = 0.0f;
-        bool isStem;
     };
     std::vector<Output> outputs;
+    std::vector<RenderTap> taps;
 
     // Limit what plays only if audio/MIDI tracks were picked. Just a return picked:
     // everything plays into it, and only its file is written.
@@ -2439,36 +2493,33 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
 
     if (s.mix)
     {
-        const auto name = exportOnly.empty() ? s.baseName : exportMixName (s.baseName, *edit, s.trackIds);
-        auto f = s.folder.getChildFile (File::createLegalFileName (name) + ".wav");
-        outputs.push_back ({ &g->master.buffer, f, makeWriter (f), mixLatency, 0.0f, false });
+        outputs.push_back ({ &g->master.buffer, mixLatency });
+        taps.push_back ({ "Mix", -1, true, false });
     }
-
     if (s.stems)
     {
-        int index = 1;
-        auto addStem = [&] (RenderTrack& rt)
+        auto addStem = [&] (RenderTrack& rt, bool isReturn)
         {
-            // Numbered by position in the whole song, so a track's file name never changes.
-            const auto name = String (index++).paddedLeft ('0', 2) + " " + rt.track->name;
             if (! s.trackIds.empty() && s.trackIds.count (rt.track->id) == 0)
                 return;
-            auto f = s.folder.getChildFile (File::createLegalFileName (s.baseName + " - " + name) + ".wav");
-            outputs.push_back ({ &rt.buffer, f, makeWriter (f), stemLatency, 0.0f, true });
+            outputs.push_back ({ &rt.buffer, stemLatency });
+            taps.push_back ({ rt.track->name, rt.track->id, false, isReturn });
         };
-        for (auto& rt : g->tracks) addStem (rt);
-        for (auto& rt : g->buses)  addStem (rt);
+        for (auto& rt : g->tracks) addStem (rt, false);
+        for (auto& rt : g->buses)  addStem (rt, true);
     }
 
-    for (auto& o : outputs)
+    if (auto ready = prepare (taps, length); ready.failed())
     {
-        if (o.writer == nullptr)
-        {
-            exportOnly.clear();
-            for (auto* p : processors) p->setNonRealtime (false);
-            restore();
-            return Result::fail ("Couldn't write " + o.file.getFullPathName());
-        }
+        exportOnly.clear();
+        restore();
+        return ready;
+    }
+
+    for (auto* p : processors)
+    {
+        p->setNonRealtime (true);
+        p->reset();
     }
 
     float* noOutputs[1] = { nullptr };
@@ -2486,18 +2537,14 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
         playHead.position = pos;
         renderChunk (*g, pos, len, 0, true, noInputs, 0, noOutputs, 0, false, rendered == 0);
 
-        for (auto& o : outputs)
+        for (size_t i = 0; i < outputs.size(); ++i)
         {
-            // Skip the plug-in latency at the start so files line up with the timeline.
+            auto& o = outputs[i];
+            // Skip the plug-in latency at the start so everything lines up with the timeline.
             const int64 from = jmax (rendered, (int64) o.latency);
             const int64 to = jmin (rendered + len, (int64) o.latency + length);
             if (to > from)
-            {
-                const int bufStart = (int) (from - rendered);
-                const int count = (int) (to - from);
-                o.writer->writeFromAudioSampleBuffer (*o.buffer, bufStart, count);
-                o.peak = jmax (o.peak, o.buffer->getMagnitude (bufStart, count));
-            }
+                listen ((int) i, *o.buffer, (int) (from - rendered), (int) (to - from), from - o.latency);
         }
 
         pos += len;
@@ -2508,16 +2555,6 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
             cancelled = true;
             break;
         }
-    }
-
-    for (auto& o : outputs)
-    {
-        o.writer.reset();
-        // Silent stems (empty tracks, unused returns) aren't worth a file.
-        if (cancelled || (o.isStem && o.peak <= 0.0f))
-            o.file.deleteFile();
-        else
-            written.add (o.file.getFullPathName());
     }
 
     for (auto* p : processors)

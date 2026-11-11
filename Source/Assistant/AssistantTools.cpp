@@ -2,6 +2,7 @@
 #include "AssistantShared.h"
 #include "../Devices/Device.h"
 #include "../Devices/Master/Loudness.h"
+#include "MixAnalysis.h"
 
 #if JUCE_MAC
  #include <sys/sysctl.h>
@@ -2002,7 +2003,7 @@ private:
         set (out, "files", list);
         set (out, "render_seconds", rounded ((Time::getMillisecondCounterHiRes() - started) / 1000.0, 0.1));
         finish (toolText (JSON::toString (out, true, 4)),
-                "AI assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to " + settings.folder.getFullPathName());
+                "AI assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to Exports/" + settings.folder.getFileName());
     }
 
     /** Peak, true peak and integrated loudness of the mix, so the assistant can hear it in numbers. */
@@ -2046,9 +2047,9 @@ private:
 
 std::shared_ptr<Tools::Job> Tools::startExport (const var& args, var& immediate)
 {
-    if (exporter != nullptr && ! exporter->isFinished())
+    if (isRendering())
     {
-        immediate = toolText ("Lathe is already exporting. Wait for that to finish.", true);
+        immediate = toolText ("Lathe is already rendering. Wait for that to finish.", true);
         return {};
     }
     exporter.reset();
@@ -2103,6 +2104,133 @@ std::shared_ptr<Tools::Job> Tools::startExport (const var& args, var& immediate)
         showStatus ("AI assistant: exporting " + edit.getName() + "...");
     auto job = std::make_shared<Job>();
     exporter = std::make_unique<Exporter> (engine, s, job, showStatus);
+    return job;
+}
+
+//==============================================================================
+/** analyze_mix: Engine::renderOffline on its own thread into a MixAnalysis, which listens to the
+    mix and every track's own signal. Nothing plays and no file is written. */
+class Tools::Analyser : private Thread
+{
+public:
+    Analyser (Engine& e, Engine::ExportSettings s, double perBar, double first, int sections,
+              std::shared_ptr<Job> j, std::function<void (const String&)> say)
+        : Thread ("Lathe assistant analysis"), engine (e), settings (std::move (s)), samplesPerBar (perBar),
+          firstBar (first), sectionBars (sections), job (std::move (j)), showStatus (std::move (say))
+    {
+        startThread();
+    }
+
+    ~Analyser() override
+    {
+        signalThreadShouldExit();
+        stopThread (60000);
+    }
+
+    bool isFinished() const   { return job->done.wait (0); }
+
+private:
+    void run() override
+    {
+        std::unique_ptr<MixAnalysis> analysis;
+        const auto started = Time::getMillisecondCounterHiRes();
+        auto prepare = [&] (const std::vector<Engine::RenderTap>& taps, int64 length) -> Result
+        {
+            std::vector<MixAnalysis::Tap> list;
+            for (auto& t : taps)
+                list.push_back ({ t.name, t.isMix, t.isReturn });
+            analysis = std::make_unique<MixAnalysis> (list, engine.getSampleRate(), samplesPerBar, firstBar, length, sectionBars);
+            return Result::ok();
+        };
+        auto listen = [&] (int tap, const AudioBuffer<float>& b, int start, int count, int64 at)
+        {
+            analysis->add (tap, b, start, count, at);
+        };
+        const auto result = engine.renderOffline (settings, [this] (double) { return ! threadShouldExit(); }, prepare, listen);
+        if (result.failed() || analysis == nullptr)
+        {
+            const auto why = result.failed() ? result.getErrorMessage().replace ("exporting", "analysing") : String ("nothing to analyse");
+            finish (toolText ("Couldn't analyse the mix: " + why, true), "AI assistant: couldn't analyse the mix");
+            return;
+        }
+        auto report = analysis->report();
+        report.getDynamicObject()->setProperty ("render_seconds", std::round ((Time::getMillisecondCounterHiRes() - started) / 100.0) / 10.0);
+        finish (toolText (JSON::toString (report, true, 4)), "AI assistant: listened to bars " + report["bars"].toString());
+    }
+
+    void finish (const var& result, const String& status)
+    {
+        job->result = result;
+        job->done.signal();
+        MessageManager::callAsync ([say = showStatus, status] { if (say) say (status); });
+    }
+
+    Engine& engine;
+    Engine::ExportSettings settings;
+    double samplesPerBar, firstBar;
+    int sectionBars;
+    std::shared_ptr<Job> job;
+    std::function<void (const String&)> showStatus;
+};
+
+bool Tools::isRendering() const
+{
+    return (exporter != nullptr && ! exporter->isFinished()) || (analyser != nullptr && ! analyser->isFinished());
+}
+
+std::shared_ptr<Tools::Job> Tools::startAnalysis (const var& args, var& immediate)
+{
+    if (isRendering())
+    {
+        immediate = toolText ("Lathe is already rendering. Wait for that to finish.", true);
+        return {};
+    }
+    analyser.reset();
+    if (const auto busy = busyReason(); busy.isNotEmpty())
+    {
+        immediate = toolText (busy, true);
+        return {};
+    }
+    if (engine.getSampleRate() <= 0.0)
+    {
+        immediate = toolText ("No audio device is running, so Lathe can't render (Options > Audio / MIDI Settings).", true);
+        return {};
+    }
+
+    Engine::ExportSettings s;
+    s.mix = true;
+    s.stems = true;
+    s.tailSeconds = 0.0;
+    if (args.hasProperty ("from_bar") || args.hasProperty ("to_bar"))
+    {
+        s.startBeat = toBeats ((double) args.getProperty ("from_bar", 1.0));
+        s.endBeat = args.hasProperty ("to_bar") ? toBeats ((double) args["to_bar"]) : edit.getEndBeat();
+    }
+    else if (edit.loopEnabled && edit.loopEnd > edit.loopStart)
+    {
+        s.startBeat = edit.loopStart;
+        s.endBeat = edit.loopEnd;
+    }
+    else
+    {
+        s.startBeat = 0.0;
+        s.endBeat = edit.getEndBeat();
+    }
+    if (s.startBeat < 0.0 || s.endBeat <= s.startBeat + 1.0e-6)
+    {
+        immediate = toolText (args.hasProperty ("to_bar") ? "to_bar must come after from_bar (bars are 1-based)."
+                                                          : "The song is empty: there's nothing to listen to.", true);
+        return {};
+    }
+    const int sections = jlimit (1, 64, (int) args.getProperty ("section_bars", 4));
+    const double samplesPerBar = edit.beatsPerBar() * 60.0 / edit.tempo * engine.getSampleRate();
+
+    if (engine.isPlaying())
+        engine.stop();
+    if (showStatus)
+        showStatus ("AI assistant: listening to bars " + barText (s.startBeat) + " to " + barText (s.endBeat) + "...");
+    auto job = std::make_shared<Job>();
+    analyser = std::make_unique<Analyser> (engine, s, samplesPerBar, toBar (s.startBeat), sections, job, showStatus);
     return job;
 }
 
@@ -2482,6 +2610,7 @@ Tools::~Tools()
     alive->store (false);
     measurer.reset();
     exporter.reset();   // cancels a render that's still going, and waits for it
+    analyser.reset();
 }
 
 String Tools::busyReason() const
@@ -2509,6 +2638,8 @@ std::shared_ptr<Tools::Job> Tools::startLongTool (const String& name, const var&
     }
     if (name == "export_audio")
         return startExport (args, immediate);
+    if (name == "analyze_mix")
+        return startAnalysis (args, immediate);
     if (const auto busy = busyReason(); busy.isNotEmpty())
     {
         immediate = toolText (busy, true);

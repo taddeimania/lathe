@@ -12,6 +12,7 @@
 #include "Cloud/Packing.h"
 #include "Assistant/AssistantServer.h"
 #include "Assistant/AssistantTools.h"
+#include "Assistant/MixAnalysis.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
 #include "Demo/Welcome.h"
@@ -1368,6 +1369,68 @@ int main (int argc, char** argv)
             std::vector<float> out;
             runDevice (d, 1, out, 0.3f);
             check (d.getLatencySamples() > 0, "saturator: reports its oversampling latency (" + String (d.getLatencySamples()) + " samples)");
+        }
+
+        // --- The mix analysis (analyze_mix), on signals with known answers
+        {
+            const double sr = 48000.0, perBar = sr * 2.0;   // a bar is 2 seconds
+            const int64 length = (int64) (perBar * 4);       // four bars
+            using assistant::MixAnalysis;
+            MixAnalysis a ({ { "Mix", true, false }, { "Bass", false, false }, { "Synth", false, false },
+                             { "Hats", false, false }, { "Pad", false, false }, { "Verb", false, true } },
+                           sr, perBar, 1.0, length, 2);
+            // Bass and Synth both sit at 100 Hz for the whole thing, a dB apart: they mask each other.
+            // Hats: 8 kHz, hard left, bars 3 and 4 only. Pad: 1 kHz, its right side flipped (wide), quiet.
+            const int block = 512;
+            AudioBuffer<float> mix (2, block), bass (2, block), synth (2, block), hats (2, block), pad (2, block), verb (2, block);
+            verb.clear();
+            for (int64 pos = 0; pos < length; pos += block)
+            {
+                for (int i = 0; i < block; ++i)
+                {
+                    const double t = (double) (pos + i) / sr;
+                    const float b = 0.30f * (float) std::sin (MathConstants<double>::twoPi * 100.0 * t);
+                    const float s = 0.27f * (float) std::sin (MathConstants<double>::twoPi * 100.0 * t + 0.4);
+                    const float h = pos + i >= perBar * 2 ? 0.2f * (float) std::sin (MathConstants<double>::twoPi * 8000.0 * t) : 0.0f;
+                    const float p = 0.05f * (float) std::sin (MathConstants<double>::twoPi * 1000.0 * t);
+                    bass.setSample (0, i, b);  bass.setSample (1, i, b);
+                    synth.setSample (0, i, s); synth.setSample (1, i, s);
+                    hats.setSample (0, i, h);  hats.setSample (1, i, 0.0f);
+                    pad.setSample (0, i, p);   pad.setSample (1, i, -p);
+                    mix.setSample (0, i, b + s + h + p);
+                    mix.setSample (1, i, b + s - p);
+                }
+                a.add (0, mix, 0, block, pos);
+                a.add (1, bass, 0, block, pos);
+                a.add (2, synth, 0, block, pos);
+                a.add (3, hats, 0, block, pos);
+                a.add (4, pad, 0, block, pos);
+                a.add (5, verb, 0, block, pos);
+            }
+            const auto r = a.report();
+            const auto* tracksOut = r["tracks"].getArray();
+            const auto* masking = r["masking"].getArray();
+            auto track = [&] (const String& name) { for (auto& t : *tracksOut) if (t["name"].toString() == name) return t; return var(); };
+            check (tracksOut != nullptr && tracksOut->size() == 5 && masking != nullptr && masking->size() >= 1
+                       && (*masking)[0]["band"].toString().startsWith ("bass") && (*masking)[0]["tracks"][0].toString() == "Bass"
+                       && (*masking)[0]["tracks"][1].toString() == "Synth" && (int) (*masking)[0]["percent_of_the_time"] > 90
+                       && (*masking)[0]["louder"].toString().startsWith ("Bass by"),
+                   "analysis: two tracks on the same note mask each other in the bass band (" + JSON::toString (r["masking"], true).substring (0, 300) + ")");
+            bool hatsMask = false;
+            for (auto& m : *masking)
+                if (m["tracks"][0].toString() == "Hats" || m["tracks"][1].toString() == "Hats")
+                    hatsMask = true;
+            check (! hatsMask, "analysis: a track alone in its band masks nothing");
+            check (track ("Hats")["plays_in_bars"].toString() == "3-4" && track ("Bass")["plays_in_bars"].toString() == "1-4"
+                       && track ("Hats")["most_energy_in"].toString().startsWith ("air") && (bool) track ("Verb")["silent"]
+                       && track ("Hats")["stereo"]["leans"].toString().startsWith ("left") && (double) track ("Pad")["stereo"]["correlation"] < -0.9
+                       && track ("Bass")["stereo"]["width"].toString() == "mono",
+                   "analysis: where each track plays, its band, and its stereo (" + JSON::toString (track ("Hats"), true).substring (0, 200) + ")");
+            const auto* sections = r["sections"].getArray();
+            check (sections != nullptr && sections->size() == 2 && (*sections)[0]["bars"].toString() == "1-2"
+                       && ! (*sections)[0]["loudest_tracks"].toString().contains ("Hats") && (*sections)[1]["loudest_tracks"].toString().isNotEmpty()
+                       && (double) r["mix"]["integrated_lufs"] < 0.0 && r["mix"]["band_balance_db"]["bass (60-250 Hz)"].isDouble(),
+                   "analysis: two-bar sections, the mix's loudness and band balance (" + JSON::toString (r["sections"], true).substring (0, 300) + ")");
         }
 
         // --- Invite links pasted after a trip through a social site
@@ -3291,6 +3354,29 @@ int main (int argc, char** argv)
             e.workDir = oldDir;
         }
 
+        // --- analyze_mix: the same offline render, into the analysis instead of files
+        {
+            var immediate;
+            auto job = tools.startLongTool ("analyze_mix", args2 ({ { "from_bar", 1 }, { "to_bar", 3 }, { "section_bars", 1 } }), immediate);
+            check (job != nullptr, "analyze_mix starts" + (job == nullptr ? " (" + text (immediate) + ")" : String()));
+            if (job != nullptr)
+            {
+                for (int i = 0; i < 6000 && ! job->done.wait (0); ++i)
+                    MessageManager::getInstance()->runDispatchLoopUntil (20);
+                const auto out = job->done.wait (0) ? JSON::parse (text (job->result)) : var();
+                const auto* trackList = out["tracks"].getArray();
+                const auto* sections = out["sections"].getArray();
+                check (job->done.wait (0) && ! (bool) job->result["isError"] && out["bars"].toString() == "1 to 3"
+                           && out["mix"].isObject() && trackList != nullptr && trackList->size() == (int) (e.tracks.size() + e.buses.size())
+                           && sections != nullptr && sections->size() == 2 && out["masking"].isArray() && out["notes"].isArray(),
+                       "analyze_mix reports the mix, every track and return, each bar as a section ("
+                           + (job->done.wait (0) ? text (job->result).substring (0, 400) : String ("still running")) + ")");
+                var again;
+                check (tools.startLongTool ("analyze_mix", args2 ({ { "from_bar", 3 }, { "to_bar", 2 } }), again) == nullptr
+                           && text (again).contains ("after from_bar"), "analyze_mix: bars the wrong way round are an error");
+            }
+        }
+
         status = {};
         auto r = tools.call ("play", args2 ({ { "from_bar", 1 }, { "to_bar", 2 } }), status);
         check (! (bool) r["isError"] && engine.isPlaying() && std::abs (engine.getAutoStopBeats() - 4.0) < 1.0e-6
@@ -3597,7 +3683,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 17 && listed["id"].toString() == "a", "tools/list has the seventeen tools");
+        check (listed["result"]["tools"].size() == 18 && listed["id"].toString() == "a", "tools/list has the eighteen tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

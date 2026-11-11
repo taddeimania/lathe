@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 #include "../Assistant/AssistantService.h"
+#include "../Assistant/AssistantShared.h"
+#include "../Devices/Device.h"
 #include "../Demo/DemoSong.h"
 #include "../Demo/Welcome.h"
 
@@ -1342,14 +1344,14 @@ struct AiStep
     const char* frame;
     const char* view;      // "arrange" or "mixer"
     const char* select;    // the track whose devices show at the bottom ("" for none)
-    bool guitarTake;       // the person records their part first (no tool: they play it)
+    const char* human;     // what the person does first, no tool: "guitar" (records a take), "learn" (Mastering's Learn), or ""
     const char* panel;     // a device on the selected track whose own panel is drawn too, as ai-<n>-panel.jpg ("" for none)
     const char* calls;     // JSON: [ { "tool": ..., "args": { ... } } ]
 };
 
 const AiStep aiSteps[] = {
     // "New song at 100 BPM: drums, bass, electric piano, something sparkly on top, and a track for my guitar."
-    { "ai-1.jpg", "arrange", "Sparkle", false, "", R"([
+    { "ai-1.jpg", "arrange", "Sparkle", "", "", R"([
         { "tool": "new_project", "args": {} },
         { "tool": "edit_session", "args": { "changes": [
             { "action": "set_tempo", "bpm": 100 },
@@ -1368,7 +1370,7 @@ const AiStep aiSteps[] = {
     ])" },
 
     // "Write eight bars in A minor: Am, F, C, G, two bars each. Keep the drums laid back."
-    { "ai-2.jpg", "arrange", "Keys", false, "Multi Synth", R"([
+    { "ai-2.jpg", "arrange", "Keys", "", "Multi Synth", R"([
         { "tool": "write_notes", "args": { "track": "Drums", "from_bar": 1, "to_bar": 2, "repeat": 8, "notes": [
             { "pitch": 36, "start_bar": 1, "length_beats": 0.5, "velocity": 112 },
             { "pitch": 36, "start_bar": 1.625, "length_beats": 0.5, "velocity": 92 },
@@ -1412,7 +1414,7 @@ const AiStep aiSteps[] = {
     ])" },
 
     // "Make the sparkle stay in key, and have it repeat itself more, so it sounds like a hook."
-    { "ai-3.jpg", "arrange", "Sparkle", false, "Random Notes", R"([
+    { "ai-3.jpg", "arrange", "Sparkle", "", "Random Notes", R"([
         { "tool": "set_plugin_params", "args": { "track": "Sparkle", "plugin": "Random Notes", "params": [
             { "param": "Scale", "value": "Major" }, { "param": "Lowest note", "value": 69 },
             { "param": "Steps", "value": "1/8" }, { "param": "Deja vu", "value": "75%" }, { "param": "Loop", "value": "8" } ] } },
@@ -1422,23 +1424,30 @@ const AiStep aiSteps[] = {
     ])" },
 
     // (They record a guitar part over bars 5 to 8.) "I put guitar on the second half. Mix it so the guitar sits on top."
-    { "ai-4.jpg", "mixer", "", true, "", R"([
+    { "ai-4.jpg", "mixer", "", "guitar", "", R"([
+        { "tool": "analyze_mix", "args": { "from_bar": 1, "to_bar": 9 } },
         { "tool": "edit_session", "args": { "changes": [
             { "action": "add_plugin", "track": "Guitar", "plugin": "Compressor" },
-            { "action": "set_mixer", "track": "Guitar", "volume_db": 0, "pan": 0.3 },
-            { "action": "set_mixer", "track": "Keys", "volume_db": -7, "pan": -0.3 },
-            { "action": "set_mixer", "track": "Sparkle", "volume_db": -10, "pan": -0.5 },
-            { "action": "set_mixer", "track": "Bass", "volume_db": -4 },
-            { "action": "set_mixer", "track": "Drums", "volume_db": -3 },
+            { "action": "set_mixer", "track": "Guitar", "volume_db": -6, "pan": 0.3 },
+            { "action": "set_mixer", "track": "Bass", "volume_db": -9 },
+            { "action": "set_mixer", "track": "Drums", "volume_db": -5 },
+            { "action": "set_mixer", "track": "Keys", "volume_db": -6, "pan": -0.3 },
+            { "action": "set_mixer", "track": "Sparkle", "volume_db": -2, "pan": -0.35 },
             { "action": "set_send", "track": "Guitar", "return": "Verb", "level_db": -16 },
-            { "action": "set_track", "track": "Guitar", "arm": false } ] } }
+            { "action": "set_track", "track": "Guitar", "arm": false } ] } },
+        { "tool": "analyze_mix", "args": { "from_bar": 1, "to_bar": 9 } }
     ])" },
 
     // "Master it for streaming."
-    { "ai-5.jpg", "arrange", "Master", false, "Mastering", R"([
+    { "ai-5.jpg", "arrange", "Master", "", "Mastering", R"([
         { "tool": "edit_session", "args": { "changes": [ { "action": "add_plugin", "track": "Master", "plugin": "Mastering" } ] } },
         { "tool": "set_plugin_params", "args": { "track": "Master", "plugin": "Mastering", "params": [
             { "param": "Target", "value": "Streaming" }, { "param": "Style", "value": "Warm" } ] } }
+    ])" },
+
+    // (They press Learn and play the song through.) "Export it."
+    { "ai-6.jpg", "arrange", "Master", "learn", "Mastering", R"([
+        { "tool": "export_audio", "args": { "from_bar": 1, "to_bar": 9, "tail_seconds": 3 } }
     ])" },
 };
 } // namespace
@@ -1556,9 +1565,11 @@ void MainComponent::runAssistantShots (const File& outDir, const File& work, std
     };
     auto st = std::make_shared<State> (edit, engine);
     // New, as File > New does it; never Open or Save (that would touch the real projects folder).
-    st->tools.project.newProject = [this] (const File& templateFile) -> String
+    st->tools.project.newProject = [this, work] (const File& templateFile) -> String
     {
         newProject (templateFile);
+        // Its audio and exports go in the run's scratch folder, not the real Unsaved folder.
+        edit.workDir = work.getChildFile ("AI assistant demo");
         updateTitle();
         return {};
     };
@@ -1573,9 +1584,51 @@ void MainComponent::runAssistantShots (const File& outDir, const File& work, std
     detailHeight = 190;
 
     Component::SafePointer<MainComponent> self (this);
+    using Calls = std::shared_ptr<Array<var>>;
+
+    // One call, the way the connection makes it: long tools (analyze_mix, export_audio) run on
+    // their own thread while this waits for them, without blocking the message thread.
+    auto callTool = [self, weak = std::weak_ptr<State> (st)] (const var& c, std::function<void (var result, String status)> then)
+    {
+        auto st = weak.lock();
+        if (st == nullptr)
+            return;
+        const auto name = c["tool"].toString();
+        if (! assistant::Tools::isLongTool (name))
+        {
+            String status;
+            const auto result = st->tools.call (name, c["args"], status);
+            then (result, status);
+            return;
+        }
+        var immediate;
+        auto job = st->tools.startLongTool (name, c["args"], immediate);
+        if (job == nullptr)
+        {
+            then (immediate, {});
+            return;
+        }
+        auto poll = std::make_shared<std::function<void()>>();
+        *poll = [self, job, then, poll, waited = 0]() mutable
+        {
+            if (self == nullptr)
+                return;
+            if (job->done.wait (0) || (waited += 50) > assistant::kLongToolSeconds * 1000)
+            {
+                const auto result = job->done.wait (0) ? job->result : assistant::toolText ("timed out", true);
+                auto callback = then;
+                MessageManager::callAsync ([poll] { *poll = nullptr; });   // it holds itself: let it go, once it's finished
+                callback (result, {});
+                return;
+            }
+            Timer::callAfterDelay (50, [poll] { if (*poll) (*poll)(); });
+        };
+        (*poll)();
+    };
+
     // The state owns the step function, which only holds the state weakly; each pending step holds
     // it strongly. Once the last step is done nothing holds it, and it all goes.
-    st->next = [self, weak = std::weak_ptr<State> (st), outDir, work, done]
+    st->next = [self, weak = std::weak_ptr<State> (st), outDir, work, done, callTool]
     {
         auto st = weak.lock();
         if (self == nullptr || st == nullptr)
@@ -1589,8 +1642,12 @@ void MainComponent::runAssistantShots (const File& outDir, const File& work, std
             return;
         }
         const auto& step = aiSteps[st->step++];
+        const String human (step.human);
 
-        if (step.guitarTake)
+        DynamicObject::Ptr entry = new DynamicObject();
+        entry->setProperty ("frame", step.frame);
+
+        if (human == "guitar")
         {
             // The person records their part: the take lands on Guitar at bar 5, as a recording would.
             const auto wav = work.getChildFile ("Guitar take.wav");
@@ -1601,96 +1658,159 @@ void MainComponent::runAssistantShots (const File& outDir, const File& work, std
                 if (self->edit.tracks[i]->name == "Guitar")
                     guitarIndex = (int) i;
             self->arrangement.importFiles ({ wav }, guitarIndex, 4.0 * self->edit.beatsPerBar());
+            entry->setProperty ("person", "Recorded a guitar take over bars 5 to 8");
+        }
+        else if (human == "learn")
+        {
+            // The person presses Learn on Mastering, plays the song through, and presses Learn again.
+            devices::Device* mastering = nullptr;
+            for (auto& slot : self->edit.master->plugins)
+                if (auto* d = dynamic_cast<devices::Device*> (slot->instance.get()); d != nullptr && slot->getName() == "Mastering")
+                    mastering = d;
+            if (mastering == nullptr)
+            {
+                st->ok = false;
+                std::cerr << step.frame << ": no Mastering to learn with" << std::endl;
+            }
+            else
+            {
+                mastering->action();
+                Engine::ExportSettings s;
+                s.mix = true;
+                s.stems = false;
+                s.startBeat = 0.0;
+                s.endBeat = self->edit.getEndBeat();
+                s.tailSeconds = 2.0;
+                auto playThrough = [&]
+                {
+                    return self->engine.renderOffline (s, [] (double) { return true; },
+                                                       [] (const std::vector<Engine::RenderTap>&, int64) { return Result::ok(); },
+                                                       [] (int, const AudioBuffer<float>&, int, int, int64) {});
+                };
+                auto r = playThrough();
+                // Learn again: Mastering takes it at its next block, so play a moment more.
+                mastering->action();
+                s.endBeat = 1.0;
+                s.tailSeconds = 0.0;
+                if (r.wasOk())
+                    r = playThrough();
+                if (r.failed())
+                {
+                    st->ok = false;
+                    std::cerr << step.frame << ": couldn't play it through for Learn: " << r.getErrorMessage() << std::endl;
+                }
+            }
+            entry->setProperty ("person", "Pressed Learn on Mastering and played the song through");
         }
 
-        DynamicObject::Ptr entry = new DynamicObject();
-        entry->setProperty ("frame", step.frame);
-        if (step.guitarTake)
-            entry->setProperty ("recorded", "Guitar take, bars 5 to 8");
-        Array<var> calls;
         const auto script = JSON::parse (String (step.calls));
+        Calls calls = std::make_shared<Array<var>>();
         if (script.getArray() == nullptr || script.getArray()->isEmpty())
         {
             st->ok = false;
             std::cerr << step.frame << ": its calls aren't readable JSON" << std::endl;
         }
-        for (const auto& c : script.getArray() != nullptr ? *script.getArray() : Array<var>())
-        {
-            String status;
-            const auto result = st->tools.call (c["tool"].toString(), c["args"], status);
-            if (status.isNotEmpty())
-                self->setStatus (status);   // as the connection shows it
-            const bool failed = (bool) result.getProperty ("isError", false);
-            String text;
-            if (auto* content = result["content"].getArray(); content != nullptr && ! content->isEmpty())
-                text = (*content)[0]["text"].toString();
-            if (failed)
-            {
-                st->ok = false;
-                std::cerr << step.frame << ": " << c["tool"].toString() << " failed: " << text << std::endl;
-            }
-            DynamicObject::Ptr call = new DynamicObject();
-            call->setProperty ("tool", c["tool"]);
-            call->setProperty ("args", c["args"]);
-            call->setProperty ("status", status);
-            call->setProperty ("result", text.substring (0, 600));
-            if (failed)
-                call->setProperty ("error", true);
-            calls.add (var (call.get()));
-        }
-        entry->setProperty ("calls", calls);
-        st->log.add (var (entry.get()));
+        Calls todo = std::make_shared<Array<var>> (script.getArray() != nullptr ? *script.getArray() : Array<var>());
 
-        // Show it the way someone watching would see it: the step's view, and the devices on its track.
-        self->setMixerShown (String (step.view) == "mixer");
-        const String select (step.select);
-        if (select.isNotEmpty())
-            if (auto track = st->tools.findTrack (select))
-            {
-                self->ctx.selectTrack (track->id);
-                self->showDetail (false);
-            }
-        if (select.isEmpty())
+        // After the calls: show it the way someone watching would see it, then draw it.
+        auto show = [self, st, outDir, step, entry, calls]
         {
-            self->detailShown = false;
-            self->resized();
-        }
-        self->refreshAll();
+            entry->setProperty ("calls", *calls);
+            st->log.add (var (entry.get()));
 
-        Timer::callAfterDelay (900, [self, st, outDir, step]
+            self->setMixerShown (String (step.view) == "mixer");
+            const String select (step.select);
+            if (select.isNotEmpty())
+                if (auto track = st->tools.findTrack (select))
+                {
+                    self->ctx.selectTrack (track->id);
+                    self->showDetail (false);
+                }
+            if (select.isEmpty())
+            {
+                self->detailShown = false;
+                self->resized();
+            }
+            self->refreshAll();
+
+            Timer::callAfterDelay (900, [self, st, outDir, step]
+            {
+                if (self == nullptr)
+                    return;
+                if (saveShot (*self, outDir.getChildFile (step.frame)))
+                    st->written.add (step.frame);
+                else
+                    st->ok = false;
+
+                // The device's own panel, as Open shows it in its window.
+                if (String (step.panel).isNotEmpty())
+                {
+                    bool drawn = false;
+                    if (auto track = st->tools.findTrack (String (step.select)))
+                        for (auto& slot : track->plugins)
+                            if (slot->instance != nullptr && slot->getName() == step.panel)
+                                if (std::unique_ptr<AudioProcessorEditor> editor (slot->instance->createEditor()); editor != nullptr)
+                                {
+                                    const auto name = String (step.frame).upToLastOccurrenceOf (".", false, false) + "-panel.jpg";
+                                    if (saveShot (*editor, outDir.getChildFile (name)))
+                                    {
+                                        st->written.add (name);
+                                        drawn = true;
+                                    }
+                                    break;
+                                }
+                    if (! drawn)
+                    {
+                        st->ok = false;
+                        std::cerr << step.frame << ": couldn't draw " << step.panel << "'s panel" << std::endl;
+                    }
+                }
+                st->next();
+            });
+        };
+
+        // The calls, one after another.
+        auto runNext = std::make_shared<std::function<void()>>();
+        *runNext = [self, st, step, todo, calls, callTool, show, runNext]
         {
             if (self == nullptr)
                 return;
-            if (saveShot (*self, outDir.getChildFile (step.frame)))
-                st->written.add (step.frame);
-            else
-                st->ok = false;
-
-            // The device's own panel, as Open shows it in its window.
-            if (String (step.panel).isNotEmpty())
+            if (todo->isEmpty())
             {
-                bool drawn = false;
-                if (auto track = st->tools.findTrack (String (step.select)))
-                    for (auto& slot : track->plugins)
-                        if (slot->instance != nullptr && slot->getName() == step.panel)
-                            if (std::unique_ptr<AudioProcessorEditor> editor (slot->instance->createEditor()); editor != nullptr)
-                            {
-                                const auto name = String (step.frame).upToLastOccurrenceOf (".", false, false) + "-panel.jpg";
-                                if (saveShot (*editor, outDir.getChildFile (name)))
-                                {
-                                    st->written.add (name);
-                                    drawn = true;
-                                }
-                                break;
-                            }
-                if (! drawn)
+                auto finish = show;
+                MessageManager::callAsync ([runNext] { *runNext = nullptr; });   // it holds itself: let it go, once it's finished
+                finish();
+                return;
+            }
+            const auto c = todo->removeAndReturn (0);
+            callTool (c, [self, st, step, c, calls, runNext] (var result, String status)
+            {
+                if (self == nullptr)
+                    return;
+                if (status.isNotEmpty())
+                    self->setStatus (status);   // as the connection shows it
+                const bool failed = (bool) result.getProperty ("isError", false);
+                String text;
+                if (auto* content = result["content"].getArray(); content != nullptr && ! content->isEmpty())
+                    text = (*content)[0]["text"].toString();
+                if (failed)
                 {
                     st->ok = false;
-                    std::cerr << step.frame << ": couldn't draw " << step.panel << "'s panel" << std::endl;
+                    std::cerr << step.frame << ": " << c["tool"].toString() << " failed: " << text << std::endl;
                 }
-            }
-            st->next();
-        });
+                DynamicObject::Ptr call = new DynamicObject();
+                call->setProperty ("tool", c["tool"]);
+                call->setProperty ("args", c["args"]);
+                call->setProperty ("status", status);
+                call->setProperty ("result", text.substring (0, 6000));
+                if (failed)
+                    call->setProperty ("error", true);
+                calls->add (var (call.get()));
+                MessageManager::callAsync ([runNext] { if (*runNext) (*runNext)(); });
+            });
+        };
+        // After Learn, give Mastering a moment to set what it learned (its timer does it).
+        Timer::callAfterDelay (human == "learn" ? 600 : 1, [runNext] { if (*runNext) (*runNext)(); });
     };
     st->next();
 }

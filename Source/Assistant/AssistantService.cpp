@@ -142,7 +142,8 @@ var Service::callLongTool (const String& name, const var& args, const std::atomi
             break;
     }
     return toolText (name == "export_audio" ? "The export is still going. Lathe's status bar says when it's done."
-                                            : "The measurement didn't finish in time.", true);
+                     : name == "analyze_mix" ? "The analysis didn't finish in time. Try fewer bars."
+                                             : "The measurement didn't finish in time.", true);
 }
 
 String Service::statusText() const
