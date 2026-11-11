@@ -20,6 +20,8 @@ public:
         std::function<void (std::function<void()>)> confirmDiscard;     // unsaved changes? ask first
         std::function<void (const String&)> setStatus;
         std::function<File()> projectsDir;
+        /** The Cloud menu's contents changed (the Mac's menu bar only rebuilds when told). */
+        std::function<void()> menuChanged;
     };
 
     CloudController (AppContext&, PropertiesFile&, Hooks);
@@ -109,6 +111,13 @@ private:
     void uploadSong();
 
     void refreshWindows();
+    void reloadFriendsWindow();
+    /** Signed in, out, or as someone else: forget what we knew about the last account. */
+    void forgetAccount();
+    /** Just signed in: fetch the plan, friend requests and this song's role right away. */
+    void accountChanged();
+    /** Projects and Friends belong to one account: close them when it changes. */
+    void closeAccountWindows();
 
     /** Runs work on the cloud thread, then done() on the message thread. */
     void run (const String& what, std::function<void()> work, std::function<void()> done);
@@ -137,6 +146,8 @@ private:
     int revisionsKept = 0;
     bool showingNotices = false;
     int pollCountdown = 0;
+    String menuState;                    // what the Cloud menu shows, to rebuild it only when it changes
+    bool accountActive = false;          // we're showing someone's account (cleared by any sign-out)
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (CloudController)
     JUCE_DECLARE_NON_COPYABLE (CloudController)

@@ -73,7 +73,13 @@ public:
     void setSession (Session s);
     Session getSession() const;
     void signOut();
+    /** Asks Cognito to stop accepting a refresh token (sign-out on the server). Best effort:
+        blocks, so call it off the message thread with the token from before signOut(). */
+    Result revoke (const String& refreshToken);
     bool isSignedIn() const;
+    /** Changes whenever the account does (sign in, sign out, a restored session), never on a
+        token refresh. An answer that arrives under a different number is for someone else. */
+    uint64 getAccountGeneration() const noexcept   { return generation.load(); }
     /** Refreshes the ID token when it's about to expire. */
     Result ensureFreshToken();
 
@@ -113,11 +119,13 @@ private:
                           std::vector<UploadItem>& toSend, std::vector<File>& tempFiles,
                           const std::function<bool (double)>& progress);
     Result cognito (const String& target, const var& payload, var& response);
-    Result applyAuthResult (const var& authResult, const String& email);
+    /** Stores the tokens, unless the account changed (signed out) since `startedIn`. */
+    Result applyAuthResult (const var& authResult, const String& email, uint64 startedIn);
 
     Config config;
     mutable CriticalSection lock;
     Session session;
+    std::atomic<uint64> generation { 0 };
     std::atomic<int> parallelTransfers { 4 };
 };
 

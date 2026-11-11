@@ -278,7 +278,7 @@ Result Client::cognito (const String& target, const var& payload, var& response)
     return Result::fail (r.errorMessage());
 }
 
-Result Client::applyAuthResult (const var& result, const String& email)
+Result Client::applyAuthResult (const var& result, const String& email, uint64 startedIn)
 {
     if (! result.isObject() || result["IdToken"].toString().isEmpty())
         return Result::fail ("Sign-in didn't return a token.");
@@ -286,6 +286,9 @@ Result Client::applyAuthResult (const var& result, const String& email)
     Session s;
     {
         const ScopedLock sl (lock);
+        // Signed out (or in as someone else) while this was on its way: don't bring it back.
+        if (generation.load() != startedIn)
+            return Result::fail ("Signed out.");
         s = session;
     }
     s.email = email;
@@ -296,6 +299,8 @@ Result Client::applyAuthResult (const var& result, const String& email)
 
     {
         const ScopedLock sl (lock);
+        if (generation.load() != startedIn)
+            return Result::fail ("Signed out.");
         session = s;
     }
     if (onSessionChanged)
@@ -308,6 +313,7 @@ Result Client::signIn (const String& email, const String& password, const std::f
     if (! config.isValid())
         return Result::fail ("Lathe Cloud isn't available in this build.");
 
+    const auto startedIn = generation.load();
     DynamicObject::Ptr params = new DynamicObject();
     params->setProperty ("USERNAME", email);
     params->setProperty ("PASSWORD", password);
@@ -343,13 +349,17 @@ Result Client::signIn (const String& email, const String& password, const std::f
     if (resp["ChallengeName"].toString().isNotEmpty())
         return Result::fail ("Sign-in needs a step Lathe doesn't support (" + resp["ChallengeName"].toString() + ").");
 
-    return applyAuthResult (resp["AuthenticationResult"], email.trim().toLowerCase());
+    if (auto r = applyAuthResult (resp["AuthenticationResult"], email.trim().toLowerCase(), startedIn); r.failed())
+        return r;
+    ++generation;   // a new account: answers meant for whoever was here before don't apply
+    return Result::ok();
 }
 
 void Client::setSession (Session s)
 {
     const ScopedLock sl (lock);
     session = std::move (s);
+    ++generation;
 }
 
 Session Client::getSession() const
@@ -363,6 +373,7 @@ void Client::signOut()
     {
         const ScopedLock sl (lock);
         session = {};
+        ++generation;
     }
     if (onSessionChanged)
         onSessionChanged ({});
@@ -374,8 +385,20 @@ bool Client::isSignedIn() const
     return session.isSignedIn();
 }
 
+Result Client::revoke (const String& refreshToken)
+{
+    if (! config.isValid() || refreshToken.isEmpty())
+        return Result::ok();
+    DynamicObject::Ptr payload = new DynamicObject();
+    payload->setProperty ("Token", refreshToken);
+    payload->setProperty ("ClientId", config.clientId);
+    var resp;
+    return cognito ("RevokeToken", var (payload.get()), resp);
+}
+
 Result Client::ensureFreshToken()
 {
+    const auto startedIn = generation.load();
     Session s = getSession();
     if (! s.isSignedIn())
         return Result::fail ("Sign in first (Cloud > Sign In).");
@@ -394,12 +417,13 @@ Result Client::ensureFreshToken()
     {
         if (r.getErrorMessage().containsIgnoreCase ("refresh token") || r.getErrorMessage().containsIgnoreCase ("expired"))
         {
-            signOut();
+            if (generation.load() == startedIn)   // not if someone has signed in again since
+                signOut();
             return Result::fail ("Your sign-in expired. Sign in again (Cloud > Sign In).");
         }
         return r;
     }
-    return applyAuthResult (resp["AuthenticationResult"], s.email);
+    return applyAuthResult (resp["AuthenticationResult"], s.email, startedIn);
 }
 
 var Client::call (const String& method, const String& path, const var& body, ApiError& error, int timeoutMs)

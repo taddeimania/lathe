@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.10.2 LANGUAGES C CXX)
+project(Lathe VERSION 0.10.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -273,7 +273,13 @@ if(LATHE_BUILD_TESTS)
         Source/Engine/Engine.cpp
         Source/Engine/RenderPool.cpp
         Source/Engine/ClipJoin.cpp
-        Source/Patcher/Updater.cpp)
+        Source/Patcher/Updater.cpp
+        # The Cloud menu and windows, for the sign-in / sign-out tests.
+        Source/UI/CloudUI.cpp
+        Source/UI/CloudLibrary.cpp
+        Source/UI/Theme.cpp
+        Source/UI/Widgets.cpp
+        Source/UI/Dialogs.cpp)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=1 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0

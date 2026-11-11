@@ -13,6 +13,7 @@
 #include "Assistant/AssistantServer.h"
 #include "Assistant/AssistantTools.h"
 #include "Bench/Benchmark.h"
+#include "UI/CloudUI.h"
 #if ! JUCE_WINDOWS
  #include <sys/stat.h>
 #endif
@@ -851,7 +852,7 @@ int main (int argc, char** argv)
 
     std::cout << "Template -> new project -> record every armed track" << std::endl;
     {
-        // A template like "Terry Jam Start": Kick on input 1, Snare on input 2, two returns.
+        // A template like "Dev Jam Start": Kick on input 1, Snare on input 2, two returns.
         Edit source;
         auto kick = source.addTrack (TrackKind::audio, "Kick");
         kick->input = { 0, false };
@@ -1029,7 +1030,7 @@ int main (int argc, char** argv)
         n.trackName = "Bass";
         n.beat = 240.0;
         n.text = "The bass part doesn't go well here";
-        n.replies.push_back ({ "r1", "terry@example.com", {}, "On it", 5 });
+        n.replies.push_back ({ "r1", "dev@example.com", {}, "On it", 5 });
         e.localNotes.push_back (n);
         SongNote song;
         song.id = "2-b";
@@ -2194,92 +2195,102 @@ int main (int argc, char** argv)
             const auto spec = SystemStats::getEnvironmentVariable (env, {});
             return std::make_pair (spec.upToFirstOccurrenceOf (":", false, false), spec.fromFirstOccurrenceOf (":", false, false));
         };
-        const auto [joelEmail, joelPass] = user ("LATHE_TEST_USER1");
-        const auto [terryEmail, terryPass] = user ("LATHE_TEST_USER2");
+        const auto [maraEmail, maraPass] = user ("LATHE_TEST_USER1");
+        const auto [devEmail, devPass] = user ("LATHE_TEST_USER2");
         auto factory = [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); };
 
-        cloud::Client joel (config), terry (config);
-        check (joel.signIn (joelEmail, joelPass, {}).wasOk() && terry.signIn (terryEmail, terryPass, {}).wasOk(), "both sign in");
-        check (joel.signIn (joelEmail, "wrong-password", {}).failed(), "a wrong password is refused");
-        joel.signIn (joelEmail, joelPass, {});
+        cloud::Client mara (config), dev (config);
+        check (mara.signIn (maraEmail, maraPass, {}).wasOk() && dev.signIn (devEmail, devPass, {}).wasOk(), "both sign in");
+        check (mara.signIn (maraEmail, "wrong-password", {}).failed(), "a wrong password is refused");
+        mara.signIn (maraEmail, maraPass, {});
 
-        // Joel's project, with a recorded take.
-        const auto joelDir = dir.getChildFile ("cloud-joel/Jam");
-        Edit je;
-        je.projectFile = joelDir.getChildFile ("Jam.lathe");
-        je.workDir = joelDir;
-        auto hats = je.addTrack (TrackKind::audio, "Hats");
+        // Mara's project, with a recorded take.
+        const auto maraDir = dir.getChildFile ("cloud-mara/Jam");
+        Edit maraEdit;
+        maraEdit.projectFile = maraDir.getChildFile ("Jam.lathe");
+        maraEdit.workDir = maraDir;
+        auto hats = maraEdit.addTrack (TrackKind::audio, "Hats");
         Clip take;
-        take.id = je.newId();
+        take.id = maraEdit.newId();
         take.kind = ClipKind::audio;
-        joelDir.getChildFile ("Audio").createDirectory();
-        take.file = writeImpulseWav (joelDir.getChildFile ("Audio/Hats 1.wav"), 48000, 100);
+        maraDir.getChildFile ("Audio").createDirectory();
+        take.file = writeImpulseWav (maraDir.getChildFile ("Audio/Hats 1.wav"), 48000, 100);
         hats->clips.push_back (take);
-        joelDir.createDirectory();
-        je.projectFile.replaceWithText (JSON::toString (je.toVar (false)));
+        maraDir.createDirectory();
+        maraEdit.projectFile.replaceWithText (JSON::toString (maraEdit.toVar (false)));
 
-        cloud::LocalStore joelStore (je.projectFile);
-        check (cloud::createCloudProject (joel, joelStore, "Jam").wasOk() && joelStore.isLinked(), "shares the project");
-        auto s1 = cloud::Snapshot::capture (je);
-        auto p1 = cloud::push (joel, joelStore, s1, {}, "First take", {});
-        check (p1.result.wasOk() && p1.revision.seq == 1 && joelStore.getBase() == p1.revision.id, "pushes r1");
+        cloud::LocalStore maraStore (maraEdit.projectFile);
+        check (cloud::createCloudProject (mara, maraStore, "Jam").wasOk() && maraStore.isLinked(), "shares the project");
+        auto s1 = cloud::Snapshot::capture (maraEdit);
+        auto p1 = cloud::push (mara, maraStore, s1, {}, "First take", {});
+        check (p1.result.wasOk() && p1.revision.seq == 1 && maraStore.getBase() == p1.revision.id, "pushes r1");
         cloud::ApiError err;
+        // Sharing is only between friends: Mara asks, Dev accepts (asking back accepts).
+        {
+            DynamicObject::Ptr ask = new DynamicObject();
+            ask->setProperty ("email", devEmail);
+            mara.call ("POST", "/v2/friends", var (ask.get()), err);
+            DynamicObject::Ptr back = new DynamicObject();
+            back->setProperty ("email", maraEmail);
+            const auto r = dev.call ("POST", "/v2/friends", var (back.get()), err);
+            check (err.status == 0 && r["status"].toString() == "friends", "Mara and Dev become friends (" + err.message + ")");
+        }
         DynamicObject::Ptr share = new DynamicObject();
-        share->setProperty ("email", terryEmail);
-        joel.call ("POST", "/projects/" + joelStore.getProjectId() + "/members", var (share.get()), err);
-        check (err.status == 0, "shares it with Terry");
+        share->setProperty ("email", devEmail);
+        mara.call ("POST", "/projects/" + maraStore.getProjectId() + "/members", var (share.get()), err);
+        check (err.status == 0, "shares it with Dev");
 
-        // Terry gets it.
-        const auto terryDir = dir.getChildFile ("cloud-terry/Jam");
-        terryDir.createDirectory();
-        cloud::LocalStore terryStore (terryDir.getChildFile ("Jam.lathe"));
-        terryStore.link (joelStore.getProjectId(), "Jam");
-        auto pulled = cloud::pull (terry, terryStore, {});
-        check (pulled.result.wasOk() && pulled.newRevisions.size() == 1 && pulled.head == p1.revision.id, "Terry pulls r1");
-        var terryProject;
-        check (cloud::prepareRevision (&terry, terryStore, pulled.newRevisions[0], terryProject, {}).wasOk(), "r1 is ready to open");
+        // Dev gets it.
+        const auto devDir = dir.getChildFile ("cloud-dev/Jam");
+        devDir.createDirectory();
+        cloud::LocalStore devStore (devDir.getChildFile ("Jam.lathe"));
+        devStore.link (maraStore.getProjectId(), "Jam");
+        auto pulled = cloud::pull (dev, devStore, {});
+        check (pulled.result.wasOk() && pulled.newRevisions.size() == 1 && pulled.head == p1.revision.id, "Dev pulls r1");
+        var devProject;
+        check (cloud::prepareRevision (&dev, devStore, pulled.newRevisions[0], devProject, {}).wasOk(), "r1 is ready to open");
         Edit te;
-        te.projectFile = terryStore.getProjectFile();
-        te.workDir = terryDir;
-        te.loadFrom (terryProject, terryDir, factory);
-        terryStore.setBase (p1.revision.id);
+        te.projectFile = devStore.getProjectFile();
+        te.workDir = devDir;
+        te.loadFrom (devProject, devDir, factory);
+        devStore.setBase (p1.revision.id);
         check (te.tracks.size() == 1 && te.tracks[0]->clips.size() == 1
-                 && te.tracks[0]->clips[0].file == terryDir.getChildFile ("Audio/Hats 1.wav")
+                 && te.tracks[0]->clips[0].file == devDir.getChildFile ("Audio/Hats 1.wav")
                  && cloud::sha256OfFile (te.tracks[0]->clips[0].file) == cloud::sha256OfFile (take.file),
-               "Terry has the take, byte for byte, in his Audio folder");
+               "Dev has the take, byte for byte, in his Audio folder");
 
-        // Terry turns the hats down and pushes r2.
+        // Dev turns the hats down and pushes r2.
         te.tracks[0]->volumeDb = -6.0f;
         auto ts = cloud::Snapshot::capture (te);
-        auto p2 = cloud::push (terry, terryStore, ts, terryStore.getBase(), "Hats down", {});
+        auto p2 = cloud::push (dev, devStore, ts, devStore.getBase(), "Hats down", {});
         check (p2.result.wasOk() && p2.revision.seq == 2 && p2.revision.summary.contains ("fader 0.0 dB -> -6.0 dB"),
-               "Terry pushes r2 with a summary: " + p2.revision.summary);
+               "Dev pushes r2 with a summary: " + p2.revision.summary);
 
-        // Joel pans them meanwhile: his push is refused, not merged over Terry's.
-        je.tracks[0]->pan = -1.0f;
-        auto s3 = cloud::Snapshot::capture (je);
-        auto p3 = cloud::push (joel, joelStore, s3, joelStore.getBase(), "Hats left", {});
-        check (p3.conflict && p3.theirHead == p2.revision.id, "Joel's push is refused: Terry pushed first");
+        // Mara pans them meanwhile: his push is refused, not merged over Dev's.
+        maraEdit.tracks[0]->pan = -1.0f;
+        auto s3 = cloud::Snapshot::capture (maraEdit);
+        auto p3 = cloud::push (mara, maraStore, s3, maraStore.getBase(), "Hats left", {});
+        check (p3.conflict && p3.theirHead == p2.revision.id, "Mara's push is refused: Dev pushed first");
 
-        // Joel keeps his version, pulls Terry's, looks at it, then goes back to his own.
-        const auto mine = cloud::keepWorkingCopy (joelStore, s3, joelEmail, "My work before opening r2");
-        auto jp = cloud::pull (joel, joelStore, {});
-        check (jp.result.wasOk() && jp.newRevisions.size() == 1, "Joel pulls r2");
+        // Mara keeps his version, pulls Dev's, looks at it, then goes back to his own.
+        const auto mine = cloud::keepWorkingCopy (maraStore, s3, maraEmail, "My work before opening r2");
+        auto jp = cloud::pull (mara, maraStore, {});
+        check (jp.result.wasOk() && jp.newRevisions.size() == 1, "Mara pulls r2");
         var theirs;
-        cloud::prepareRevision (&joel, joelStore, jp.newRevisions[0], theirs, {});
+        cloud::prepareRevision (&mara, maraStore, jp.newRevisions[0], theirs, {});
         check (std::abs ((double) theirs["tracks"][0]["volume"] + 6.0) < 0.01 && std::abs ((double) theirs["tracks"][0]["pan"]) < 0.01,
-               "r2 has Terry's fader and not Joel's pan");
+               "r2 has Dev's fader and not Mara's pan");
         var back;
-        cloud::prepareRevision (nullptr, joelStore, mine, back, {});
-        check (std::abs ((double) back["tracks"][0]["pan"] + 1.0) < 0.01, "Joel's own version is still there, offline");
+        cloud::prepareRevision (nullptr, maraStore, mine, back, {});
+        check (std::abs ((double) back["tracks"][0]["pan"] + 1.0) < 0.01, "Mara's own version is still there, offline");
 
-        // Joel decides his pan goes on top of Terry's revision: r3.
-        auto p4 = cloud::push (joel, joelStore, s3, p2.revision.id, "Hats left, on top of Terry's", {});
+        // Mara decides his pan goes on top of Dev's revision: r3.
+        auto p4 = cloud::push (mara, maraStore, s3, p2.revision.id, "Hats left, on top of Dev's", {});
         check (p4.result.wasOk() && p4.revision.seq == 3 && p4.revision.parent == p2.revision.id
                  && p4.revision.summary.contains ("fader -6.0 dB -> 0.0 dB") && p4.revision.summary.contains ("pan C -> 50L"),
-               "pushes r3 on top, and the summary is against Terry's r2");
+               "pushes r3 on top, and the summary is against Dev's r2");
         int uploads = -1;
-        joel.upload (joelStore.getProjectId(), { { cloud::sha256OfFile (take.file), take.file, {} } }, {}, uploads);
+        mara.upload (maraStore.getProjectId(), { { cloud::sha256OfFile (take.file), take.file, {} } }, {}, uploads);
         check (uploads == 0, "the take was only ever uploaded once");
 
         // Several files at once, plus a big one in pieces; dropped connections are retried.
@@ -2314,16 +2325,16 @@ int main (int argc, char** argv)
                 back.push_back ({ batch.back().hash, batchDir.getChildFile ("back/long-take.wav") });
             }
 
-            joel.setParallelTransfers (4);
+            mara.setParallelTransfers (4);
             cloud::testing::dropNextTransfers (2);
             std::vector<double> seen;
             int sent = 0;
-            const auto r = joel.upload (joelStore.getProjectId(), batch, [&] (double p) { seen.push_back (p); return true; }, sent);
+            const auto r = mara.upload (maraStore.getProjectId(), batch, [&] (double p) { seen.push_back (p); return true; }, sent);
             check (r.wasOk() && sent == 7, "uploads 7 files, 4 at a time, through 2 dropped connections (" + r.getErrorMessage() + ")");
             check (! seen.empty() && seen.back() == 1.0 && std::is_sorted (seen.begin(), seen.end()), "progress only goes forward and ends at 100%");
 
             cloud::testing::dropNextTransfers (1);
-            const auto d = joel.download (joelStore.getProjectId(), back, {});
+            const auto d = mara.download (maraStore.getProjectId(), back, {});
             bool same = d.wasOk();
             for (size_t i = 0; i < back.size() && same; ++i)
                 same = cloud::sha256OfFile (back[i].second) == batch[i].hash;
@@ -2333,7 +2344,7 @@ int main (int argc, char** argv)
             std::vector<std::pair<String, File>> again;
             for (auto& [h, f] : back)
                 again.push_back ({ h, f.getSiblingFile ("again-" + f.getFileName()) });
-            const auto c = joel.download (joelStore.getProjectId(), again, [] (double) { return false; });
+            const auto c = mara.download (maraStore.getProjectId(), again, [] (double) { return false; });
             check (c.failed() && c.getErrorMessage() == "Cancelled.", "a transfer can be stopped");
         }
 
@@ -2341,6 +2352,114 @@ int main (int argc, char** argv)
         cloud::Client nobody (config);
         nobody.call ("GET", "/projects", {}, err);
         check (err.status == 401, "the API refuses anyone not signed in");
+
+        // Signing out and in.
+        {
+            cloud::Client c (config);
+            const auto g0 = c.getAccountGeneration();
+            check (c.signIn (maraEmail, maraPass, {}).wasOk() && c.getAccountGeneration() != g0, "signing in starts a new account generation");
+            const auto g1 = c.getAccountGeneration();
+            c.call ("GET", "/me", {}, err);
+            check (err.status == 0 && c.getAccountGeneration() == g1, "an API call (and any token refresh) keeps it");
+
+            const auto token = c.getSession().refreshToken;
+            c.signOut();
+            check (! c.isSignedIn() && c.getSession().idToken.isEmpty() && c.getAccountGeneration() != g1,
+                   "signing out forgets the session and moves the generation on");
+            c.call ("GET", "/me", {}, err);
+            check (err.status == 401, "after signing out the API refuses the calls");
+
+            // A refresh that was already on its way when you signed out doesn't sign you back in.
+            for (int i = 0; i < 5; ++i)
+            {
+                check (c.signIn (maraEmail, maraPass, {}).wasOk(), "signs in again");
+                auto s = c.getSession();
+                s.expiresAtMs = 0;                    // the next call refreshes the token
+                c.setSession (s);
+                std::thread t ([&c] { cloud::ApiError e; c.call ("GET", "/me", {}, e); });
+                c.signOut();
+                t.join();
+                if (c.isSignedIn() || c.getSession().idToken.isNotEmpty())
+                {
+                    check (false, "a refresh finishing after sign-out is dropped");
+                    break;
+                }
+            }
+            check (! c.isSignedIn(), "a refresh finishing after sign-out is dropped (5 tries)");
+
+            // Sign-out on the server: the old refresh token stops working. (The local stand-in for
+            // Cognito, moto, doesn't have RevokeToken; real Cognito does, with revocation enabled.)
+            if (const auto rv = c.revoke (token); rv.failed())
+                std::cout << "  (server-side sign-out not checked: this Cognito can't revoke tokens: "
+                          << rv.getErrorMessage().substring (0, 60) << ")" << std::endl;
+            else
+            {
+                cloud::Session old;
+                old.email = maraEmail;
+                old.refreshToken = token;
+                c.setSession (old);
+                c.call ("GET", "/me", {}, err);
+                check (err.status == 401 && ! c.isSignedIn(), "a revoked sign-in can't be used again");
+            }
+        }
+
+        // The Cloud menu and the account state behind it (what you see in Lathe).
+        {
+            std::cout << "Cloud: the Cloud menu, signing out" << std::endl;
+            PropertiesFile cloudProps (dir.getChildFile ("cloud-ui.settings"), opts);
+            {
+                cloud::Client c (config);
+                c.signIn (maraEmail, maraPass, {});
+                cloudProps.setValue ("cloudRefreshToken", c.getSession().refreshToken);   // as if signed in last time
+                cloudProps.setValue ("cloudEmail", maraEmail);
+            }
+            AppContext uiCtx { edit, engine, host, pool, cloudProps };
+            int menuChanges = 0;
+            StringArray statuses;
+            CloudController::Hooks hooks;
+            hooks.setStatus = [&] (const String& s) { statuses.add (s); };
+            hooks.menuChanged = [&] { ++menuChanges; };
+            hooks.projectsDir = [&] { return dir; };
+            CloudController cc (uiCtx, cloudProps, hooks);
+
+            auto menuText = [&]
+            {
+                PopupMenu m;
+                cc.addMenuItems (m);
+                StringArray items;
+                for (PopupMenu::MenuItemIterator it (m); it.next();)
+                    items.add (it.getItem().text);
+                return items.joinIntoString (" | ");
+            };
+            auto pumpUntil = [] (std::function<bool()> done, int ms)
+            {
+                const auto end = Time::getMillisecondCounter() + (uint32) ms;
+                while (! done() && Time::getMillisecondCounter() < end)
+                    MessageManager::getInstance()->runDispatchLoopUntil (20);
+                return done();
+            };
+
+            check (cc.isSignedIn() && menuText().contains ("Signed in as " + maraEmail) && menuText().contains ("Sign Out"),
+                   "a saved sign-in is restored, and the menu says who (" + menuText() + ")");
+            // The first check-in (plan, friend requests) happens a second after start-up.
+            check (pumpUntil ([&] { return cc.getPlanName().isNotEmpty(); }, 8000), "the plan arrives (" + cc.getPlanName() + ")");
+            const int before = menuChanges;
+            check (before > 0 && menuText().contains ("(" + cc.getPlanName() + ")"), "and the menu was told to show it");
+
+            // An answer still on its way when you sign out is dropped.
+            bool late = false;
+            cc.request ("GET", "/me", {}, [&] (const var&, const cloud::ApiError&) { late = true; });
+            cc.signOut();
+            check (! cc.isSignedIn() && menuChanges > before, "Sign Out signs out and rebuilds the menu");
+            check (menuText().contains ("Sign In...") && ! menuText().contains ("Signed in as") && ! menuText().contains ("Sign Out"),
+                   "the menu offers Sign In again (" + menuText() + ")");
+            check (cc.getPlanName().isEmpty() && cc.getEmail().isEmpty(), "the last account's plan and email are forgotten");
+            check (cloudProps.getValue ("cloudRefreshToken").isEmpty(), "the saved sign-in is deleted");
+            check (statuses.joinIntoString ("\n").contains ("Signed out of Lathe Cloud (" + maraEmail + ")"), "the status bar says so");
+            pumpUntil ([] { return false; }, 1500);
+            check (! late, "an answer meant for the signed-out account is dropped");
+            check (! cc.isSignedIn() && cloudProps.getValue ("cloudRefreshToken").isEmpty(), "and nothing signs back in afterwards");
+        }
     }
     else
     {

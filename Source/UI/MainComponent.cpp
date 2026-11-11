@@ -168,6 +168,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     hooks.confirmDiscard = [this] (std::function<void()> proceed) { confirmDiscard (std::move (proceed)); };
     hooks.setStatus = [this] (const String& m) { setStatus (m); };
     hooks.projectsDir = [] { return getProjectsDir(); };
+    hooks.menuChanged = [this] { menuItemsChanged(); };
     cloud = std::make_unique<CloudController> (ctx, settings, hooks);
     cloud->screenshotMode = forScreenshots;
     addAndMakeVisible (cloud->getStatusComponent());

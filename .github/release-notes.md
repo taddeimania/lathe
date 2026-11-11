@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.10.3
+
+- **Signing out of Lathe Cloud works properly.** On the Mac the Cloud menu didn't update after
+  you signed in or out, so it kept showing the old account. It now changes straight away, along
+  with your plan and friend requests. Signing out also ends the sign-in on the server, forgets
+  that account's plan, friend requests and song roles, and closes its Projects and Friends windows.
+- Signing in fetches your plan, friend requests and your role on the open song right away,
+  instead of up to two minutes later.
+- An answer from Lathe Cloud that arrives after you've signed out (or in as someone else) is
+  ignored, so the old account's projects or friends can't reappear.
+- An open Friends window updates when a friend request arrives.
+
 ## New in 0.10.2
 
 - **Fixed (Mac): a crash when changing audio devices.** With the input and output on

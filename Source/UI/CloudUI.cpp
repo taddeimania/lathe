@@ -197,6 +197,7 @@ private:
             {
                 safe->owner.settings.setValue ("cloudEmail", mail);
                 safe->owner.ctx.showStatus ("Signed in as " + mail);
+                safe->owner.accountChanged();
                 auto next = safe->then;
                 safe->close();
                 if (next)
@@ -475,15 +476,30 @@ void CloudController::makeClient()
         {
             if (auto* self = weak.get())
             {
-                self->settings.setValue ("cloudRefreshToken", s.refreshToken);
-                if (s.email.isNotEmpty())
-                    self->settings.setValue ("cloudEmail", s.email);
+                // Save what the client holds now: a newer change may have overtaken this one.
+                const auto now = self->client->getSession();
+                if (now.refreshToken.isNotEmpty())
+                    self->settings.setValue ("cloudRefreshToken", now.refreshToken);
+                else
+                    self->settings.removeValue ("cloudRefreshToken");
+                if (now.email.isNotEmpty())
+                    self->settings.setValue ("cloudEmail", now.email);
+                ignoreUnused (s);
+                if (self->accountActive && ! now.isSignedIn())
+                {
+                    self->accountActive = false;
+                    // Signed out without asking (the sign-in expired): same clean-up as Sign Out.
+                    self->forgetAccount();
+                    self->closeAccountWindows();
+                    self->hooks.setStatus ("Your Lathe Cloud sign-in expired. Sign in again from the Cloud menu.");
+                }
                 self->updateStatus();
             }
         });
     };
     client->setParallelTransfers (settings.getIntValue ("cloudParallel", 4));
     restoreSession();
+    accountActive = client->isSignedIn();
     updateStatus();
 }
 
@@ -572,6 +588,20 @@ void CloudController::updateStatus()
             text << "  ·  view only";
     }
     const bool attention = busy || waitingHead.isNotEmpty() || (isLinked() && (isUnfinishedShare() || lostAccess));
+
+    // The Cloud menu shows this state; on the Mac it only rebuilds when told, so tell it when
+    // anything in it changes (and only then: this runs on every progress tick).
+    String menu;
+    menu << (int) isSignedIn() << "|" << getEmail() << "|" << planName << "|" << (int) busy.load() << "|"
+         << (int) isLinked() << "|" << (int) lostAccess << "|" << songRole << "|" << (int) waitingHead.isNotEmpty() << "|"
+         << friendRequests << "|" << (int) isUnfinishedShare() << "|" << (store != nullptr ? store->getCloudName() : String());
+    if (menu != menuState)
+    {
+        menuState = menu;
+        if (hooks.menuChanged)
+            hooks.menuChanged();
+    }
+
     status->setText (text, dontSendNotification);
     status->setColour (Label::textColourId, attention ? theme::accent : theme::textDim);
     status->setTooltip (busy ? String ("Working... Keep Lathe open until this finishes.")
@@ -749,9 +779,55 @@ void CloudController::showSignIn (std::function<void()> then)
 
 void CloudController::signOut()
 {
+    const auto session = client->getSession();
     client->signOut();
     settings.removeValue ("cloudRefreshToken");
-    hooks.setStatus ("Signed out of the cloud.");
+
+    // Tell the server too, so this login can't be used again even if the token is copied.
+    if (session.refreshToken.isNotEmpty())
+    {
+        auto c = client;
+        apiWorker.addJob ([c, token = session.refreshToken] { c->revoke (token); });
+    }
+
+    accountActive = false;
+    forgetAccount();
+    closeAccountWindows();
+    hooks.setStatus (session.email.isNotEmpty() ? "Signed out of Lathe Cloud (" + session.email + ")."
+                                                : String ("Signed out of Lathe Cloud."));
+    updateStatus();
+}
+
+void CloudController::forgetAccount()
+{
+    planName = {};
+    revisionsKept = 0;
+    friendRequests = 0;
+    songRole = songProjectName = {};
+    lostAccess = false;
+    oldServer = false;
+    waitingHead = waitingText = {};
+}
+
+void CloudController::closeAccountWindows()
+{
+    if (auto* w = library.getComponent())
+        delete w;
+    if (auto* w = friends.getComponent())
+        delete w;
+}
+
+void CloudController::accountChanged()
+{
+    accountActive = isSignedIn();
+    forgetAccount();
+    closeAccountWindows();
+    pollAccount();                              // plan and friend requests now, not in two minutes
+    if (isLinked() && ! busy)
+        poll();                                 // your role on the open song (owner, editor, viewer)
+    if (history != nullptr)
+        if (auto* w = dynamic_cast<HistoryWindow*> (history.getComponent()))
+            w->refresh();
     updateStatus();
 }
 
@@ -1195,17 +1271,21 @@ void CloudController::request (const String& method, const String& path, const v
                                std::function<void (const var&, const cloud::ApiError&)> done)
 {
     auto c = client;
+    const auto account = client->getAccountGeneration();
     WeakReference<CloudController> weak (this);
-    apiWorker.addJob ([c, method, path, body, weak, onDone = std::move (done)]() mutable
+    apiWorker.addJob ([c, method, path, body, weak, account, onDone = std::move (done)]() mutable
     {
         cloud::ApiError err;
         // An empty POST still sends a body, so every platform's HTTP stack treats it as a POST.
         const auto sendBody = body.isVoid() && method != "GET" && method != "DELETE" ? var (new DynamicObject()) : body;
         auto resp = c->call (method, path, sendBody, err);
-        MessageManager::callAsync ([weak, resp, err, callback = std::move (onDone)]
+        MessageManager::callAsync ([weak, resp, err, account, callback = std::move (onDone)]
         {
             auto* self = weak.get();
             if (self == nullptr)
+                return;
+            // Asked as someone else (signed out or in since): this answer isn't for the current account.
+            if (self->client->getAccountGeneration() != account)
                 return;
             if (self->isOldServer (err))
                 self->oldServer = true;
@@ -1258,6 +1338,7 @@ void CloudController::pollAccount()
             return;
         planName = resp["planName"].toString();
         revisionsKept = (int) resp["limits"]["revisions"];
+        updateStatus();   // the menu shows the plan
     });
     request ("GET", "/v2/friends", {}, [this] (const var& resp, const cloud::ApiError& err)
     {
@@ -1268,6 +1349,9 @@ void CloudController::pollAccount()
         friendRequests = incoming != nullptr ? incoming->size() : 0;
         if (friendRequests > before && incoming != nullptr)
             hooks.setStatus ("Friend request from " + incoming->getLast()["email"].toString() + ". See Cloud > Friends.");
+        if (friendRequests != before)
+            reloadFriendsWindow();   // keep an open Friends window in step
+        updateStatus();       // the menu shows the count
     });
     request ("GET", "/v2/notices", {}, [this] (const var& resp, const cloud::ApiError& err)
     {
@@ -1316,20 +1400,26 @@ void CloudController::poll()
     auto songErr = std::make_shared<cloud::ApiError>();
 
     busy = true;
+    const auto account = client->getAccountGeneration();
     WeakReference<CloudController> weak (this);
-    worker.addJob ([c, id, latest, err, song, songErr, weak]
+    worker.addJob ([c, id, latest, err, song, songErr, weak, account]
     {
         // Our role (and whether we still have the song at all), then the newest revision.
         *song = c->call ("GET", "/v2/songs/" + id, {}, *songErr);
         *latest = c->call ("GET", "/projects/" + id + "/revisions?limit=1", {}, *err);
-        MessageManager::callAsync ([weak, latest, err, song, songErr]
+        MessageManager::callAsync ([weak, latest, err, song, songErr, account, id]
         {
             auto* self = weak.get();
             if (self == nullptr)
                 return;
             self->busy = false;
-            if (self->store == nullptr)
+            // Another account, or another song opened since we asked: not ours to show.
+            if (self->store == nullptr || self->client->getAccountGeneration() != account
+                || self->store->getProjectId() != id)
+            {
+                self->updateStatus();
                 return;
+            }
 
             if (songErr->status == 0)
             {

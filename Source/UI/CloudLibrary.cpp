@@ -197,7 +197,6 @@ private:
             leaveButton.onClick = [this] { leave(); };
 
             setSize (860, 560);
-            api ("GET", "/me", {}, [this] (const var& me, const cloud::ApiError&) { mySub = me["sub"].toString(); });
             reload();
         }
 
@@ -252,6 +251,8 @@ private:
                 showMessage ("Sign in to see your projects (Cloud > Sign In).");
                 return;
             }
+            // Who "me" is, for Leave: asked again each time, so it's never another account's.
+            api ("GET", "/me", {}, [this] (const var& me, const cloud::ApiError& err) { if (err.status == 0) mySub = me["sub"].toString(); });
             api ("GET", "/v2/library", {}, [this] (const var& lib, const cloud::ApiError& err)
             {
                 if (err.status != 0)
@@ -824,6 +825,13 @@ private:
 
         void reload()
         {
+            if (! cc.isSignedIn())
+            {
+                rows.clear();
+                addHeading ("Sign in to see your friends (Cloud > Sign In).");
+                layoutRows();
+                return;
+            }
             api ("GET", "/v2/friends", {}, [this] (const var& resp, const cloud::ApiError& err)
             {
                 rows.clear();
@@ -1037,6 +1045,12 @@ void CloudController::showFriends()
     auto* w = new FriendsWindow (*this);
     friends = w;
     w->setVisible (true);
+}
+
+void CloudController::reloadFriendsWindow()
+{
+    if (auto* w = dynamic_cast<FriendsWindow*> (friends.getComponent()))
+        w->reload();
 }
 
 void CloudController::refreshWindows()
