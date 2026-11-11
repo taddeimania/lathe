@@ -1,0 +1,74 @@
+--- a/modules/juce_audio_devices/native/juce_CoreAudio_mac.cpp
++++ b/modules/juce_audio_devices/native/juce_CoreAudio_mac.cpp
+@@ -331,11 +331,25 @@
+         pa.mScope = kAudioObjectPropertyScopeWildcard;
+         pa.mElement = kAudioObjectPropertyElementWildcard;
+ 
++        {
++            const std::lock_guard<std::mutex> lock (liveInstancesLock());   // [Lathe]
++            liveInstances().insert (this);
++        }
++
+         AudioObjectAddPropertyListener (deviceID, &pa, deviceListenerProc, this);
+     }
+ 
+     ~CoreAudioInternal() override
+     {
++        // [Lathe] Core Audio can be part-way through deviceListenerProc for this device on its own
++        // queue while we're destroyed here, and removing the listener doesn't wait for that call.
++        // Taking this object out of the live set under the lock waits for a call in progress and
++        // makes any later one a no-op, so a listener never touches a deleted object.
++        {
++            const std::lock_guard<std::mutex> lock (liveInstancesLock());
++            liveInstances().erase (this);
++        }
++
+         stopTimer();
+         cancelPendingUpdate();
+ 
+@@ -848,7 +862,10 @@
+     // called by callbacks (possibly off the main thread)
+     void deviceRequestedRestart()
+     {
+-        owner.restart();
++        // [Lathe] Was owner.restart() right here, on Core Audio's listener queue: with separate input
++        // and output devices that closed the AudioIODeviceCombiner from that thread while the
++        // message thread could be replacing the device, a use-after-free (EXC_BAD_ACCESS at 0x1).
++        restartRequested = true;
+         triggerAsyncUpdate();
+     }
+ 
+@@ -1235,10 +1252,20 @@
+ 
+     void handleAsyncUpdate() override
+     {
++        // [Lathe] A restart Core Audio asked for runs here, on the message thread, where closing
++        // and reopening devices (and the AudioIODeviceCombiner) can't race their destruction.
++        if (restartRequested.exchange (false))
++            owner.restart();
++
+         if (owner.deviceType != nullptr)
+             owner.deviceType->audioDeviceListChanged();
+     }
+ 
++    // [Lathe] The CoreAudioInternals that exist, for deviceListenerProc to check against.
++    static std::mutex& liveInstancesLock()                          { static std::mutex m; return m; }
++    static std::set<const CoreAudioInternal*>& liveInstances()      { static std::set<const CoreAudioInternal*> s; return s; }
++    std::atomic<bool> restartRequested { false };
++
+     static OSStatus audioIOProc (AudioDeviceID /*inDevice*/,
+                                  [[maybe_unused]] const AudioTimeStamp* inNow,
+                                  const AudioBufferList* inInputData,
+@@ -1256,6 +1283,12 @@
+                                         const AudioObjectPropertyAddress* pa,
+                                         void* inClientData)
+     {
++        // [Lathe] Held for the whole call, so the destructor waits for it (see ~CoreAudioInternal).
++        const std::lock_guard<std::mutex> lock (liveInstancesLock());
++
++        if (liveInstances().count (static_cast<const CoreAudioInternal*> (inClientData)) == 0)
++            return noErr;
++
+         auto& intern = *static_cast<CoreAudioInternal*> (inClientData);
+ 
+         const auto xruns = std::count_if (pa, pa + numAddresses, [] (const AudioObjectPropertyAddress& x)

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.10.1 LANGUAGES C CXX)
+project(Lathe VERSION 0.10.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,13 +19,18 @@ endif()
 set(LATHE_JUCE_DIR "" CACHE PATH "Optional local JUCE checkout")
 
 if(LATHE_JUCE_DIR)
+    # A local checkout isn't patched: apply cmake/juce-8.0.9-coreaudio-listener.patch to it yourself.
     add_subdirectory(${LATHE_JUCE_DIR} JUCE)
 else()
     include(FetchContent)
+    # The patch fixes a macOS crash in JUCE 8.0.9's Core Audio code (separate input and output
+    # devices, one of them changing): see the patch's comments. JUCE 9 rewrote that code.
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
         GIT_TAG        8.0.9
-        GIT_SHALLOW    TRUE)
+        GIT_SHALLOW    TRUE
+        PATCH_COMMAND  ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_SOURCE_DIR}/cmake/juce-8.0.9-coreaudio-listener.patch
+                       -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyPatch.cmake)
     FetchContent_MakeAvailable(JUCE)
 endif()
 

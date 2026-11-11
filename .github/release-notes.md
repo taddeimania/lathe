@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.10.2
+
+- **Fixed (Mac): a crash when changing audio devices.** With the input and output on
+  different devices (say the built-in microphone and headphones), switching one of them
+  could crash Lathe. The fix is in the audio device code Lathe is built on.
+
 ## New in 0.10.1
 
 - **Fixed: Poly Synth could burst to full volume at random.** Its chorus sometimes read
