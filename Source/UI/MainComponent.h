@@ -37,6 +37,10 @@ public:
     void openWelcomeSong();
     void save (std::function<void (bool)> done = {});
     void saveAs (std::function<void (bool)> done = {});
+    /** Save As to this file without asking: Name/Name.lathe in its own folder, audio copied in. */
+    void saveTo (const File& chosen, std::function<void (bool)> done = {});
+    /** Lets the AI assistant's tools make, open and save projects. */
+    void connectAssistantToProjects();
     void saveAsTemplate();
     /** Runs `proceed` once unsaved changes are saved or discarded (not if the user cancels). */
     void confirmDiscard (std::function<void()> proceed);

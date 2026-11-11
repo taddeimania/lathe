@@ -417,6 +417,75 @@ var toolDefinitions()
                          false, true));
     }
 
+    {
+        auto unsaved = prop ("string", "If the open project has unsaved changes: \"save\" them first (it must have been saved "
+                                       "before), or \"discard\" them. Without it, unsaved changes stop the call. Ask the person "
+                                       "before discarding anything");
+        tools.add (tool ("new_project", "New project",
+                         "Starts a new project, like File > New: empty (an audio track and a MIDI track) or from one of the "
+                         "person's templates by name. It replaces the open project, so unsaved changes stop it unless "
+                         "\"unsaved\" says what to do. The new project is Untitled until save_project gives it a name.",
+                         schema ({ { "template", prop ("string", "A template's name (File > New from Template lists them)") },
+                                   { "unsaved", unsaved } }),
+                         false, true));
+        tools.add (tool ("open_project", "Open a project",
+                         "Opens a project, like File > Open: by name from the projects folder (exact, or a unique part of it), "
+                         "or by path. Without either it lists the projects, newest first. It replaces the open project, so "
+                         "unsaved changes stop it unless \"unsaved\" says what to do.",
+                         schema ({ { "name", prop ("string", "A project in the projects folder") },
+                                   { "path", prop ("string", "Or the .lathe file (or its folder) anywhere") },
+                                   { "unsaved", unsaved } }),
+                         false, true));
+    }
+    tools.add (tool ("save_project", "Save the project",
+                     "Saves the open project. Without a name it saves where it is (Cmd/Ctrl+S); a project that's never been "
+                     "saved needs one. With a name it's saved as a new project, Name/Name.lathe in the projects folder, with "
+                     "its own Audio folder (audio it uses is copied in), like File > Save As. It never saves over another project.",
+                     schema ({ { "name", prop ("string", "Save as a new project with this name") } }),
+                     false));
+    tools.add (tool ("export_audio", "Export audio",
+                     "Renders the song to WAV files, like File > Export: the mix, and stems (a file per track and return) if "
+                     "asked. From the start to the end of the last clip unless bars are given. Lathe stops playing first. "
+                     "Files go in the project's Exports folder; the reply lists them with each one's length and, for the mix, "
+                     "its peak, true peak and integrated loudness (LUFS), so you can check the level.",
+                     schema ({ { "from_bar", prop ("number", "First bar (1-based)") },
+                               { "to_bar", prop ("number", "Where it ends (the bar it stops at)") },
+                               { "mix", prop ("boolean", "The stereo mix (default true)") },
+                               { "stems", prop ("boolean", "A file per track and return (default false)") },
+                               { "bit_depth", prop ("integer", "16, 24 (default) or 32 (float)") },
+                               { "tail_seconds", prop ("number", "Time after the end for reverb and delay tails, 0 to 30 (default 2)") } }),
+                     false));
+    tools.add (tool ("get_plugin_params", "Get a plug-in's settings",
+                     "Every setting a plug-in on a track publishes (Lathe's own devices and VST3s): number, name, id, the "
+                     "current value as the plug-in shows it, and either its choices (a menu or a switch) or its range "
+                     "(min, max and unit). Use search to find one in a plug-in with hundreds.",
+                     schema ({ { "track", prop ("string", "Track, return or \"Master\": name or id") },
+                               { "plugin", prop ("string", "The plug-in on it: name or 1-based position in the chain") },
+                               { "search", prop ("string", "Only settings whose name or id contains this") } },
+                             { "track", "plugin" }),
+                     true));
+    {
+        auto param = schema ({
+            { "param", object ({ { "type", var (Array<var> { "string", "integer" }) },
+                                 { "description", "The setting: its name, id or number from get_plugin_params" } }) },
+            { "value", object ({ { "type", var (Array<var> { "number", "string", "boolean" }) },
+                                 { "description", "A number in the setting's own units (Hz, dB, %, seconds; min to max), "
+                                                  "one of its choices by name (\"Simple 808\"), or true/false for a switch" } }) },
+            { "normalized", prop ("number", "Instead of value: 0 to 1 across the setting's whole range") } },
+            { "param" });
+        tools.add (tool ("set_plugin_params", "Change a plug-in's settings",
+                         "Turns a plug-in's knobs, flips its switches and picks from its menus: Lathe's own devices (a Drums kit, "
+                         "a synth's wave) and VST3s. Give every change for one plug-in in one call; if one can't be made, none are. "
+                         "Each change happens at once, as if turned by hand, and like a knob in Lathe it isn't an undo step: the "
+                         "reply gives each old value, so it can be put back. Check names and ranges with get_plugin_params first.",
+                         schema ({ { "track", prop ("string", "Track, return or \"Master\": name or id") },
+                                   { "plugin", prop ("string", "The plug-in on it: name or 1-based position in the chain") },
+                                   { "params", object ({ { "type", "array" }, { "items", param },
+                                                         { "description", "The settings to change, in order" } }) } },
+                                 { "track", "plugin", "params" }),
+                         false));
+    }
+
     tools.add (tool ("measure_performance", "Measure CPU use",
                      "Plays part of the project for real and times every audio block, the way a CPU meter does: mean, "
                      "99th-percentile and peak load (share of each block's deadline; over 100% is a dropout), blocks that "
@@ -453,7 +522,9 @@ StringArray protocolVersions()
 String instructions()
 {
     return "Lathe is a small DAW (digital audio workstation). These tools read the project that is open in Lathe, "
-           "control its transport, and change it (edit_session: each call is one undo step the person can take back). Positions are in bars (1-based) and beats. A MIDI track's notes go through its "
+           "control its transport, and change it (edit_session: each call is one undo step the person can take back). "
+           "They can also start, open and save projects and export audio; new_project and open_project replace the open "
+           "project, so they won't throw away unsaved changes unless told to. Positions are in bars (1-based) and beats. A MIDI track's notes go through its "
            "plug-ins in order: a generator plug-in (one that makes its own notes, like an arpeggiator or a sequencer) "
            "comes before the instrument it drives. A MIDI track can take its notes from another MIDI track, and an "
            "audio track can take another track's sound; tracks that take their input from somewhere only hear it "

@@ -186,7 +186,10 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
     // AI assistant (MCP) connection: off unless you turned it on (Options > AI Assistant).
     if (! forScreenshots)
+    {
         aiAssistant = std::make_shared<assistant::Service> (ctx);
+        connectAssistantToProjects();
+    }
 
     updateNotice = std::make_unique<UpdateNotice> (settings, [this] { openPatcher(); });
     updateNotice->onShowOrHide = [this] { resized(); };
@@ -576,53 +579,97 @@ void MainComponent::saveAs (std::function<void (bool)> done)
             if (done) done (false);
             return;
         }
-
-        // Every project gets its own folder: Name/Name.lathe, Name/Audio, Name/Exports.
-        const auto name = chosen.getFileNameWithoutExtension();
-        auto folder = chosen.getParentDirectory();
-        if (folder.getFileName() != name)
-            folder = folder.getChildFile (name);
-        folder.createDirectory();
-        const auto newFile = folder.getChildFile (name + kProjectExtension);
-        const auto audioDir = folder.getChildFile ("Audio");
-
-        // Bring all audio into the new folder so the project is self-contained.
-        std::map<String, File> copied;
-        int failures = 0;
-        for (auto& t : edit.tracks)
-        {
-            for (auto& c : t->clips)
-            {
-                if (c.kind != ClipKind::audio || ! c.file.existsAsFile() || c.file.isAChildOf (folder))
-                    continue;
-
-                const auto key = c.file.getFullPathName();
-                if (copied.find (key) == copied.end())
-                {
-                    audioDir.createDirectory();
-                    auto dest = audioDir.getChildFile (c.file.getFileName());
-                    if (dest.existsAsFile())
-                        dest = audioDir.getNonexistentChildFile (c.file.getFileNameWithoutExtension(), c.file.getFileExtension(), false);
-                    if (c.file.copyFileTo (dest))
-                        copied[key] = dest;
-                    else
-                    {
-                        ++failures;
-                        copied[key] = c.file;
-                    }
-                }
-                c.file = copied[key];
-            }
-        }
-
-        edit.projectFile = newFile;
-        edit.workDir = folder;
-        if (failures > 0)
-            setStatus (String (failures) + " audio file(s) couldn't be copied into the project folder.");
-
-        engine.rebuild();
-        save (done);
+        saveTo (chosen, done);
     });
+}
+
+void MainComponent::saveTo (const File& chosen, std::function<void (bool)> done)
+{
+    // Every project gets its own folder: Name/Name.lathe, Name/Audio, Name/Exports.
+    const auto name = chosen.getFileNameWithoutExtension();
+    auto folder = chosen.getParentDirectory();
+    if (folder.getFileName() != name)
+        folder = folder.getChildFile (name);
+    folder.createDirectory();
+    const auto newFile = folder.getChildFile (name + kProjectExtension);
+    const auto audioDir = folder.getChildFile ("Audio");
+
+    // Bring all audio into the new folder so the project is self-contained.
+    std::map<String, File> copied;
+    int failures = 0;
+    for (auto& t : edit.tracks)
+    {
+        for (auto& c : t->clips)
+        {
+            if (c.kind != ClipKind::audio || ! c.file.existsAsFile() || c.file.isAChildOf (folder))
+                continue;
+
+            const auto key = c.file.getFullPathName();
+            if (copied.find (key) == copied.end())
+            {
+                audioDir.createDirectory();
+                auto dest = audioDir.getChildFile (c.file.getFileName());
+                if (dest.existsAsFile())
+                    dest = audioDir.getNonexistentChildFile (c.file.getFileNameWithoutExtension(), c.file.getFileExtension(), false);
+                if (c.file.copyFileTo (dest))
+                    copied[key] = dest;
+                else
+                {
+                    ++failures;
+                    copied[key] = c.file;
+                }
+            }
+            c.file = copied[key];
+        }
+    }
+
+    edit.projectFile = newFile;
+    edit.workDir = folder;
+    if (failures > 0)
+        setStatus (String (failures) + " audio file(s) couldn't be copied into the project folder.");
+
+    engine.rebuild();
+    save (done);
+}
+
+void MainComponent::connectAssistantToProjects()
+{
+    // File > New, Open and Save for the AI assistant's tools: the same as the menu, without
+    // dialogs (the tools have already settled unsaved changes, and say what went wrong).
+    auto& hooks = aiAssistant->projectHooks();
+    hooks.newProject = [this] (const File& templateFile) -> String
+    {
+        newProject (templateFile);
+        updateTitle();
+        return {};
+    };
+    hooks.openProject = [this] (const File& file) -> String
+    {
+        const auto autosave = autosaveFileFor (file);
+        if (autosave.existsAsFile() && autosave.getLastModificationTime() > file.getLastModificationTime())
+            return "Lathe has autosaved changes to it that are newer than the saved project (it may have closed unexpectedly). "
+                   "Open it with File > Open, which asks whether to recover them.";
+        if (! JSON::parse (file).isObject())
+            return file.getFileName() + " isn't a readable Lathe project.";
+        loadProjectFile (file, file);
+        updateTitle();
+        return edit.projectFile == file ? String() : "Lathe couldn't read it.";
+    };
+    hooks.save = [this] (const File& saveAs) -> String
+    {
+        bool ok = false;
+        if (saveAs == File())
+        {
+            if (edit.projectFile == File())
+                return "it has never been saved, so it needs a name.";
+            save ([&ok] (bool r) { ok = r; });
+        }
+        else
+        {
+            saveTo (saveAs, [&ok] (bool r) { ok = r; });
+        }
+        return ok ? String() : "Lathe couldn't write " + (saveAs == File() ? edit.projectFile : saveAs).getFullPathName() + ".";
+    };
 }
 
 void MainComponent::saveAsTemplate()

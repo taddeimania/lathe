@@ -28,6 +28,9 @@ public:
     String desktopConfig() const;
     String claudeCodeCommand() const;
 
+    /** How the tools make, open and save projects: the app fills these in. */
+    Tools::ProjectHooks& projectHooks()   { return tools.project; }
+
 private:
     var callTool (const String& name, const var& args, const std::atomic<bool>& running);
     var callLongTool (const String& name, const var& args, const std::atomic<bool>& running);

@@ -28,6 +28,14 @@ What it can do:
 | `set_loop` | Sets the loop region (in bars) and turns it on, or turns it off. The loop is saved with the project, as when you drag the loop brackets. |
 | `list_plugins` | The plug-ins installed on this computer, each marked instrument, note generator or effect. |
 | `edit_session` | Builds or changes the session in one go: add, remove, rename and move tracks and returns; add, remove, move and bypass plug-ins; inputs (another track, an interface input, a MIDI device), outputs, sends, volume, pan, mute, solo, monitoring, arm, MIDI channel, tempo and time signature. All of it lands as one undo step, or, if one change can't be made, none of it does and the assistant is told why. |
+| `get_plugin_params` | Every setting a plug-in on a track publishes (Lathe's own devices and VST3s): name, id, current value, and its choices or its range. |
+| `set_plugin_params` | Turns a plug-in's knobs, flips its switches and picks from its menus ("Kit" to "Simple 808", Delay "Time" to 250 ms). Numbers are in the setting's own units. All the changes for one plug-in land, or none do. Like turning a knob by hand, it isn't an undo step; the reply gives the old values. |
+| `new_project` | Starts a new project, empty or from one of your templates by name, like File > New. |
+| `open_project` | Opens a project from your projects folder by name (or any project by path), like File > Open. Without a name it lists them, newest first. |
+| `save_project` | Saves the project. With a name it saves it as a new project in your projects folder (its own folder, audio copied in), like Save As; it never saves over another project. |
+| `export_audio` | Renders the mix (and stems, if asked) to WAV in the project's Exports folder, like File > Export, and reports each file's length and the mix's peak and loudness (LUFS). |
+
+New project and open project replace what's open, so if there are unsaved changes they stop and ask: the assistant has to say whether to save them first or throw them away. Ask it to check with you before it throws anything away.
 | `measure_performance` | Plays some bars for real and times every audio block, as the CPU meter does: average, worst 1 in 100, peak, blocks that missed their deadline, and each track's own cost with its plug-ins. It also notes the conditions: computer, CPU and cores, interface and buffer size. |
 | `compare_processing_cores` | The same bars on 1 core and on all cores, in turn (1, all, 1, all), side by side with the speed-up. Your Processing cores setting is put back afterwards. |
 

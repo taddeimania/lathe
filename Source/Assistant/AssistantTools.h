@@ -32,6 +32,18 @@ public:
         status bar so you can see what the assistant did. */
     var call (const String& name, const var& arguments, String& status);
 
+    /** File > New, Open and Save, which only the app can do (it owns the window, the recent
+        list and the cloud link). Each runs at once, with no dialogs, and returns what went
+        wrong, or nothing when it worked. The app sets them; tests set their own. */
+    struct ProjectHooks
+    {
+        std::function<String (const File& templateFile)> newProject;   // File() = a plain new project
+        std::function<String (const File&)> openProject;
+        std::function<String (const File& saveAs)> save;               // File() = save where it is
+        File projectsDir = getProjectsDir(), templatesDir = getTemplatesDir();
+    };
+    ProjectHooks project;
+
     /** How edit_session loads a plug-in. The app's own loader; tests put in their own. */
     std::function<std::shared_ptr<PluginSlot> (const PluginDescription&, String& error)> loadPlugin;
 
@@ -57,6 +69,16 @@ private:
     var setLoop (const var& args, String& status);
     var listPlugins (const var& args) const;
     var editSession (const var& args, String& status);
+    var newProject (const var& args, String& status);
+    var openProject (const var& args, String& status);
+    var saveProject (const var& args, String& status);
+    /** Before replacing the open project: what unsaved changes mean (args["unsaved"]). Empty if it's fine to go on. */
+    String settleUnsaved (const var& args, const String& doing);
+    /** The tool can't run while Lathe records, measures or exports. Empty if it can. */
+    String busyReason() const;
+    std::shared_ptr<Job> startExport (const var& args, var& immediate);
+    var getPluginParams (const var& args) const;
+    var setPluginParams (const var& args, String& status);
 
     /** The installed plug-in a name means: exact name first, then a unique partial match.
         Sets `error` (naming the candidates when it's ambiguous) and returns nothing otherwise. */
@@ -68,6 +90,8 @@ private:
     class Measurer;
     friend class Measurer;
     std::unique_ptr<Measurer> measurer;
+    class Exporter;
+    std::unique_ptr<Exporter> exporter;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
     void measurerFinished (const Measurer*);
 

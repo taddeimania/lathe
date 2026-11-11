@@ -2860,6 +2860,187 @@ int main (int argc, char** argv)
             e.commitUndoStep();
         }
 
+        // --- get_plugin_params / set_plugin_params, on Lathe's own Drums and Delay
+        {
+            Array<var> plugins { "Drums", "Delay" };
+            auto made = tools.call ("edit_session", args2 ({ { "changes", Array<var> { args2 ({ { "action", "add_track" }, { "kind", "midi" },
+                                                                                              { "name", "Knobs" }, { "plugins", plugins } }) } } }), status);
+            auto knobs = tools.findTrack ("Knobs");
+            check (! (bool) made["isError"] && knobs != nullptr && knobs->plugins.size() == 2 && knobs->plugins[0]->instance != nullptr,
+                   "a track with Drums and Delay for the settings tools (" + text (made) + ")");
+            if (knobs != nullptr && knobs->plugins.size() == 2 && knobs->plugins[0]->instance != nullptr)
+            {
+                auto* drums = knobs->plugins[0]->instance.get();
+                auto paramNamed = [] (AudioPluginInstance& inst, const String& name) -> AudioProcessorParameter*
+                {
+                    for (auto* p : inst.getParameters())
+                        if (p->getName (64) == name)
+                            return p;
+                    return nullptr;
+                };
+                auto* kit = paramNamed (*drums, "Kit");
+                auto* level = paramNamed (*drums, "Level");
+
+                const auto listed = JSON::parse (text (tools.call ("get_plugin_params", args2 ({ { "track", "knobs" }, { "plugin", "drums" } }), status)));
+                var kitInfo;
+                for (auto& p : *listed["parameters"].getArray())
+                    if (p["name"].toString() == "Kit")
+                        kitInfo = p;
+                check (listed["plugin"].toString() == "Drums" && kitInfo["value"].toString() == "Simple 909" && kitInfo["id"].toString() == "kit"
+                           && kitInfo["choices"].size() == 4 && kitInfo["choices"][1].toString() == "Simple 808",
+                       "get_plugin_params lists Drums' Kit with its id, value and choices");
+                check (JSON::parse (text (tools.call ("get_plugin_params", args2 ({ { "track", "Knobs" }, { "plugin", 1 }, { "search", "tune" } }), status)))["parameters"].size() == 3,
+                       "get_plugin_params: search narrows it, and the plug-in can be given by position");
+
+                auto change = [&] (var param, var value) { return args2 ({ { "param", param }, { "value", value } }); };
+                auto setParams = [&] (const String& plugin, Array<var> params)
+                {
+                    return tools.call ("set_plugin_params", args2 ({ { "track", "Knobs" }, { "plugin", plugin }, { "params", params } }), status);
+                };
+                status = {};
+                auto s = setParams ("Drums", { change ("kit", "simple 808"), change ("Level", -10.0) });
+                check (! (bool) s["isError"] && kit != nullptr && kit->getCurrentValueAsText() == "Simple 808"
+                           && level != nullptr && level->getCurrentValueAsText().startsWith ("-10")
+                           && text (s).contains ("Kit: Simple 909 -> Simple 808") && status.contains ("Drums on Knobs"),
+                       "set_plugin_params picks a kit by name and sets a level in dB, and says what each was (" + text (s) + ")");
+                s = setParams ("Drums", { change ("Kit", "Simple 606"), change ("Kit", "Simple 9000") });
+                check ((bool) s["isError"] && kit->getCurrentValueAsText() == "Simple 808" && text (s).contains ("Simple 707"),
+                       "a choice that doesn't exist changes nothing, not even the change before it, and lists the real ones");
+                s = setParams ("Drums", { change ("Level", 40.0) });
+                check (! (bool) s["isError"] && level->getCurrentValueAsText().startsWith ("+6") && text (s).contains ("outside"),
+                       "a number past the range is held at its end, and the reply says so (" + text (s) + ")");
+                s = setParams ("Drums", { change ("Snap", "75%") });
+                auto* snap = paramNamed (*drums, "Snap");
+                check (! (bool) s["isError"] && snap != nullptr && snap->getCurrentValueAsText() == "75%",
+                       "a percentage as text on a 0-1 control (" + text (s) + ")");
+                s = setParams ("Drums", { change ("tune", 2.0) });
+                check ((bool) s["isError"] && text (s).contains ("Kick tune"), "an ambiguous name asks which one");
+                s = setParams ("Delay", { change ("Time", 250.0) });
+                auto* time = paramNamed (*knobs->plugins[1]->instance, "Time");
+                check (! (bool) s["isError"] && time != nullptr && time->getCurrentValueAsText() == "250 ms",
+                       "Delay's time in milliseconds (" + text (s) + ")");
+                check ((bool) setParams ("Nope", { change ("Time", 1.0) })["isError"], "an unknown plug-in is an error");
+            }
+            if (knobs != nullptr)
+                e.removeTrack (knobs->id);
+            e.commitUndoStep();
+        }
+
+        // --- new_project / open_project / save_project, with stand-ins for the app's File menu
+        {
+            const auto pdir = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-tools-projects-" + String (Random::getSystemRandom().nextInt64()));
+            pdir.getChildFile ("Templates").createDirectory();
+            pdir.getChildFile ("Templates").getChildFile ("8-Input Tracking.lathe").replaceWithText ("{}");
+            for (auto name : { "Night Drive", "Night Bus", "Teaser 2" })
+                pdir.getChildFile (name).getChildFile (String (name) + ".lathe").create();
+            const auto oldFile = e.projectFile;
+            const auto oldDir = e.workDir;
+
+            StringArray calls;
+            tools.project.projectsDir = pdir;
+            tools.project.templatesDir = pdir.getChildFile ("Templates");
+            tools.project.save = [&] (const File& as) -> String
+            {
+                const auto f = as == File() ? e.projectFile : as;
+                f.getParentDirectory().createDirectory();
+                f.replaceWithText (JSON::toString (e.toVar (false)));
+                e.projectFile = f;
+                e.workDir = f.getParentDirectory();
+                e.dirty = false;
+                calls.add ("save " + (as == File() ? String ("(here)") : as.getParentDirectory().getFileName() + "/" + as.getFileName()));
+                return {};
+            };
+            tools.project.openProject = [&] (const File& f) -> String
+            {
+                calls.add ("open " + f.getFileNameWithoutExtension());
+                e.projectFile = f;
+                e.dirty = false;
+                return {};
+            };
+            tools.project.newProject = [&] (const File& tmpl) -> String
+            {
+                calls.add ("new " + (tmpl == File() ? String ("(empty)") : tmpl.getFileNameWithoutExtension()));
+                e.projectFile = File();
+                e.dirty = false;
+                return {};
+            };
+
+            e.projectFile = File();
+            e.dirty = true;
+            check ((bool) JSON::parse (text (tools.call ("describe_session", var (new DynamicObject()), status)))["unsaved_changes"],
+                   "describe_session says when there are unsaved changes");
+            auto r = tools.call ("save_project", args2 ({}), status);
+            check ((bool) r["isError"] && text (r).contains ("give it a name") && calls.isEmpty(), "save_project on a never-saved project asks for a name");
+            r = tools.call ("save_project", args2 ({ { "name", "Teaser 2" } }), status);
+            check ((bool) r["isError"] && text (r).contains ("already a project") && calls.isEmpty(), "...and won't save over another project");
+            r = tools.call ("save_project", args2 ({ { "name", "Odd Bounce 7/8" } }), status);
+            check (! (bool) r["isError"] && calls.joinIntoString ("|") == "save Odd Bounce 78/Odd Bounce 78.lathe" && ! e.dirty,
+                   "save_project with a name saves it as Name/Name.lathe in the projects folder (" + calls.joinIntoString ("|") + ")");
+            calls.clear();
+            e.dirty = true;
+            r = tools.call ("save_project", args2 ({ { "name", "odd bounce 78" } }), status);
+            check (! (bool) r["isError"] && calls.joinIntoString ("|") == "save (here)", "its own name again is an ordinary save");
+
+            calls.clear();
+            e.dirty = true;
+            r = tools.call ("open_project", args2 ({ { "name", "drive" } }), status);
+            check ((bool) r["isError"] && text (r).contains ("unsaved changes") && calls.isEmpty(),
+                   "open_project won't replace unsaved changes unless told what to do with them");
+            r = tools.call ("open_project", args2 ({ { "name", "drive" }, { "unsaved", "save" } }), status);
+            check (! (bool) r["isError"] && calls.joinIntoString ("|") == "save (here)|open Night Drive",
+                   "unsaved \"save\" saves first, then opens (by a unique part of the name)");
+            calls.clear();
+            r = tools.call ("open_project", args2 ({ { "name", "night" } }), status);
+            check ((bool) r["isError"] && text (r).contains ("Night Bus") && calls.isEmpty(), "an ambiguous name lists what it could be");
+            r = tools.call ("open_project", args2 ({}), status);
+            check ((bool) r["isError"] && text (r).contains ("Teaser 2"), "without a name it lists the projects");
+            r = tools.call ("open_project", args2 ({ { "name", "Night Drive" } }), status);
+            check (! (bool) r["isError"] && text (r).contains ("already open") && calls.isEmpty(), "opening what's already open does nothing");
+
+            e.dirty = true;
+            r = tools.call ("new_project", args2 ({ { "template", "nope" } }), status);
+            check ((bool) r["isError"] && text (r).contains ("8-Input Tracking") && calls.isEmpty(), "new_project names the templates there are");
+            r = tools.call ("new_project", args2 ({ { "template", "8-input" }, { "unsaved", "discard" } }), status);
+            check (! (bool) r["isError"] && calls.joinIntoString ("|") == "new 8-Input Tracking" && text (r).contains ("Untitled"),
+                   "new_project from a template, discarding the changes when told to");
+            calls.clear();
+            e.dirty = true;
+            r = tools.call ("new_project", args2 ({ { "unsaved", "save" } }), status);
+            check ((bool) r["isError"] && text (r).contains ("never been saved") && calls.isEmpty(),
+                   "\"save\" on a project that was never saved stops, rather than losing it");
+
+            e.projectFile = oldFile;
+            e.workDir = oldDir;
+            e.dirty = false;
+            tools.project = {};
+            pdir.deleteRecursively();
+        }
+
+        // --- export_audio: a background render, then the mix's level
+        {
+            const auto oldDir = e.workDir;
+            e.workDir = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-tools-export-" + String (Random::getSystemRandom().nextInt64()));
+            var immediate;
+            auto job = tools.startLongTool ("export_audio", args2 ({ { "from_bar", 1 }, { "to_bar", 2 }, { "stems", true }, { "tail_seconds", 0 } }), immediate);
+            check (job != nullptr, "export_audio starts" + (job == nullptr ? " (" + text (immediate) + ")" : String()));
+            if (job != nullptr)
+            {
+                for (int i = 0; i < 6000 && ! job->done.wait (0); ++i)
+                    MessageManager::getInstance()->runDispatchLoopUntil (20);
+                const auto out = job->done.wait (0) ? JSON::parse (text (job->result)) : var();
+                const auto* files = out["files"].getArray();
+                check (job->done.wait (0) && ! (bool) job->result["isError"] && files != nullptr && files->size() >= 1
+                           && std::abs ((double) (*files)[0]["seconds"] - 2.0) < 0.05 && ((*files)[0].hasProperty ("integrated_lufs") || (*files)[0]["level"].toString() == "silent") && File (out["folder"].toString()).isDirectory(),
+                       "export_audio writes to the Exports folder, with lengths and the mix's level ("
+                           + (job->done.wait (0) ? text (job->result).substring (0, 300) : String ("still running")) + ")");
+                var again;
+                check (tools.startLongTool ("export_audio", args2 ({ { "from_bar", 3 }, { "to_bar", 2 } }), again) == nullptr
+                           && text (again).contains ("after from_bar"), "bars the wrong way round are an error");
+            }
+            e.workDir.deleteRecursively();
+            e.workDir = oldDir;
+        }
+
         status = {};
         auto r = tools.call ("play", args2 ({ { "from_bar", 1 }, { "to_bar", 2 } }), status);
         check (! (bool) r["isError"] && engine.isPlaying() && std::abs (engine.getAutoStopBeats() - 4.0) < 1.0e-6
@@ -3159,7 +3340,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 11 && listed["id"].toString() == "a", "tools/list has the eleven tools");
+        check (listed["result"]["tools"].size() == 17 && listed["id"].toString() == "a", "tools/list has the seventeen tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

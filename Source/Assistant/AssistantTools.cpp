@@ -1,6 +1,7 @@
 #include "AssistantTools.h"
 #include "AssistantShared.h"
 #include "../Devices/Device.h"
+#include "../Devices/Master/Loudness.h"
 
 #if JUCE_MAC
  #include <sys/sysctl.h>
@@ -94,6 +95,16 @@ var Tools::call (const String& name, const var& args, String& status)
         return listPlugins (args);
     if (name == "edit_session")
         return editSession (args, status);
+    if (name == "new_project")
+        return newProject (args, status);
+    if (name == "open_project")
+        return openProject (args, status);
+    if (name == "save_project")
+        return saveProject (args, status);
+    if (name == "get_plugin_params")
+        return getPluginParams (args);
+    if (name == "set_plugin_params")
+        return setPluginParams (args, status);
 
     return toolText ("Unknown tool: " + name, true);
 }
@@ -209,6 +220,8 @@ var Tools::describeSession() const
 {
     var o = obj();
     set (o, "project", edit.getName());
+    set (o, "file", edit.projectFile.existsAsFile() ? var (edit.projectFile.getFullPathName()) : var());
+    set (o, "unsaved_changes", edit.dirty);
     set (o, "tempo_bpm", edit.tempo);
     set (o, "time_signature", String (edit.timeSigNum) + "/" + String (edit.timeSigDen));
     set (o, "project_sample_rate", edit.sampleRate);
@@ -914,6 +927,32 @@ String quoted (const String& s)   { return "\"" + s + "\""; }
 
 bool hasKey (const var& c, const char* key)   { return c.hasProperty (key); }
 
+/** A plug-in on a track, by 1-based position or name (exact, then partial). */
+std::shared_ptr<PluginSlot> findPluginOn (Track& t, const var& key, String& error)
+{
+    if (key.isInt() || key.isInt64() || key.isDouble() || key.toString().trim().containsOnly ("0123456789"))
+    {
+        const int pos = key.isString() ? key.toString().getIntValue() : (int) key;
+        if (pos >= 1 && pos <= (int) t.plugins.size())
+            return t.plugins[(size_t) pos - 1];
+        error = quoted (t.name) + " has " + String ((int) t.plugins.size()) + " plug-in(s); there's no position " + String (pos) + ".";
+        return {};
+    }
+    const auto name = key.toString().trim();
+    for (auto& p : t.plugins)
+        if (p->getName().equalsIgnoreCase (name))
+            return p;
+    for (auto& p : t.plugins)
+        if (p->getName().containsIgnoreCase (name))
+            return p;
+    StringArray names;
+    for (auto& p : t.plugins)
+        names.add (p->getName());
+    error = quoted (t.name) + " has no plug-in called " + quoted (name)
+            + (names.isEmpty() ? String (" (it has none).") : " (it has " + names.joinIntoString (", ") + ").");
+    return {};
+}
+
 int pluginRole (const PluginSlot& s, const String& catalogKind)
 {
     // 0 = generator, 1 = instrument, 2 = effect
@@ -951,31 +990,6 @@ var Tools::editSession (const var& args, String& status)
                 if (t.get() != except && t->name.equalsIgnoreCase (name))
                     return true;
         return false;
-    };
-
-    auto findPluginOn = [] (Track& t, const var& key, String& error) -> std::shared_ptr<PluginSlot>
-    {
-        if (key.isInt() || key.isInt64() || key.isDouble() || key.toString().trim().containsOnly ("0123456789"))
-        {
-            const int pos = key.isString() ? key.toString().getIntValue() : (int) key;
-            if (pos >= 1 && pos <= (int) t.plugins.size())
-                return t.plugins[(size_t) pos - 1];
-            error = quoted (t.name) + " has " + String ((int) t.plugins.size()) + " plug-in(s); there's no position " + String (pos) + ".";
-            return {};
-        }
-        const auto name = key.toString().trim();
-        for (auto& p : t.plugins)
-            if (p->getName().equalsIgnoreCase (name))
-                return p;
-        for (auto& p : t.plugins)
-            if (p->getName().containsIgnoreCase (name))
-                return p;
-        StringArray names;
-        for (auto& p : t.plugins)
-            names.add (p->getName());
-        error = quoted (t.name) + " has no plug-in called " + quoted (name)
-                + (names.isEmpty() ? String (" (it has none).") : " (it has " + names.joinIntoString (", ") + ").");
-        return {};
     };
 
     auto addPlugin = [&] (std::shared_ptr<Track> t, const String& pluginName, const var& position, String& error,
@@ -1463,6 +1477,636 @@ var Tools::editSession (const var& args, String& status)
 
 
 //==============================================================================
+// Plug-in settings: every plug-in publishes its parameters to the host (Lathe's own devices
+// and VST3s alike), so the assistant can read and turn any knob by name. Like turning a knob
+// in Lathe, it isn't an undo step: the reply gives the old values so they can be put back.
+
+namespace
+{
+constexpr int kMaxListedParams = 400;
+
+/** JUCE-made VST3s expose a parameter per MIDI controller; nobody wants those listed. */
+bool isHiddenParam (AudioProcessorParameter& p)
+{
+    return p.getName (64).startsWith ("MIDI CC ");
+}
+
+String paramId (AudioProcessorParameter& p)
+{
+    if (auto* w = dynamic_cast<AudioProcessorParameterWithID*> (&p))
+        return w->paramID;
+    if (auto* h = dynamic_cast<HostedAudioProcessorParameter*> (&p))
+        return h->getParameterID();
+    return String (p.getParameterIndex());
+}
+
+String paramText (AudioProcessorParameter& p, float normalised)
+{
+    auto text = p.getText (normalised, 64).trim();
+    if (const auto unit = p.getLabel().trim(); unit.isNotEmpty() && ! text.endsWithIgnoreCase (unit))
+        text << " " << unit;
+    return text;
+}
+
+String currentText (AudioProcessorParameter& p)   { return paramText (p, p.getValue()); }
+
+/** The few values a switch or a menu can take; empty for a continuous control. */
+StringArray choicesOf (AudioProcessorParameter& p)
+{
+    if (auto* c = dynamic_cast<AudioParameterChoice*> (&p))
+        return c->choices;
+    if (! p.isDiscrete() && ! p.isBoolean())
+        return {};
+    auto all = p.getAllValueStrings();
+    return all.size() <= 64 ? all : StringArray();
+}
+
+std::vector<AudioProcessorParameter*> visibleParams (AudioPluginInstance& instance)
+{
+    std::vector<AudioProcessorParameter*> out;
+    for (auto* p : instance.getParameters())
+        if (! isHiddenParam (*p))
+            out.push_back (p);
+    return out;
+}
+
+/** A parameter by id, exact name, 1-based number (as get_plugin_params lists them) or a
+    unique partial name. */
+AudioProcessorParameter* findParam (AudioPluginInstance& instance, const var& key, String& error)
+{
+    const auto params = visibleParams (instance);
+    const auto wanted = key.toString().trim();
+    if (wanted.isEmpty())
+    {
+        error = "say which parameter (\"param\": its name, id or number).";
+        return nullptr;
+    }
+    for (auto* p : params)
+        if (paramId (*p) == wanted)
+            return p;
+    for (auto* p : params)
+        if (p->getName (64).trim().equalsIgnoreCase (wanted))
+            return p;
+    if (key.isInt() || key.isInt64() || key.isDouble() || wanted.containsOnly ("0123456789"))
+    {
+        const int n = key.isString() ? wanted.getIntValue() : (int) key;
+        if (n >= 1 && n <= (int) params.size())
+            return params[(size_t) n - 1];
+    }
+    std::vector<AudioProcessorParameter*> partial;
+    for (auto* p : params)
+        if (p->getName (64).containsIgnoreCase (wanted))
+            partial.push_back (p);
+    if (partial.size() == 1)
+        return partial.front();
+    if (partial.size() > 1)
+    {
+        StringArray names;
+        for (auto* p : partial)
+            names.add (quoted (p->getName (64).trim()));
+        error = quoted (wanted) + " could be " + names.joinIntoString (", ") + ". Use the exact name or id.";
+        return nullptr;
+    }
+    error = "no parameter called " + quoted (wanted) + ". get_plugin_params lists them.";
+    return nullptr;
+}
+
+/** The normalised (0-1) value a requested value means for this parameter. Numbers are in the
+    parameter's own units (Hz, dB, %, seconds), as the plug-in shows them; text can be a menu
+    choice ("Simple 808"), on/off for a switch, or what the plug-in displays ("2.5 kHz"). */
+std::optional<float> parseValue (AudioProcessorParameter& p, const var& value, String& error, String& note)
+{
+    const auto choices = choicesOf (p);
+    auto* ranged = dynamic_cast<RangedAudioParameter*> (&p);
+    const bool isSwitch = p.isBoolean() || (choices.size() == 2 && dynamic_cast<AudioParameterChoice*> (&p) == nullptr);
+
+    if (value.isBool() || (isSwitch && value.isString()
+                           && StringArray { "on", "off", "true", "false", "yes", "no" }.contains (value.toString().trim(), true)))
+    {
+        const auto s = value.toString().trim().toLowerCase();
+        const bool on = value.isBool() ? (bool) value : (s == "on" || s == "true" || s == "yes");
+        return on ? 1.0f : 0.0f;
+    }
+
+    if (value.isString())
+    {
+        const auto text = value.toString().trim();
+        if (! choices.isEmpty())
+        {
+            int match = -1, partials = 0;
+            for (int i = 0; i < choices.size(); ++i)
+                if (choices[i].trim().equalsIgnoreCase (text))
+                    match = i;
+            if (match < 0)
+                for (int i = 0; i < choices.size(); ++i)
+                    if (choices[i].containsIgnoreCase (text))
+                    {
+                        match = i;
+                        ++partials;
+                    }
+            if (match >= 0 && partials <= 1)
+                return choices.size() > 1 ? (float) match / (float) (choices.size() - 1) : 0.0f;
+            error = quoted (text) + (partials > 1 ? " could be more than one of " : " isn't one of ")
+                    + quoted (p.getName (64).trim()) + "'s choices: " + choices.joinIntoString (", ") + ".";
+            return std::nullopt;
+        }
+        if (! text.containsAnyOf ("0123456789-."))
+        {
+            error = quoted (p.getName (64).trim()) + " takes a number" + (ranged != nullptr ? " from "
+                    + String (ranged->getNormalisableRange().start) + " to " + String (ranged->getNormalisableRange().end) : String())
+                    + ", not " + quoted (text) + ".";
+            return std::nullopt;
+        }
+        // "75%" on a control that runs 0 to 1 (shown as a percentage) means 0.75.
+        if (ranged != nullptr && text.endsWithChar ('%') && ranged->getNormalisableRange().end <= 1.0f)
+            return ranged->convertTo0to1 (jlimit (ranged->getNormalisableRange().start, ranged->getNormalisableRange().end,
+                                                  text.dropLastCharacters (1).trim().getFloatValue() / 100.0f));
+        return jlimit (0.0f, 1.0f, p.getValueForText (text));
+    }
+
+    if (value.isInt() || value.isInt64() || value.isDouble())
+    {
+        const double x = (double) value;
+        if (ranged != nullptr)
+        {
+            const auto& r = ranged->getNormalisableRange();
+            const auto clamped = jlimit ((double) r.start, (double) r.end, x);
+            if (clamped != x)
+                note = String (x) + " is outside " + String (r.start) + " to " + String (r.end) + ", so it's " + String (clamped);
+            return ranged->convertTo0to1 ((float) clamped);
+        }
+        // A VST3's parameter: the plug-in reads the number as it would read typed text.
+        return jlimit (0.0f, 1.0f, p.getValueForText (String (x)));
+    }
+
+    error = "give \"value\" as a number, text or true/false.";
+    return std::nullopt;
+}
+} // namespace
+
+var Tools::getPluginParams (const var& args) const
+{
+    auto t = findTrack (args.getProperty ("track", {}));
+    if (t == nullptr)
+        return toolText ("No track called \"" + args.getProperty ("track", {}).toString() + "\". describe_session lists them.", true);
+    String error;
+    auto slot = findPluginOn (*t, args.getProperty ("plugin", {}), error);
+    if (slot == nullptr)
+        return toolText (error, true);
+    if (slot->instance == nullptr)
+        return toolText (slot->getName() + " on " + quoted (t->name) + " isn't installed or hasn't been scanned, so its settings can't be read.", true);
+
+    const auto search = args.getProperty ("search", {}).toString().trim();
+    const auto params = visibleParams (*slot->instance);
+    Array<var> list;
+    int matched = 0;
+    for (size_t i = 0; i < params.size(); ++i)
+    {
+        auto& p = *params[i];
+        const auto name = p.getName (64).trim();
+        if (search.isNotEmpty() && ! name.containsIgnoreCase (search) && ! paramId (p).containsIgnoreCase (search))
+            continue;
+        if (++matched > kMaxListedParams)
+            continue;
+        var o = obj();
+        set (o, "number", (int) i + 1);
+        set (o, "name", name);
+        set (o, "id", paramId (p));
+        set (o, "value", currentText (p));
+        if (const auto choices = choicesOf (p); ! choices.isEmpty())
+        {
+            Array<var> c;
+            for (auto& s : choices)
+                c.add (s.trim());
+            set (o, "choices", c);
+        }
+        else if (auto* r = dynamic_cast<RangedAudioParameter*> (&p))
+        {
+            set (o, "min", rounded (r->getNormalisableRange().start));
+            set (o, "max", rounded (r->getNormalisableRange().end));
+            if (p.getLabel().trim().isNotEmpty())
+                set (o, "unit", p.getLabel().trim());
+        }
+        set (o, "default", paramText (p, p.getDefaultValue()));
+        list.add (o);
+    }
+
+    var result = obj();
+    set (result, "track", t->name);
+    set (result, "plugin", slot->getName());
+    set (result, "position", (int) (std::find (t->plugins.begin(), t->plugins.end(), slot) - t->plugins.begin()) + 1);
+    set (result, "parameters", list);
+    if (matched > kMaxListedParams)
+        set (result, "more", String (matched - kMaxListedParams) + " more not shown: narrow it with search.");
+    set (result, "how_to_set", "set_plugin_params with param (name, id or number) and value: a choice's text, true/false, "
+                               "or a number in the parameter's own units (min to max).");
+    return toolText (JSON::toString (result, true, 4));
+}
+
+var Tools::setPluginParams (const var& args, String& status)
+{
+    auto t = findTrack (args.getProperty ("track", {}));
+    if (t == nullptr)
+        return toolText ("No track called \"" + args.getProperty ("track", {}).toString() + "\". describe_session lists them.", true);
+    String error;
+    auto slot = findPluginOn (*t, args.getProperty ("plugin", {}), error);
+    if (slot == nullptr)
+        return toolText (error, true);
+    if (slot->instance == nullptr)
+        return toolText (slot->getName() + " on " + quoted (t->name) + " isn't installed or hasn't been scanned, so its settings can't be changed.", true);
+    auto* changes = args.getProperty ("params", {}).getArray();
+    if (changes == nullptr || changes->isEmpty())
+        return toolText ("Give \"params\": a list of {param, value}.", true);
+
+    // Work out every value first, so a mistake in one changes nothing.
+    struct Planned { AudioProcessorParameter* param; float value; String note; };
+    std::vector<Planned> plan;
+    for (int i = 0; i < changes->size(); ++i)
+    {
+        const auto& c = changes->getReference (i);
+        String why, note;
+        auto* p = findParam (*slot->instance, c.getProperty ("param", {}), why);
+        std::optional<float> v;
+        if (p != nullptr)
+        {
+            if (c.hasProperty ("normalized"))
+                v = jlimit (0.0f, 1.0f, (float) (double) c["normalized"]);
+            else if (c.hasProperty ("value"))
+                v = parseValue (*p, c["value"], why, note);
+            else
+                why = "give \"value\" for " + quoted (p->getName (64).trim()) + ".";
+        }
+        if (p == nullptr || ! v.has_value())
+            return toolText ("Nothing was changed. Change " + String (i + 1) + ": " + why, true);
+        plan.push_back ({ p, *v, note });
+    }
+
+    StringArray done;
+    for (auto& step : plan)
+    {
+        auto& p = *step.param;
+        const auto before = currentText (p);
+        p.beginChangeGesture();
+        p.setValueNotifyingHost (step.value);
+        p.endChangeGesture();
+        String line = p.getName (64).trim() + ": " + before + " -> " + currentText (p);
+        if (step.note.isNotEmpty())
+            line << " (" << step.note << ")";
+        done.add (line);
+    }
+    edit.markDirty();
+    edit.sendChangeMessage();
+
+    status = "Assistant: " + slot->getName() + " on " + t->name + ": "
+             + (done.size() == 1 ? done[0] : String (done.size()) + " settings changed");
+    String text = "Changed " + slot->getName() + " on " + quoted (t->name)
+                  + ". Like turning a knob in Lathe, this isn't an undo step; the old values are on the left.\n";
+    for (auto& d : done)
+        text << "- " << d << "\n";
+    return toolText (text);
+}
+
+//==============================================================================
+// The project itself: File > New, Open, Save and Export. New and Open replace what's open, so
+// unsaved changes stop them unless the call says what to do with them.
+
+namespace
+{
+String projectNameOf (const File& f)   { return f.getFileNameWithoutExtension(); }
+
+/** Projects in the projects folder: Name/Name.lathe, newest first. */
+Array<File> projectFiles (const File& dir)
+{
+    Array<File> out;
+    for (auto& folder : dir.findChildFiles (File::findDirectories, false))
+        if (auto f = folder.getChildFile (folder.getFileName() + kProjectExtension); f.existsAsFile())
+            out.add (f);
+    std::sort (out.begin(), out.end(), [] (const File& a, const File& b) { return a.getLastModificationTime() > b.getLastModificationTime(); });
+    return out;
+}
+
+String namesOf (const Array<File>& files, int most = 12)
+{
+    StringArray names;
+    for (int i = 0; i < jmin (most, files.size()); ++i)
+        names.add (quoted (projectNameOf (files[i])));
+    if (files.size() > most)
+        names.add ("and " + String (files.size() - most) + " more");
+    return names.joinIntoString (", ");
+}
+
+/** By name (any case), exact first, then a unique partial match. */
+File findByName (const Array<File>& files, const String& wanted, String& error, const char* what)
+{
+    for (auto& f : files)
+        if (projectNameOf (f).equalsIgnoreCase (wanted))
+            return f;
+    Array<File> partial;
+    for (auto& f : files)
+        if (projectNameOf (f).containsIgnoreCase (wanted))
+            partial.add (f);
+    if (partial.size() == 1)
+        return partial[0];
+    error = partial.size() > 1 ? quoted (wanted) + " could be " + namesOf (partial) + ". Use the full name."
+                               : String ("No ") + what + " called " + quoted (wanted)
+                                     + (files.isEmpty() ? String (". There aren't any yet.") : ". There's " + namesOf (files) + ".");
+    return {};
+}
+} // namespace
+
+String Tools::settleUnsaved (const var& args, const String& doing)
+{
+    if (! edit.dirty)
+        return {};
+    const auto choice = args.getProperty ("unsaved", {}).toString().trim().toLowerCase();
+    if (choice == "discard")
+        return {};
+    if (choice == "save")
+    {
+        if (! edit.projectFile.existsAsFile())
+            return quoted (edit.getName()) + " has never been saved, so there's nowhere to save it. Save it with save_project "
+                   "and a name first, or pass unsaved \"discard\" to drop it.";
+        if (! project.save)
+            return "Lathe can't save from here.";
+        if (const auto error = project.save (File()); error.isNotEmpty())
+            return "Couldn't save " + quoted (edit.getName()) + " first, so nothing else was done: " + error;
+        return {};
+    }
+    return quoted (edit.getName()) + " has unsaved changes. To " + doing + ", say what to do with them: unsaved \"save\" "
+           "(or save_project first), or \"discard\". Ask the person if you aren't sure.";
+}
+
+var Tools::newProject (const var& args, String& status)
+{
+    if (const auto busy = busyReason(); busy.isNotEmpty())
+        return toolText (busy, true);
+    if (! project.newProject)
+        return toolText ("Lathe can't make a new project from here.", true);
+
+    File templateFile;
+    const auto templateName = args.getProperty ("template", {}).toString().trim();
+    if (templateName.isNotEmpty())
+    {
+        Array<File> templates;
+        for (auto& f : project.templatesDir.findChildFiles (File::findFiles, false, "*" + String (kProjectExtension)))
+            templates.add (f);
+        String error;
+        templateFile = findByName (templates, templateName, error, "template");
+        if (templateFile == File())
+            return toolText (error, true);
+    }
+    if (const auto stop = settleUnsaved (args, "start a new project"); stop.isNotEmpty())
+        return toolText (stop, true);
+
+    if (const auto error = project.newProject (templateFile); error.isNotEmpty())
+        return toolText ("Couldn't start a new project: " + error, true);
+
+    const auto from = templateFile == File() ? String() : " from the template " + quoted (projectNameOf (templateFile));
+    status = "Assistant: new project" + from;
+    String text = "New project" + from + ". It's \"Untitled\" until it's saved: save_project with a name.\n\n";
+    text << JSON::toString (describeSession(), true, 4);
+    return toolText (text);
+}
+
+var Tools::openProject (const var& args, String& status)
+{
+    if (const auto busy = busyReason(); busy.isNotEmpty())
+        return toolText (busy, true);
+    if (! project.openProject)
+        return toolText ("Lathe can't open projects from here.", true);
+
+    File file;
+    const auto path = args.getProperty ("path", {}).toString().trim();
+    const auto name = args.getProperty ("name", {}).toString().trim();
+    if (path.isNotEmpty())
+    {
+        file = File::isAbsolutePath (path) ? File (path) : project.projectsDir.getChildFile (path);
+        if (file.isDirectory())
+            file = file.getChildFile (file.getFileName() + kProjectExtension);
+        if (! file.existsAsFile() || ! file.hasFileExtension (kProjectExtension))
+            return toolText ("There's no Lathe project at " + file.getFullPathName() + ".", true);
+    }
+    else if (name.isNotEmpty())
+    {
+        String error;
+        file = findByName (projectFiles (project.projectsDir), name, error, "project");
+        if (file == File())
+            return toolText (error + " (Projects are in " + project.projectsDir.getFullPathName() + ".)", true);
+    }
+    else
+    {
+        const auto all = projectFiles (project.projectsDir);
+        return toolText ("Give name (a project in " + project.projectsDir.getFullPathName() + ") or path. "
+                         + (all.isEmpty() ? String ("There aren't any projects there yet.") : "Newest first: " + namesOf (all) + "."), true);
+    }
+
+    if (file == edit.projectFile && ! edit.dirty)
+        return toolText (quoted (projectNameOf (file)) + " is already open.");
+    if (const auto stop = settleUnsaved (args, "open another project"); stop.isNotEmpty())
+        return toolText (stop, true);
+
+    if (const auto error = project.openProject (file); error.isNotEmpty())
+        return toolText ("Couldn't open " + quoted (projectNameOf (file)) + ": " + error, true);
+
+    status = "Assistant: opened " + projectNameOf (file);
+    String text = "Opened " + quoted (projectNameOf (file)) + ".\n\n";
+    text << JSON::toString (describeSession(), true, 4);
+    return toolText (text);
+}
+
+var Tools::saveProject (const var& args, String& status)
+{
+    if (engine.isRecording() || engine.isCountingIn())
+        return toolText ("Lathe is recording. Stop first, then save.", true);
+    if (! project.save)
+        return toolText ("Lathe can't save from here.", true);
+
+    const auto name = args.getProperty ("name", {}).toString().trim();
+    File target;
+    if (name.isNotEmpty())
+    {
+        const auto legal = File::createLegalFileName (name).trim();
+        if (legal.isEmpty())
+            return toolText (quoted (name) + " can't be a file name. Try plain letters and numbers.", true);
+        target = project.projectsDir.getChildFile (legal).getChildFile (legal + kProjectExtension);
+        if (target.getFullPathName().equalsIgnoreCase (edit.projectFile.getFullPathName()))
+            target = File();   // its own name (in any case): an ordinary save
+        else if (target.getParentDirectory().exists())
+            return toolText ("There's already a project called " + quoted (legal) + " in " + project.projectsDir.getFullPathName()
+                             + ". Pick another name; Lathe doesn't save over another project.", true);
+    }
+    else if (! edit.projectFile.existsAsFile())
+    {
+        return toolText ("This project has never been saved: give it a name.", true);
+    }
+
+    if (const auto error = project.save (target); error.isNotEmpty())
+        return toolText ("Couldn't save: " + error, true);
+
+    status = "Assistant: saved " + edit.getName();
+    return toolText ("Saved " + quoted (edit.getName()) + " to " + edit.projectFile.getFullPathName()
+                     + (target != File() ? ", with its own Audio folder (any audio it uses was copied in)." : "."));
+}
+
+//==============================================================================
+/** export_audio: Engine::exportAudio on its own thread (it renders offline), then a loudness
+    reading of the mix. The assistant's call waits for the job. */
+class Tools::Exporter : private Thread
+{
+public:
+    Exporter (Engine& e, Engine::ExportSettings s, std::shared_ptr<Job> j, std::function<void (const String&)> say)
+        : Thread ("Lathe assistant export"), engine (e), settings (std::move (s)), job (std::move (j)), showStatus (std::move (say))
+    {
+        startThread();
+    }
+
+    ~Exporter() override
+    {
+        signalThreadShouldExit();
+        stopThread (60000);
+    }
+
+    bool isFinished() const   { return job->done.wait (0); }
+
+private:
+    void run() override
+    {
+        StringArray files;
+        const auto started = Time::getMillisecondCounterHiRes();
+        const auto result = engine.exportAudio (settings, [this] (double) { return ! threadShouldExit(); }, files);
+        if (result.failed())
+        {
+            finish (toolText ("Couldn't export: " + result.getErrorMessage(), true), "Export failed: " + result.getErrorMessage());
+            return;
+        }
+
+        var out = new DynamicObject();
+        set (out, "folder", settings.folder.getFullPathName());
+        Array<var> list;
+        AudioFormatManager formats;
+        formats.registerBasicFormats();
+        for (auto& path : files)
+        {
+            const File f (path);
+            var o = new DynamicObject();
+            set (o, "file", f.getFileName());
+            set (o, "megabytes", rounded ((double) f.getSize() / 1.0e6, 0.01));
+            if (std::unique_ptr<AudioFormatReader> r (formats.createReaderFor (f)); r != nullptr && r->sampleRate > 0)
+            {
+                set (o, "seconds", rounded ((double) r->lengthInSamples / r->sampleRate, 0.01));
+                if (path == files[0] && settings.mix)
+                    measure (*r, o);
+            }
+            list.add (o);
+        }
+        set (out, "files", list);
+        set (out, "render_seconds", rounded ((Time::getMillisecondCounterHiRes() - started) / 1000.0, 0.1));
+        finish (toolText (JSON::toString (out, true, 4)),
+                "Assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to " + settings.folder.getFullPathName());
+    }
+
+    /** Peak, true peak and integrated loudness of the mix, so the assistant can hear it in numbers. */
+    void measure (AudioFormatReader& r, var& o)
+    {
+        mst::LoudnessMeter meter;
+        meter.prepare (r.sampleRate);
+        meter.setTruePeak (true);
+        const int block = 8192;
+        AudioBuffer<float> buf (2, block);
+        float peak = 0.0f;
+        for (int64 pos = 0; pos < r.lengthInSamples && ! threadShouldExit(); pos += block)
+        {
+            const int n = (int) jmin ((int64) block, r.lengthInSamples - pos);
+            r.read (&buf, 0, n, pos, true, r.numChannels > 1);
+            peak = jmax (peak, buf.getMagnitude (0, 0, n), buf.getMagnitude (1, 0, n));
+            meter.process (buf.getReadPointer (0), buf.getReadPointer (1), n);
+        }
+        if (peak <= 0.0f)
+        {
+            set (o, "level", "silent");
+            return;
+        }
+        set (o, "peak_dbfs", rounded (Decibels::gainToDecibels (peak, -100.0f), 0.1));
+        set (o, "true_peak_dbtp", rounded (jmax (-100.0f, meter.truePeakDb()), 0.1));
+        set (o, "integrated_lufs", meter.hasIntegrated() ? var (rounded (meter.integrated(), 0.1)) : var ("too quiet to measure"));
+    }
+
+    void finish (const var& result, const String& status)
+    {
+        job->result = result;
+        job->done.signal();
+        MessageManager::callAsync ([say = showStatus, status] { if (say) say (status); });
+    }
+
+    Engine& engine;
+    Engine::ExportSettings settings;
+    std::shared_ptr<Job> job;
+    std::function<void (const String&)> showStatus;
+};
+
+std::shared_ptr<Tools::Job> Tools::startExport (const var& args, var& immediate)
+{
+    if (exporter != nullptr && ! exporter->isFinished())
+    {
+        immediate = toolText ("Lathe is already exporting. Wait for that to finish.", true);
+        return {};
+    }
+    exporter.reset();
+    if (const auto busy = busyReason(); busy.isNotEmpty())
+    {
+        immediate = toolText (busy, true);
+        return {};
+    }
+    if (engine.getSampleRate() <= 0.0)
+    {
+        immediate = toolText ("No audio device is running, so Lathe can't render (Options > Audio / MIDI Settings).", true);
+        return {};
+    }
+
+    Engine::ExportSettings s;
+    s.mix = (bool) args.getProperty ("mix", true);
+    s.stems = (bool) args.getProperty ("stems", false);
+    if (! s.mix && ! s.stems)
+    {
+        immediate = toolText ("Nothing to export: mix and stems are both off.", true);
+        return {};
+    }
+    const int bits = (int) args.getProperty ("bit_depth", 24);
+    if (bits != 16 && bits != 24 && bits != 32)
+    {
+        immediate = toolText ("bit_depth is 16, 24 or 32 (32-bit float).", true);
+        return {};
+    }
+    s.bitDepth = bits;
+    s.tailSeconds = jlimit (0.0, 30.0, (double) args.getProperty ("tail_seconds", 2.0));
+    s.startBeat = args.hasProperty ("from_bar") ? toBeats ((double) args["from_bar"]) : 0.0;
+    s.endBeat = args.hasProperty ("to_bar") ? toBeats ((double) args["to_bar"]) : edit.getEndBeat();
+    if (s.startBeat < 0.0 || s.endBeat <= s.startBeat + 1.0e-6)
+    {
+        immediate = toolText (args.hasProperty ("to_bar") ? "to_bar must come after from_bar (bars are 1-based)."
+                                                          : "The song is empty: there's nothing to export.", true);
+        return {};
+    }
+
+    edit.ensureWorkDir();
+    s.baseName = edit.getName();
+    s.folder = edit.getExportsDir().getChildFile (edit.getName() + " " + Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M.%S"));
+    if (! s.folder.createDirectory())
+    {
+        immediate = toolText ("Couldn't make " + s.folder.getFullPathName(), true);
+        return {};
+    }
+
+    if (engine.isPlaying())
+        engine.stop();
+    if (showStatus)
+        showStatus ("Assistant: exporting " + edit.getName() + "...");
+    auto job = std::make_shared<Job>();
+    exporter = std::make_unique<Exporter> (engine, s, job, showStatus);
+    return job;
+}
+
+//==============================================================================
 // Measuring: plays part of the project for real and times every audio block and track.
 
 namespace
@@ -1837,6 +2481,18 @@ Tools::~Tools()
 {
     alive->store (false);
     measurer.reset();
+    exporter.reset();   // cancels a render that's still going, and waits for it
+}
+
+String Tools::busyReason() const
+{
+    if (engine.isRecording() || engine.isCountingIn())
+        return "Lathe is recording. Stop first.";
+    if (measurer != nullptr && ! measurer->isFinished())
+        return "Lathe is measuring. Wait for that to finish.";
+    if (engine.isExporting())
+        return "Lathe is exporting. Wait for that to finish.";
+    return {};
 }
 
 bool Tools::isLongTool (const String& name)
@@ -1851,9 +2507,11 @@ std::shared_ptr<Tools::Job> Tools::startLongTool (const String& name, const var&
         immediate = toolText ("Unknown tool: " + name, true);
         return {};
     }
-    if (measurer != nullptr && ! measurer->isFinished())
+    if (name == "export_audio")
+        return startExport (args, immediate);
+    if (const auto busy = busyReason(); busy.isNotEmpty())
     {
-        immediate = toolText ("Lathe is already measuring. Wait for that to finish.", true);
+        immediate = toolText (busy, true);
         return {};
     }
     measurer.reset();   // a finished one whose clean-up hasn't come round yet

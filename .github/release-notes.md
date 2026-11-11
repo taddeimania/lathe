@@ -3,6 +3,17 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.11.1
+
+- **Your AI assistant can change plug-in settings.** Two new tools read and set any setting a plug-in
+  publishes, on Lathe's own devices and on VST3s: pick a Drums kit, change a synth's wave, set a
+  delay time. Numbers are in the setting's own units, and menus are picked by name.
+- **Your AI assistant can start, open, save and export projects.** It can make a new project (or
+  one from your templates), open one by name, save it with a name it chooses or you give it, and
+  export the mix or stems. After an export it hears the level in numbers: peak and loudness. It
+  won't replace a project with unsaved changes unless it's told whether to save them first.
+- **A new Lathe icon**, the same mark as on getlathe.app.
+
 ## New in 0.11.0
 
 - **Invite anyone with a link.** Cloud > Invite Someone by Link makes a link to a page on
