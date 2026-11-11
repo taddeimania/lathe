@@ -412,6 +412,34 @@ public:
 };
 } // namespace
 
+Result writeGuitarTake (const File& wav, double bpm)
+{
+    Random rnd (11);
+    const auto at = [bpm] (double beats) { return (int64) std::llround (beats * 60.0 / bpm * kRate); };
+    std::vector<float> take ((size_t) at (16.0));
+    // C (C E G C E) for two bars, then G (G B D G B): picked up and down in eighths, a little loose.
+    const int chords[2][5] = { { 48, 52, 55, 60, 64 }, { 43, 47, 50, 55, 59 } };
+    const int order[8] = { 0, 2, 3, 4, 3, 2, 1, 3 };
+    for (int bar = 0; bar < 4; ++bar)
+        for (int k = 0; k < 8; ++k)
+        {
+            const auto start = at (jmax (0.0, bar * 4.0 + k * 0.5 + (rnd.nextDouble() - 0.5) * 0.04));
+            const double f = hz (chords[bar / 2][order[k]]);
+            const auto n = at (1.2);
+            const double amp = (k % 2 == 0 ? 1.0 : 0.7) * (0.85 + 0.3 * rnd.nextDouble());
+            for (int64 i = 0; i < n && start + i < (int64) take.size(); ++i)
+            {
+                const double t = (double) i / kRate;
+                double s = 0.0;
+                for (int h = 1; h <= 5; ++h)
+                    s += std::sin (MathConstants<double>::twoPi * f * h * t) * std::exp (-t * (1.5 + h * 1.2)) / h;
+                s += 0.1 * (rnd.nextDouble() * 2.0 - 1.0) * std::exp (-t * 60.0);
+                take[(size_t) (start + i)] += (float) (amp * s);
+            }
+        }
+    return writeWav (wav, take);
+}
+
 std::unique_ptr<AudioIODeviceType> makeDeviceType()
 {
     return std::make_unique<DemoDeviceType>();

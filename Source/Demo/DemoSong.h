@@ -22,6 +22,10 @@ struct Songs
 /** Writes both songs under folder (which should be empty). */
 Result write (const File& folder, Songs& out);
 
+/** "Guitar take": the part the person records in the AI assistant demo (Lathe --screenshots).
+    Four bars of picked chords at bpm, C for two bars then G, made like the rest. */
+Result writeGuitarTake (const File& wav, double bpm);
+
 /** A pretend audio interface ("Audio Interface", 8 in, 8 out, 48 kHz) that never
     plays anything, so screenshots show inputs and a device without touching yours. */
 std::unique_ptr<AudioIODeviceType> makeDeviceType();

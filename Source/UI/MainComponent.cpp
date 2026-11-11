@@ -1333,6 +1333,114 @@ bool saveShot (Component& c, const File& f, Rectangle<int> area = {})
     jpeg.setQuality (0.9f);
     return jpeg.writeImageToStream (image, out);
 }
+
+/** The AI assistant demo on getlathe.app/ai.html: what an agent does, step by step, through
+    the same tool calls it makes over MCP. After each step Lathe draws ai-<n>.jpg; ai-session.json
+    lists every call with the status line Lathe showed for it. The chat on the page goes with it. */
+struct AiStep
+{
+    const char* frame;
+    const char* view;      // "arrange" or "mixer"
+    const char* select;    // the track whose devices show at the bottom ("" for none)
+    bool guitarTake;       // the person records their part first (no tool: they play it)
+    const char* panel;     // a device on the selected track whose own panel is drawn too, as ai-<n>-panel.jpg ("" for none)
+    const char* calls;     // JSON: [ { "tool": ..., "args": { ... } } ]
+};
+
+const AiStep aiSteps[] = {
+    // "New song at 100 BPM: drums, bass, electric piano, something sparkly on top, and a track for my guitar."
+    { "ai-1.jpg", "arrange", "Sparkle", false, "", R"([
+        { "tool": "new_project", "args": {} },
+        { "tool": "edit_session", "args": { "changes": [
+            { "action": "set_tempo", "bpm": 100 },
+            { "action": "rename_track", "track": "Audio 1", "name": "Guitar" },
+            { "action": "set_track", "track": "Guitar", "arm": true },
+            { "action": "rename_track", "track": "MIDI 1", "name": "Drums" },
+            { "action": "add_plugin", "track": "Drums", "plugin": "Drums" },
+            { "action": "add_track", "kind": "midi", "name": "Bass", "plugins": [ "Bass Synth" ] },
+            { "action": "add_track", "kind": "midi", "name": "Keys", "plugins": [ "Multi Synth" ] },
+            { "action": "add_track", "kind": "midi", "name": "Sparkle", "plugins": [ "Random Notes", "Resonator", "Grains" ] },
+            { "action": "add_track", "kind": "return", "name": "Verb", "plugins": [ "Reverb" ] },
+            { "action": "set_send", "track": "Keys", "return": "Verb", "level_db": -12 },
+            { "action": "set_send", "track": "Sparkle", "return": "Verb", "level_db": -8 } ] } },
+        { "tool": "set_plugin_params", "args": { "track": "Drums", "plugin": "Drums", "params": [ { "param": "Kit", "value": "Simple 808" } ] } },
+        { "tool": "set_plugin_params", "args": { "track": "Keys", "plugin": "Multi Synth", "params": [ { "param": "Model", "value": "Six-op FM: keys" } ] } }
+    ])" },
+
+    // "Write eight bars in A minor: Am, F, C, G, two bars each. Keep the drums laid back."
+    { "ai-2.jpg", "arrange", "Keys", false, "Multi Synth", R"([
+        { "tool": "write_notes", "args": { "track": "Drums", "from_bar": 1, "to_bar": 2, "repeat": 8, "notes": [
+            { "pitch": 36, "start_bar": 1, "length_beats": 0.5, "velocity": 112 },
+            { "pitch": 36, "start_bar": 1.625, "length_beats": 0.5, "velocity": 92 },
+            { "pitch": 38, "start_bar": 1.25, "length_beats": 0.5, "velocity": 100 },
+            { "pitch": 38, "start_bar": 1.75, "length_beats": 0.5, "velocity": 104 },
+            { "pitch": 42, "start_bar": 1, "velocity": 80 }, { "pitch": 42, "start_bar": 1.125, "velocity": 56 },
+            { "pitch": 42, "start_bar": 1.25, "velocity": 76 }, { "pitch": 42, "start_bar": 1.375, "velocity": 54 },
+            { "pitch": 42, "start_bar": 1.5, "velocity": 80 }, { "pitch": 42, "start_bar": 1.625, "velocity": 58 },
+            { "pitch": 46, "start_bar": 1.875, "length_beats": 0.5, "velocity": 70 } ] } },
+        { "tool": "write_notes", "args": { "track": "Bass", "from_bar": 1, "to_bar": 9, "notes": [
+            { "pitch": "A1", "start_bar": 1, "length_beats": 1.5 }, { "pitch": "A1", "start_bar": 1.375, "length_beats": 0.5 },
+            { "pitch": "E2", "start_bar": 1.625, "length_beats": 0.5 }, { "pitch": "A1", "start_bar": 2, "length_beats": 1.5 },
+            { "pitch": "G1", "start_bar": 2.75, "length_beats": 1 },
+            { "pitch": "F1", "start_bar": 3, "length_beats": 1.5 }, { "pitch": "F1", "start_bar": 3.375, "length_beats": 0.5 },
+            { "pitch": "C2", "start_bar": 3.625, "length_beats": 0.5 }, { "pitch": "F1", "start_bar": 4, "length_beats": 1.5 },
+            { "pitch": "E1", "start_bar": 4.75, "length_beats": 1 },
+            { "pitch": "C2", "start_bar": 5, "length_beats": 1.5 }, { "pitch": "C2", "start_bar": 5.375, "length_beats": 0.5 },
+            { "pitch": "G2", "start_bar": 5.625, "length_beats": 0.5 }, { "pitch": "C2", "start_bar": 6, "length_beats": 1.5 },
+            { "pitch": "B1", "start_bar": 6.75, "length_beats": 1 },
+            { "pitch": "G1", "start_bar": 7, "length_beats": 1.5 }, { "pitch": "G1", "start_bar": 7.375, "length_beats": 0.5 },
+            { "pitch": "D2", "start_bar": 7.625, "length_beats": 0.5 }, { "pitch": "G1", "start_bar": 8, "length_beats": 2 },
+            { "pitch": "G#1", "start_bar": 8.75, "length_beats": 1 } ] } },
+        { "tool": "write_notes", "args": { "track": "Keys", "from_bar": 1, "to_bar": 9, "notes": [
+            { "pitch": "A2", "start_bar": 1, "length_beats": 3.5, "velocity": 84 }, { "pitch": "C3", "start_bar": 1, "length_beats": 3.5, "velocity": 80 },
+            { "pitch": "E3", "start_bar": 1, "length_beats": 3.5, "velocity": 82 }, { "pitch": "G3", "start_bar": 1, "length_beats": 3.5, "velocity": 74 },
+            { "pitch": "C3", "start_bar": 2.5, "length_beats": 2, "velocity": 70 }, { "pitch": "E3", "start_bar": 2.5, "length_beats": 2, "velocity": 72 },
+            { "pitch": "A3", "start_bar": 2.5, "length_beats": 2, "velocity": 70 },
+            { "pitch": "F2", "start_bar": 3, "length_beats": 3.5, "velocity": 84 }, { "pitch": "A2", "start_bar": 3, "length_beats": 3.5, "velocity": 80 },
+            { "pitch": "C3", "start_bar": 3, "length_beats": 3.5, "velocity": 82 }, { "pitch": "E3", "start_bar": 3, "length_beats": 3.5, "velocity": 74 },
+            { "pitch": "A2", "start_bar": 4.5, "length_beats": 2, "velocity": 70 }, { "pitch": "C3", "start_bar": 4.5, "length_beats": 2, "velocity": 72 },
+            { "pitch": "F3", "start_bar": 4.5, "length_beats": 2, "velocity": 70 },
+            { "pitch": "G2", "start_bar": 5, "length_beats": 3.5, "velocity": 84 }, { "pitch": "C3", "start_bar": 5, "length_beats": 3.5, "velocity": 80 },
+            { "pitch": "E3", "start_bar": 5, "length_beats": 3.5, "velocity": 82 }, { "pitch": "B3", "start_bar": 5, "length_beats": 3.5, "velocity": 70 },
+            { "pitch": "C3", "start_bar": 6.5, "length_beats": 2, "velocity": 70 }, { "pitch": "E3", "start_bar": 6.5, "length_beats": 2, "velocity": 72 },
+            { "pitch": "G3", "start_bar": 6.5, "length_beats": 2, "velocity": 70 },
+            { "pitch": "G2", "start_bar": 7, "length_beats": 3.5, "velocity": 84 }, { "pitch": "B2", "start_bar": 7, "length_beats": 3.5, "velocity": 80 },
+            { "pitch": "D3", "start_bar": 7, "length_beats": 3.5, "velocity": 82 }, { "pitch": "F3", "start_bar": 7, "length_beats": 3.5, "velocity": 72 },
+            { "pitch": "B2", "start_bar": 8.5, "length_beats": 2, "velocity": 70 }, { "pitch": "D3", "start_bar": 8.5, "length_beats": 2, "velocity": 72 },
+            { "pitch": "G3", "start_bar": 8.5, "length_beats": 2, "velocity": 74 } ] } },
+        { "tool": "set_loop", "args": { "from_bar": 1, "to_bar": 9 } }
+    ])" },
+
+    // "Make the sparkle stay in key, and have it repeat itself more, so it sounds like a hook."
+    { "ai-3.jpg", "arrange", "Sparkle", false, "Random Notes", R"([
+        { "tool": "set_plugin_params", "args": { "track": "Sparkle", "plugin": "Random Notes", "params": [
+            { "param": "Scale", "value": "Major" }, { "param": "Lowest note", "value": 69 },
+            { "param": "Steps", "value": "1/8" }, { "param": "Deja vu", "value": "75%" }, { "param": "Loop", "value": "8" } ] } },
+        { "tool": "set_plugin_params", "args": { "track": "Sparkle", "plugin": "Resonator", "params": [
+            { "param": "Model", "value": "Bells & bars" }, { "param": "Brightness", "value": "70%" } ] } },
+        { "tool": "set_plugin_params", "args": { "track": "Sparkle", "plugin": "Grains", "params": [ { "param": "Mix", "value": "35%" } ] } }
+    ])" },
+
+    // (They record a guitar part over bars 5 to 8.) "I put guitar on the second half. Mix it so the guitar sits on top."
+    { "ai-4.jpg", "mixer", "", true, "", R"([
+        { "tool": "edit_session", "args": { "changes": [
+            { "action": "add_plugin", "track": "Guitar", "plugin": "Compressor" },
+            { "action": "set_mixer", "track": "Guitar", "volume_db": 0, "pan": 0.3 },
+            { "action": "set_mixer", "track": "Keys", "volume_db": -7, "pan": -0.3 },
+            { "action": "set_mixer", "track": "Sparkle", "volume_db": -10, "pan": -0.5 },
+            { "action": "set_mixer", "track": "Bass", "volume_db": -4 },
+            { "action": "set_mixer", "track": "Drums", "volume_db": -3 },
+            { "action": "set_send", "track": "Guitar", "return": "Verb", "level_db": -16 },
+            { "action": "set_track", "track": "Guitar", "arm": false } ] } }
+    ])" },
+
+    // "Master it for streaming."
+    { "ai-5.jpg", "arrange", "Master", false, "Mastering", R"([
+        { "tool": "edit_session", "args": { "changes": [ { "action": "add_plugin", "track": "Master", "plugin": "Mastering" } ] } },
+        { "tool": "set_plugin_params", "args": { "track": "Master", "plugin": "Mastering", "params": [
+            { "param": "Target", "value": "Streaming" }, { "param": "Style", "value": "Warm" } ] } }
+    ])" },
+};
 } // namespace
 
 void MainComponent::runScreenshots (const File& outDir)
@@ -1423,9 +1531,167 @@ void MainComponent::runScreenshots (const File& outDir)
                 auto view = self->cloud->makeHistoryView();
                 view->setSize (900, 540);
                 shot (*view, "history.jpg");
-                finish();
+                self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                {
+                    run->ok = run->ok && ok;
+                    run->written.addArray (written);
+                    finish();
+                });
             });
         });
     });
+}
+
+void MainComponent::runAssistantShots (const File& outDir, const File& work, std::function<void (bool, StringArray)> done)
+{
+    struct State
+    {
+        assistant::Tools tools;
+        Array<var> log;
+        StringArray written;
+        bool ok = true;
+        size_t step = 0;
+        std::function<void()> next;
+        State (Edit& e, Engine& en) : tools (e, en) {}
+    };
+    auto st = std::make_shared<State> (edit, engine);
+    // New, as File > New does it; never Open or Save (that would touch the real projects folder).
+    st->tools.project.newProject = [this] (const File& templateFile) -> String
+    {
+        newProject (templateFile);
+        updateTitle();
+        return {};
+    };
+    st->tools.showStatus = [this] (const String& s) { setStatus (s); };
+
+    // A smaller window than the other pictures: on the page it's shown beside the chat, and
+    // the controls need to be big enough to read there.
+    if (auto* window = findParentComponentOfClass<DocumentWindow>())
+        window->setContentComponentSize (1180, 720);
+    else
+        setSize (1180, 720);
+    detailHeight = 190;
+
+    Component::SafePointer<MainComponent> self (this);
+    // The state owns the step function, which only holds the state weakly; each pending step holds
+    // it strongly. Once the last step is done nothing holds it, and it all goes.
+    st->next = [self, weak = std::weak_ptr<State> (st), outDir, work, done]
+    {
+        auto st = weak.lock();
+        if (self == nullptr || st == nullptr)
+            return;
+        if (st->step >= std::size (aiSteps))
+        {
+            outDir.getChildFile ("ai-session.json").replaceWithText (JSON::toString (var (st->log)));
+            st->written.add ("ai-session.json");
+            self->setMixerShown (false);
+            done (st->ok, st->written);
+            return;
+        }
+        const auto& step = aiSteps[st->step++];
+
+        if (step.guitarTake)
+        {
+            // The person records their part: the take lands on Guitar at bar 5, as a recording would.
+            const auto wav = work.getChildFile ("Guitar take.wav");
+            if (auto r = demo::writeGuitarTake (wav, self->edit.tempo); r.failed())
+                st->ok = false;
+            int guitarIndex = -1;
+            for (size_t i = 0; i < self->edit.tracks.size(); ++i)
+                if (self->edit.tracks[i]->name == "Guitar")
+                    guitarIndex = (int) i;
+            self->arrangement.importFiles ({ wav }, guitarIndex, 4.0 * self->edit.beatsPerBar());
+        }
+
+        DynamicObject::Ptr entry = new DynamicObject();
+        entry->setProperty ("frame", step.frame);
+        if (step.guitarTake)
+            entry->setProperty ("recorded", "Guitar take, bars 5 to 8");
+        Array<var> calls;
+        const auto script = JSON::parse (String (step.calls));
+        if (script.getArray() == nullptr || script.getArray()->isEmpty())
+        {
+            st->ok = false;
+            std::cerr << step.frame << ": its calls aren't readable JSON" << std::endl;
+        }
+        for (const auto& c : script.getArray() != nullptr ? *script.getArray() : Array<var>())
+        {
+            String status;
+            const auto result = st->tools.call (c["tool"].toString(), c["args"], status);
+            if (status.isNotEmpty())
+                self->setStatus (status);   // as the connection shows it
+            const bool failed = (bool) result.getProperty ("isError", false);
+            String text;
+            if (auto* content = result["content"].getArray(); content != nullptr && ! content->isEmpty())
+                text = (*content)[0]["text"].toString();
+            if (failed)
+            {
+                st->ok = false;
+                std::cerr << step.frame << ": " << c["tool"].toString() << " failed: " << text << std::endl;
+            }
+            DynamicObject::Ptr call = new DynamicObject();
+            call->setProperty ("tool", c["tool"]);
+            call->setProperty ("args", c["args"]);
+            call->setProperty ("status", status);
+            call->setProperty ("result", text.substring (0, 600));
+            if (failed)
+                call->setProperty ("error", true);
+            calls.add (var (call.get()));
+        }
+        entry->setProperty ("calls", calls);
+        st->log.add (var (entry.get()));
+
+        // Show it the way someone watching would see it: the step's view, and the devices on its track.
+        self->setMixerShown (String (step.view) == "mixer");
+        const String select (step.select);
+        if (select.isNotEmpty())
+            if (auto track = st->tools.findTrack (select))
+            {
+                self->ctx.selectTrack (track->id);
+                self->showDetail (false);
+            }
+        if (select.isEmpty())
+        {
+            self->detailShown = false;
+            self->resized();
+        }
+        self->refreshAll();
+
+        Timer::callAfterDelay (900, [self, st, outDir, step]
+        {
+            if (self == nullptr)
+                return;
+            if (saveShot (*self, outDir.getChildFile (step.frame)))
+                st->written.add (step.frame);
+            else
+                st->ok = false;
+
+            // The device's own panel, as Open shows it in its window.
+            if (String (step.panel).isNotEmpty())
+            {
+                bool drawn = false;
+                if (auto track = st->tools.findTrack (String (step.select)))
+                    for (auto& slot : track->plugins)
+                        if (slot->instance != nullptr && slot->getName() == step.panel)
+                            if (std::unique_ptr<AudioProcessorEditor> editor (slot->instance->createEditor()); editor != nullptr)
+                            {
+                                const auto name = String (step.frame).upToLastOccurrenceOf (".", false, false) + "-panel.jpg";
+                                if (saveShot (*editor, outDir.getChildFile (name)))
+                                {
+                                    st->written.add (name);
+                                    drawn = true;
+                                }
+                                break;
+                            }
+                if (! drawn)
+                {
+                    st->ok = false;
+                    std::cerr << step.frame << ": couldn't draw " << step.panel << "'s panel" << std::endl;
+                }
+            }
+            st->next();
+        });
+    };
+    st->next();
 }
 } // namespace lathe

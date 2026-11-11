@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.1
+
+- **A page for the AI assistant**, getlathe.app/ai.html, where an assistant builds a song in Lathe
+  step by step. Every picture of Lathe on it is drawn by Lathe after the assistant's real tool calls
+  (`Lathe --screenshots`).
+- The status bar now says "AI assistant:" for everything the assistant does (some said "Assistant:").
+- **Fixed: 0.12.0 didn't build for Windows.** 0.12.1 has Windows downloads again, with the four new devices.
+
 ## New in 0.12.0
 
 Four new built-in devices, with presets to start from:

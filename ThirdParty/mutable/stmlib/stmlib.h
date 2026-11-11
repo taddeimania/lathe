@@ -27,6 +27,17 @@
 
 #include <inttypes.h>
 #include <stddef.h>
+#include <cmath>
+
+// Lathe: MSVC only defines M_PI with _USE_MATH_DEFINES, and doesn't know GCC's __attribute__.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#if defined(_MSC_VER) && !defined(__clang__)
+#define STMLIB_ALWAYS_INLINE_DECL
+#else
+#define STMLIB_ALWAYS_INLINE_DECL __attribute__((always_inline))
+#endif
 
 #ifndef NULL
 #define NULL 0

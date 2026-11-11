@@ -46,6 +46,10 @@ All marked `Lathe:` in the code where they're more than a line.
 - `beads/`, `plaits/`, `rings/` `resources.cc`: empty lookup tables get a `NULL`
   entry, since zero-length arrays don't compile on MSVC.
 - `plaits/user_data.h`: includes `<cstdio>`.
+- `stmlib/stmlib.h`: defines `M_PI` if `<cmath>` didn't (MSVC only does with
+  `_USE_MATH_DEFINES`), and `STMLIB_ALWAYS_INLINE_DECL`, which is GCC's
+  `__attribute__((always_inline))` and nothing on MSVC. `stmlib/utils/dsp.h` uses it in place
+  of the attribute.
 - `marbles/preset_scales.h` (new): the six preset scales, which the firmware
   keeps in `settings.cc` with the flash-storage code.
 - `rings/dsp/performance_state.h`, `rings/dsp/part.h`, `rings/dsp/part.cc`: a

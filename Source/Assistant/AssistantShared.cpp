@@ -351,8 +351,8 @@ var toolDefinitions()
                                { "on", prop ("boolean", "false turns the loop off (the region is kept). Default true") } }),
                      false));
     tools.add (tool ("list_plugins", "List installed plug-ins",
-                     "The plug-ins Lathe can load on this computer: Lathe's own built-in devices first (Reverb, Delay, "
-                     "Compressor, Saturator, Mastering), then the installed ones, with name, maker, kind (instrument, note "
+                     "The plug-ins Lathe can load on this computer: Lathe's own built-in devices first (instruments such as "
+                     "Multi Synth and Drums, the Random Notes generator, and effects such as Reverb and Mastering), then the installed ones, with name, maker, kind (instrument, note "
                      "generator or effect) and format. Use the names with edit_session's add_plugin and add_track's plugins.",
                      schema ({ { "kind", prop ("string", "Only this kind: \"instrument\", \"note generator\" or \"effect\"") },
                                { "search", prop ("string", "Only plug-ins whose name or maker contains this") } }),

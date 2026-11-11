@@ -34,10 +34,10 @@ What it can do:
 | `open_project` | Opens a project from your projects folder by name (or any project by path), like File > Open. Without a name it lists them, newest first. |
 | `save_project` | Saves the project. With a name it saves it as a new project in your projects folder (its own folder, audio copied in), like Save As; it never saves over another project. |
 | `export_audio` | Renders the mix (and stems, if asked) to WAV in the project's Exports folder, like File > Export, and reports each file's length and the mix's peak and loudness (LUFS). |
-
-New project and open project replace what's open, so if there are unsaved changes they stop and ask: the assistant has to say whether to save them first or throw them away. Ask it to check with you before it throws anything away.
 | `measure_performance` | Plays some bars for real and times every audio block, as the CPU meter does: average, worst 1 in 100, peak, blocks that missed their deadline, and each track's own cost with its plug-ins. It also notes the conditions: computer, CPU and cores, interface and buffer size. |
 | `compare_processing_cores` | The same bars on 1 core and on all cores, in turn (1, all, 1, all), side by side with the speed-up. Your Processing cores setting is put back afterwards. |
+
+New project and open project replace what's open, so if there are unsaved changes they stop and ask: the assistant has to say whether to save them first or throw them away. Ask it to check with you before it throws anything away.
 
 **Building a session.** Plug-ins go where they work: a note generator (an arpeggiator, a step sequencer, a chord generator) before the instrument it drives, an instrument before the effects. A MIDI track plays one instrument. "An arpeggiator into a synth" can be one track with both plug-ins, or two tracks, the synth's track taking the arpeggiator's notes as its input, which lets you record the arpeggiator's part or drive several instruments from it. A track that takes another track as its input gets monitoring set to In, so it plays without being armed. Fader, pan, mute, solo, send levels, monitoring and arm change live, as when you move them yourself, and stay where they are on undo.
 

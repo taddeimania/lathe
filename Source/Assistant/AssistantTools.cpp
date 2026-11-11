@@ -1458,7 +1458,7 @@ var Tools::editSession (const var& args, String& status)
     edit.changed();
     edit.commitUndoStep();
 
-    status = "Assistant: " + (done.size() == 1 ? done[0] : String (done.size()) + " changes to the session")
+    status = "AI assistant: " + (done.size() == 1 ? done[0] : String (done.size()) + " changes to the session")
              + ". Cmd/Ctrl+Z undoes it.";
 
     String text = "Done. In Lathe this is one undo step (Cmd/Ctrl+Z); volume, pan, mute, solo, send levels, "
@@ -1757,7 +1757,7 @@ var Tools::setPluginParams (const var& args, String& status)
     edit.markDirty();
     edit.sendChangeMessage();
 
-    status = "Assistant: " + slot->getName() + " on " + t->name + ": "
+    status = "AI assistant: " + slot->getName() + " on " + t->name + ": "
              + (done.size() == 1 ? done[0] : String (done.size()) + " settings changed");
     String text = "Changed " + slot->getName() + " on " + quoted (t->name)
                   + ". Like turning a knob in Lathe, this isn't an undo step; the old values are on the left.\n";
@@ -1862,7 +1862,7 @@ var Tools::newProject (const var& args, String& status)
         return toolText ("Couldn't start a new project: " + error, true);
 
     const auto from = templateFile == File() ? String() : " from the template " + quoted (projectNameOf (templateFile));
-    status = "Assistant: new project" + from;
+    status = "AI assistant: new project" + from;
     String text = "New project" + from + ". It's \"Untitled\" until it's saved: save_project with a name.\n\n";
     text << JSON::toString (describeSession(), true, 4);
     return toolText (text);
@@ -1908,7 +1908,7 @@ var Tools::openProject (const var& args, String& status)
     if (const auto error = project.openProject (file); error.isNotEmpty())
         return toolText ("Couldn't open " + quoted (projectNameOf (file)) + ": " + error, true);
 
-    status = "Assistant: opened " + projectNameOf (file);
+    status = "AI assistant: opened " + projectNameOf (file);
     String text = "Opened " + quoted (projectNameOf (file)) + ".\n\n";
     text << JSON::toString (describeSession(), true, 4);
     return toolText (text);
@@ -1943,7 +1943,7 @@ var Tools::saveProject (const var& args, String& status)
     if (const auto error = project.save (target); error.isNotEmpty())
         return toolText ("Couldn't save: " + error, true);
 
-    status = "Assistant: saved " + edit.getName();
+    status = "AI assistant: saved " + edit.getName();
     return toolText ("Saved " + quoted (edit.getName()) + " to " + edit.projectFile.getFullPathName()
                      + (target != File() ? ", with its own Audio folder (any audio it uses was copied in)." : "."));
 }
@@ -2002,7 +2002,7 @@ private:
         set (out, "files", list);
         set (out, "render_seconds", rounded ((Time::getMillisecondCounterHiRes() - started) / 1000.0, 0.1));
         finish (toolText (JSON::toString (out, true, 4)),
-                "Assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to " + settings.folder.getFullPathName());
+                "AI assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to " + settings.folder.getFullPathName());
     }
 
     /** Peak, true peak and integrated loudness of the mix, so the assistant can hear it in numbers. */
@@ -2100,7 +2100,7 @@ std::shared_ptr<Tools::Job> Tools::startExport (const var& args, var& immediate)
     if (engine.isPlaying())
         engine.stop();
     if (showStatus)
-        showStatus ("Assistant: exporting " + edit.getName() + "...");
+        showStatus ("AI assistant: exporting " + edit.getName() + "...");
     auto job = std::make_shared<Job>();
     exporter = std::make_unique<Exporter> (engine, s, job, showStatus);
     return job;
@@ -2288,7 +2288,7 @@ public:
         if (run.threads >= 0)
             tools.engine.setProcessingThreads (run.threads);
         if (tools.showStatus)
-            tools.showStatus ("Assistant: measuring CPU" + (compare ? " (" + modeName (run.threads) + ", run " + String ((int) runIndex + 1) + " of "
+            tools.showStatus ("AI assistant: measuring CPU" + (compare ? " (" + modeName (run.threads) + ", run " + String ((int) runIndex + 1) + " of "
                                                                       + String ((int) runs.size()) + ")" : String())
                               + ", bars " + tools.barText (startBeats) + " to " + tools.barText (endBeats) + "...");
         if (auto* d = tools.engine.deviceManager.getCurrentAudioDevice())
@@ -2460,7 +2460,7 @@ private:
         if (! tools.alive->load())
             return;   // Lathe is closing
         if (tools.showStatus)
-            tools.showStatus ((bool) result["isError"] ? "Assistant: measurement stopped." : "Assistant: finished measuring CPU.");
+            tools.showStatus ((bool) result["isError"] ? "AI assistant: measurement stopped." : "AI assistant: finished measuring CPU.");
         tools.measurerFinished (this);
     }
 

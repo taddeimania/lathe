@@ -30,6 +30,8 @@ public:
     /** Writes the demo song's screenshots (arrange, notes, mixer, history .jpg) into outDir,
         then quits Lathe (exit code 0, or 1 if something failed). */
     void runScreenshots (const File& outDir);
+    /** The AI assistant demo's pictures (ai-1.jpg ... and ai-session.json), after the others. */
+    void runAssistantShots (const File& outDir, const File& work, std::function<void (bool, StringArray)> done);
 
     void newProject (const File& templateFile);
     void openProject (const File&);
