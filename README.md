@@ -10,24 +10,7 @@ Download it at **[getlathe.app](https://getlathe.app)**. How to use it is in **[
 
 ## Downloads on getlathe.app
 
-Publishing a release also puts it on the website: `.github/workflows/publish-downloads.yml` copies the three archives to the site's bucket, so the download buttons on [getlathe.app](https://getlathe.app) always get the newest published release:
-
-- `https://getlathe.app/downloads/Lathe-macOS.zip`, `Lathe-Windows.zip` and `Lathe-Linux.tar.gz`. These addresses stay the same every release, and the file saves under its real name, e.g. `Lathe-0.7.2-macOS.zip`.
-- `https://getlathe.app/downloads/latest.json`: the version, release date and file sizes. The page reads it to show "Version 0.7.2, released …".
-- `https://getlathe.app/downloads/v0.7.2/…`: every version, kept.
-
-Drafts and pre-releases never go to the site. To send a release again (or the current one for the first time), use **Actions > Publish downloads > Run workflow** from `main`, with a tag or empty for the latest. An older tag only fills in its own folder.
-
-It signs in to AWS with GitHub's OIDC token, so no AWS keys are stored in GitHub. It needs the secret `AWS_ROLE_ARN` (a secret so your AWS account ID is masked in the public logs) and the variables `SITE_BUCKET` and `SITE_DISTRIBUTION_ID`. `terraform output github_variables` in lathe-site prints the `gh` commands. The AWS sign-in action is pinned to a commit, since it runs with the publish role.
-
-## Builds on GitHub
-
-`.github/workflows/build.yml` builds and tests Lathe on macOS (universal), Windows and Linux. It works like the plug-in repos' workflow: it runs only when you start it (**Actions > Build > Run workflow**).
-
-- On a branch, it builds, runs the tests, and keeps the three packaged apps as run artifacts for 30 days.
-- On a `v*` tag, it does the same and then creates a **draft release** with the three archives and the text from `.github/release-notes.md`. Review the draft and publish it. The tag must match `project(Lathe VERSION ...)` in `CMakeLists.txt`.
-
-Each archive holds the app, `LatheScanner` (next to `Lathe.exe`, or inside `Lathe.app`), `README.md`, `LICENSE` and the user guide in `docs/`.
+Publishing a release also puts it on the website: `.github/workflows/publish-downloads.yml` copies the three archives to the site's bucket, so the download buttons on [getlathe.app](https://getlathe.app) always get the newest published release.
 
 ## Build
 
