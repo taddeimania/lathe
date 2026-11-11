@@ -52,6 +52,10 @@ These are headless engine checks that run a fake audio device through the real a
 
 The engine renders tracks on several cores (docs/multicore.md). `ctest` also runs every test with each block shared over 4 threads (`LATHE_TEST_THREADS=4`), and compares 200 random sessions rendered on 1 and 4 threads sample for sample. CI's **Thread check** job runs both under ThreadSanitizer. For the speed: `LatheTests --bench out.csv 1,full`, or `Lathe --benchmark` on any machine (docs/performance.md).
 
+## Third-party code
+
+The sound engines of Multi Synth, Resonator, Grains and Random Notes are Émilie Gillet's open-source DSP (MIT licence), vendored in `ThirdParty/mutable/` with a few portability changes. Its README lists the source, the licence and every change.
+
 ## Documentation
 
 The user guide and the code map are in [docs/](docs/README.md): getting started, recording and mixing, keys, Lathe Cloud, the AI assistant, the built-in devices and plug-in browser, updating, project files, and where things live in the source.

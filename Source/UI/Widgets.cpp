@@ -541,6 +541,7 @@ String describeAddTarget (AppContext& ctx, bool isInstrument, bool isMidiTool)
 std::shared_ptr<Track> addPluginToSelection (AppContext& ctx, const PluginDescription& desc, bool isMidiTool)
 {
     auto t = ctx.edit.findTrack (ctx.selection.trackId);
+    isMidiTool = isMidiTool || devices::isNoteGenerator (desc);
     const bool needsMidi = desc.isInstrument || isMidiTool;
 
     if (needsMidi)

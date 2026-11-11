@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.11.1 LANGUAGES C CXX)
+project(Lathe VERSION 0.12.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,21 @@ juce_add_binary_data(LatheData
     NAMESPACE   BinaryData
     SOURCES     Resources/Welcome.lathe)
 
+# Émilie Gillet's open-source DSP (MIT licence): the cores of Multi Synth, Resonator,
+# Grains and Random Notes. Only the DSP, vendored as-is apart from the portability changes
+# listed in ThirdParty/mutable/README.md. TEST selects its desktop (non-ARM) code.
+file(GLOB_RECURSE LATHE_MUTABLE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/mutable/*.cc")
+add_library(LatheMutable STATIC ${LATHE_MUTABLE_SOURCES})
+target_include_directories(LatheMutable SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/mutable")
+target_compile_definitions(LatheMutable PRIVATE TEST=1)
+target_compile_features(LatheMutable PRIVATE cxx_std_17)
+set_target_properties(LatheMutable PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(MSVC)
+    target_compile_options(LatheMutable PRIVATE /w /bigobj)
+else()
+    target_compile_options(LatheMutable PRIVATE -w)
+endif()
+
 # Lathe's built-in devices (instruments and effects), shared by the app and the tests.
 set(LATHE_DEVICE_SOURCES
     Source/Devices/Device.cpp
@@ -88,7 +103,8 @@ set(LATHE_DEVICE_SOURCES
     Source/Devices/Delay/Engine.cpp
     Source/Devices/Delay/Types.cpp
     Source/Devices/Master/Master.cpp
-    Source/Devices/Master/Loudness.cpp)
+    Source/Devices/Master/Loudness.cpp
+    Source/Devices/Mutable.cpp)
 
 target_sources(Lathe PRIVATE
     ${LATHE_DEVICE_SOURCES}
@@ -297,6 +313,7 @@ if(LATHE_BUILD_TESTS)
         JUCE_MODAL_LOOPS_PERMITTED=1 LATHE_CLOUD_DEV_OVERRIDES=1)
     target_link_libraries(LatheTests PRIVATE
         LatheData
+        LatheMutable
         juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra juce::juce_cryptography juce::juce_dsp
         juce::juce_recommended_config_flags)
     if(MSVC)
@@ -352,6 +369,7 @@ endif()
 target_link_libraries(Lathe
     PRIVATE
         LatheData
+        LatheMutable
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_audio_devices

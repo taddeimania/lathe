@@ -5,7 +5,7 @@
 namespace lathe::devices
 {
 /** What a device is, as Lathe lists it: the plug-in menu, the browser, the AI assistant. */
-enum class Kind { effect, instrument };
+enum class Kind { effect, instrument, generator };   // generator: makes notes, for the instrument after it
 
 /** One control on a device's panel. */
 struct Control
@@ -79,8 +79,8 @@ public:
     // --- AudioPluginInstance
     void fillInPluginDescription (PluginDescription&) const override;
     const String getName() const override   { return displayName; }
-    bool acceptsMidi() const override       { return kind == Kind::instrument; }
-    bool producesMidi() const override      { return false; }
+    bool acceptsMidi() const override       { return kind != Kind::effect; }
+    bool producesMidi() const override      { return kind == Kind::generator; }
     bool isMidiEffect() const override      { return false; }
     double getTailLengthSeconds() const override   { return 0.0; }
     bool hasEditor() const override         { return true; }
@@ -130,6 +130,13 @@ PluginDescription describe (const Info&);
 const Info* find (const PluginDescription&);
 std::unique_ptr<AudioPluginInstance> create (const PluginDescription&);
 inline bool isBuiltIn (const PluginDescription& d)   { return d.pluginFormatName == kFormatName; }
+/** A note generator, built in or not, as far as its description says (category "Generator"). */
+inline bool isNoteGenerator (const PluginDescription& d)   { return d.category.containsIgnoreCase ("generator"); }
+/** What to call a plug-in's kind in lists: "Instrument", "Note generator" or "Effect". */
+inline String kindName (const PluginDescription& d)
+{
+    return d.isInstrument ? "Instrument" : isNoteGenerator (d) ? "Note generator" : "Effect";
+}
 /** A built-in effect that's just been put on a return plays only the effect (Mix 100%),
     since the return's dry sound is already in the mix. Does nothing for anything else. */
 void startOnReturn (AudioPluginInstance&);

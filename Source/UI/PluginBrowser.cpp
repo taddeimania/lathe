@@ -30,7 +30,7 @@ public:
 
     void update()
     {
-        addButton.setTooltip (describeAddTarget (owner.ctx, desc.isInstrument, false));
+        addButton.setTooltip (describeAddTarget (owner.ctx, desc.isInstrument, devices::isNoteGenerator (desc)));
         repaint();
     }
 
@@ -53,7 +53,7 @@ public:
         const int nameWidth = GlyphArrangement::getStringWidthInt (theme::font (14.0f, true), desc.name);
         g.setColour (theme::textDim);
         g.setFont (theme::font (12.0f));
-        g.drawText (desc.isInstrument ? "Instrument" : "Effect", top.withTrimmedLeft (nameWidth + 10), Justification::centredLeft, true);
+        g.drawText (devices::kindName (desc), top.withTrimmedLeft (nameWidth + 10), Justification::centredLeft, true);
 
         g.setFont (theme::font (12.5f));
         const auto line = builtIn ? desc.descriptiveName
@@ -170,7 +170,7 @@ void PluginBrowser::refresh()
     // Lathe's own, in catalogue order: instruments first.
     for (const bool instruments : { true, false })
         for (auto& info : devices::all())
-            if ((info.kind == devices::Kind::instrument) == instruments
+            if ((info.kind != devices::Kind::effect) == instruments   // generators go with the instruments
                 && matches (instruments, info.name + " " + info.blurb + " Lathe"))
                 list.addAndMakeVisible (rows.add (new Row (*this, devices::describe (info))));
     numBuiltIn = rows.size();
@@ -257,7 +257,7 @@ void PluginBrowser::showDetails()
     if (row->builtIn)
         details.setText (d.descriptiveName + "\n\nBuilt into Lathe: nothing to install, and anyone you share the project with has it too.", false);
     else
-        details.setText (d.manufacturerName + "\n" + d.pluginFormatName + "  /  " + (d.isInstrument ? "Instrument" : "Effect")
+        details.setText (d.manufacturerName + "\n" + d.pluginFormatName + "  /  " + devices::kindName (d)
                          + (d.version.isNotEmpty() ? "  /  " + d.version : String()) + "\n" + d.fileOrIdentifier, false);
 }
 

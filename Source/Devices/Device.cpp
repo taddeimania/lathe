@@ -453,7 +453,7 @@ PluginDescription describe (const Info& info)
     d.descriptiveName = info.blurb;
     d.manufacturerName = "Lathe";
     d.pluginFormatName = kFormatName;
-    d.category = info.kind == Kind::instrument ? "Instrument" : "Effect";
+    d.category = info.kind == Kind::instrument ? "Instrument" : info.kind == Kind::generator ? "Generator" : "Effect";
     d.fileOrIdentifier = "lathe:" + info.id;
     d.uniqueId = d.deprecatedUid = (int) (DefaultHashFunctions::generateHash (d.fileOrIdentifier, std::numeric_limits<int>::max()));
     d.isInstrument = info.kind == Kind::instrument;

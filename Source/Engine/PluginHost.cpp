@@ -380,7 +380,7 @@ PopupMenu PluginHost::buildMenu (bool instrumentsFirst, std::vector<PluginDescri
         // Lathe's own first, then the installed plug-ins by maker.
         for (auto& info : devices::all())
         {
-            if ((info.kind == devices::Kind::instrument) != instruments)
+            if ((info.kind != devices::Kind::effect) != instruments)   // generators go with the instruments
                 continue;
             results.push_back (devices::describe (info));
             menu.addItem ((int) results.size(), info.name);

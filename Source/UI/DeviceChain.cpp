@@ -1,4 +1,5 @@
 #include "DeviceChain.h"
+#include "../Devices/Device.h"
 
 namespace lathe
 {
@@ -62,7 +63,7 @@ public:
         else
         {
             const int latency = slot->instance->getLatencySamples();
-            line2 = (slot->isInstrument() ? "Instrument" : "Effect") + String (latency > 0 ? ",  " + String (latency) + " smp latency" : "");
+            line2 = devices::kindName (slot->description) + String (latency > 0 ? ",  " + String (latency) + " smp latency" : "");
         }
         g.drawText (line1, info.removeFromTop (16), Justification::centredLeft, true);
         g.drawText (line2, info.removeFromTop (16), Justification::centredLeft, true);

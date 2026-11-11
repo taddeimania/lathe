@@ -801,7 +801,7 @@ String Tools::pluginKind (const PluginDescription& d) const
 {
     // Lathe's own devices say what they are.
     if (auto* info = devices::find (d))
-        return info->kind == devices::Kind::instrument ? "instrument" : "effect";
+        return info->kind == devices::Kind::instrument ? "instrument" : info->kind == devices::Kind::generator ? "note generator" : "effect";
 
     // Loaded in this project already: then the plug-in itself says.
     for (auto* list : { &edit.tracks, &edit.buses })

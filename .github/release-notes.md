@@ -3,6 +3,23 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.0
+
+Four new built-in devices, with presets to start from:
+
+- **Multi Synth.** Eight voices, 24 models in one instrument: analog, FM, wavetables, formants,
+  chords, speech, swarms, plucked strings, bells and drums. Three tone controls work on every model,
+  and an envelope can move them.
+- **Resonator.** A struck and plucked body: bells, bars, single and sympathetic strings, FM tones
+  and chord strings. Play harder and it's louder and brighter.
+- **Grains**, an effect. Cuts what you play into grains and plays them back shorter, longer,
+  shifted, scattered or frozen, from clean to worn tape.
+- **Random Notes**, a note generator. Put it before an instrument and it writes a melody in time with
+  the song, in the scale and range you choose. Turn up Déjà vu to make it repeat itself, and pick a
+  Variation for a different melody. The same Variation always plays the same notes.
+
+Your AI assistant can use all four, and set every one of their controls.
+
 ## New in 0.11.1
 
 - **Your AI assistant can change plug-in settings.** Two new tools read and set any setting a plug-in

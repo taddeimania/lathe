@@ -3,6 +3,7 @@
 // Saturator are small and self-contained.
 #include "Device.h"
 #include "Instruments.h"
+#include "Mutable.h"
 #include "Reverb/Engine.h"
 #include "Delay/Engine.h"
 #include "Master/Master.h"
@@ -761,12 +762,16 @@ const std::vector<Info>& all()
     static const std::vector<Info> list {
         { "bass", "Bass Synth", Kind::instrument, "A mono synth for basslines: saw, square or triangle, a sub, and glide.", [] { return makeBassSynth(); } },
         { "poly", "Poly Synth", Kind::instrument, "An eight-voice synth for pads, keys, brass and plucks.", [] { return makePolySynth(); } },
+        { "multi", "Multi Synth", Kind::instrument, "Eight voices, 24 ways to make a sound: analog, FM, wavetables, chords, speech, strings and drums.", [] { return makeMultiSynth(); } },
+        { "resonator", "Resonator", Kind::instrument, "Strings, bells and struck bars that ring when you play them.", [] { return makeResonator(); } },
         { "drums", "Drums", Kind::instrument, "Synthesized kits in the style of the classic drum machines: Simple 909, 808, 606 and 707.", [] { return makeDrums(); } },
         { "reverb", "Reverb", Kind::effect, "Rooms, a chamber, a hall, a plate and a spring.", [] { return std::unique_ptr<Device> (new Reverb()); } },
         { "delay", "Delay", Kind::effect, "Clean, tape, analog and lo-fi echoes, in time with the song.", [] { return std::unique_ptr<Device> (new Delay()); } },
+        { "grains", "Grains", Kind::effect, "Chops what goes through it into grains, then smears, scatters, pitches and freezes them.", [] { return makeGrains(); } },
         { "compressor", "Compressor", Kind::effect, "Evens out levels: glue a bus, tame a vocal, squash drums.", [] { return std::unique_ptr<Device> (new Compressor()); } },
         { "saturator", "Saturator", Kind::effect, "Warmth and grit: tape, tube or clipped.", [] { return std::unique_ptr<Device> (new Saturator()); } },
-        { "mastering", "Mastering", Kind::effect, "Finishes a mix to a loudness target.", [] { return std::unique_ptr<Device> (new Master()); } } };
+        { "mastering", "Mastering", Kind::effect, "Finishes a mix to a loudness target.", [] { return std::unique_ptr<Device> (new Master()); } },
+        { "randomnotes", "Random Notes", Kind::generator, "Plays random melodies and rhythms in time and in key, and can loop what it played.", [] { return makeRandomNotes(); } } };
     return list;
 }
 } // namespace lathe::devices

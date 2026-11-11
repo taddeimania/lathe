@@ -193,13 +193,17 @@ namespace cloudlinks
 {
 String inviteCode (String text)
 {
-    text = text.trim();
+    static const String allowed ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
+    // A link that went through a social site may have picked up tracking (?trk=, &fbclid=, utm_
+    // tags), even after the code, or had its "#" encoded as %23. The code is what follows the "#",
+    // up to the first character that can't be part of one.
+    text = text.trim().replace ("%23", "#", true);
     if (text.containsChar ('#'))
-        text = text.fromLastOccurrenceOf ("#", false, false);
+        text = text.fromFirstOccurrenceOf ("#", false, false).initialSectionContainingOnly (allowed);
     else if (text.containsChar ('/'))
-        text = text.fromLastOccurrenceOf ("/", false, false);
+        text = text.upToFirstOccurrenceOf ("?", false, false).fromLastOccurrenceOf ("/", false, false);
     text = text.trim();
-    if (text.length() < 8 || text.length() > 40 || ! text.containsOnly ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"))
+    if (text.length() < 8 || text.length() > 40 || ! text.containsOnly (allowed))
         return {};
     return text;
 }
@@ -320,7 +324,7 @@ void CloudController::joinWithLink()
     auto* d = new LinkDialog ("Join with an invite link", true);
     d->setMessage ("Paste the link someone sent you. You'll be friends, and if it's for a song, you can open it right away.");
     const auto clip = SystemClipboard::getTextFromClipboard().trim();
-    if (clip.contains ("join.html#") && inviteCode (clip).isNotEmpty())
+    if ((clip.contains ("join.html#") || clip.containsIgnoreCase ("join.html%23")) && inviteCode (clip).isNotEmpty())
         d->link.setText (clip, false);
     d->setLink (d->link.getText());
     d->setMain ("Join");

@@ -14,9 +14,12 @@ Source/
   Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,
                         snapshots, push / pull), ProjectDiff (change summaries)
   Patcher/              Lathe Patcher: Updater.* (GitHub lookup, download, verify, swap in place) + its window
-  Devices/              Lathe's built-in effects: Device.* (base class, shared panel, catalogue), Effects.cpp
+  Devices/              Lathe's built-in devices: Device.* (base class, shared panel, catalogue), Effects.cpp
                         (Reverb, Delay, Compressor, Saturator, Mastering), and their engines in
-                        Reverb/, Delay/ and Master/
+                        Reverb/, Delay/ and Master/; Instruments.* (Bass Synth, Poly Synth, Drums);
+                        Mutable.* (Multi Synth, Resonator, Grains, Random Notes, and CoreRate, which
+                        runs a fixed-rate core at any sample rate)
+ThirdParty/mutable/     the vendored MIT DSP behind those four (see its README for source and changes)
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
   UI/CloudLinks.*       invite links and listening links (pages on getlathe.app), Cloud menu
   UI/                   transport, arrangement, mixer (+ mix tabs), device chain, EQ editor, piano roll, dialogs

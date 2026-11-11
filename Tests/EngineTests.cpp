@@ -1177,7 +1177,7 @@ int main (int argc, char** argv)
         StringArray ids;
         for (auto& info : all())
             ids.add (info.id);
-        check (ids.joinIntoString (",") == "bass,poly,drums,reverb,delay,compressor,saturator,mastering", "the built-in devices (" + ids.joinIntoString (",") + ")");
+        check (ids.joinIntoString (",") == "bass,poly,multi,resonator,drums,reverb,delay,grains,compressor,saturator,mastering,randomnotes", "the built-in devices (" + ids.joinIntoString (",") + ")");
 
         // Noise for half a second, then silence; instruments get a chord (or a drum hit
         // every eighth note) for that half second instead.
@@ -1245,7 +1245,10 @@ int main (int argc, char** argv)
 
             std::vector<float> out;
             runDevice (device, 2, out);
-            check (finite (out) && rms (out, 0, 24000) > 0.01, info.name + ": processes sound (rms " + String (rms (out, 0, 24000), 3) + ")");
+            if (info.kind == Kind::generator)   // it makes notes, not sound (tested below)
+                check (finite (out) && rms (out, 0, 24000) < 1.0e-6, info.name + ": makes no sound of its own");
+            else
+                check (finite (out) && rms (out, 0, 24000) > 0.01, info.name + ": processes sound (rms " + String (rms (out, 0, 24000), 3) + ")");
 
             // Every preset plays without blowing up.
             bool allFinite = true;
@@ -1365,6 +1368,253 @@ int main (int argc, char** argv)
             std::vector<float> out;
             runDevice (d, 1, out, 0.3f);
             check (d.getLatencySamples() > 0, "saturator: reports its oversampling latency (" + String (d.getLatencySamples()) + " samples)");
+        }
+
+        // --- Invite links pasted after a trip through a social site
+        {
+            const String c ("Ab3_d-9xYz12");
+            StringArray wrong;
+            for (auto link : { "https://getlathe.app/join.html#" + c, "https://getlathe.app/join.html?trk=public_post#" + c,
+                               "https://getlathe.app/join.html#" + c + "?trk=public_post", "https://getlathe.app/join.html#" + c + "&fbclid=IwAR0x",
+                               "https://getlathe.app/join.html#" + c + "/", "https://getlathe.app/join.html%23" + c + "?utm_source=linkedin",
+                               "  " + c + "\n" })
+                if (cloudlinks::inviteCode (link) != c)
+                    wrong.add (link + " -> " + cloudlinks::inviteCode (link));
+            for (auto notLink : { String ("https://getlathe.app/download.html"), String ("https://getlathe.app/join.html#short?x=1"),
+                                  String ("https://getlathe.app/?fbclid=abcdefghijk") })
+                if (cloudlinks::inviteCode (notLink).isNotEmpty())
+                    wrong.add (notLink + " -> " + cloudlinks::inviteCode (notLink));
+            check (wrong.isEmpty(), "invite links with tracking added still give their code" + (wrong.isEmpty() ? String() : " (" + wrong.joinIntoString ("; ") + ")"));
+        }
+
+        // --- Multi Synth, Resonator, Grains and Random Notes (ThirdParty/mutable)
+        struct TestHead : AudioPlayHead
+        {
+            bool playing = true;
+            double ppq = 0.0, bpm = 120.0;
+            Optional<PositionInfo> getPosition() const override
+            {
+                PositionInfo p;
+                p.setIsPlaying (playing);
+                p.setPpqPosition (ppq);
+                p.setBpm (bpm);
+                return p;
+            }
+        };
+        // Plays one note (note-on at 0, note-off at `offAt` samples) and returns the left channel.
+        auto playNote = [] (AudioPluginInstance& p, double rate, int note, float velocity, int total, int offAt)
+        {
+            constexpr int block = 256;
+            p.prepareToPlay (rate, block);
+            AudioBuffer<float> buffer (2, block);
+            std::vector<float> out;
+            for (int pos = 0; pos < total; pos += block)
+            {
+                MidiBuffer midi;
+                if (pos == 0)
+                    midi.addEvent (MidiMessage::noteOn (1, note, velocity), 0);
+                if (offAt >= pos && offAt < pos + block)
+                    midi.addEvent (MidiMessage::noteOff (1, note), offAt - pos);
+                buffer.clear();
+                p.processBlock (buffer, midi);
+                for (int i = 0; i < block; ++i)
+                    out.push_back (0.5f * (buffer.getSample (0, i) + buffer.getSample (1, i)));
+            }
+            return out;
+        };
+        // The pitch of a steady tone, from its zero crossings (rising), in Hz.
+        auto pitchOf = [] (const std::vector<float>& v, int from, int to, double rate)
+        {
+            int first = -1, last = -1, crossings = 0;
+            for (int i = from + 1; i < to && i < (int) v.size(); ++i)
+                if (v[(size_t) i - 1] < 0.0f && v[(size_t) i] >= 0.0f)
+                {
+                    if (first < 0) first = i;
+                    last = i;
+                    ++crossings;
+                }
+            return crossings > 1 ? (crossings - 1) * rate / (double) (last - first) : 0.0;
+        };
+
+        // Multi Synth: every model sounds, A4 is 440 Hz at 48 and 44.1 kHz, and a note stops after its release.
+        {
+            auto slot = load ("multi");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            const int models = d.state.getParameter ("model")->getNumSteps();
+            StringArray silent;
+            bool allFinite = true;
+            for (int m = 0; m < models; ++m)
+            {
+                d.set ("model", (float) m);
+                const auto out = playNote (d, 48000.0, 60, 0.9f, 24000, 12000);
+                if (rms (out, 0, 12000) < 0.003)
+                    silent.add (d.state.getParameter ("model")->getCurrentValueAsText());
+                allFinite = allFinite && finite (out);
+            }
+            check (silent.isEmpty() && allFinite, "Multi Synth: all " + String (models) + " models make sound"
+                                                       + (silent.isEmpty() ? String() : " (silent: " + silent.joinIntoString (", ") + ")"));
+            d.setCurrentProgram (0);
+            d.set ("model", 3.0f);   // Two-op FM: with no modulation (Timbre 0), a sine
+            d.set ("harmonics", 0.5f); d.set ("timbre", 0.0f); d.set ("morph", 0.5f); d.set ("envTimbre", 0.0f); d.set ("colour", 1.0f);
+            for (const double rate : { 48000.0, 44100.0 })
+            {
+                const auto out = playNote (d, rate, 69, 1.0f, (int) rate, (int) (rate * 0.6));
+                const double hz = pitchOf (out, (int) (rate * 0.1), (int) (rate * 0.5), rate);
+                check (std::abs (hz - 440.0) < 1.5, "Multi Synth: A4 plays at 440 Hz at " + String (rate / 1000.0, 1) + " kHz ("
+                                                       + String (hz, 2) + " Hz)");
+                double after[4];
+                for (int k = 0; k < 4; ++k)
+                    after[k] = rms (out, (int) (rate * (0.6 + 0.1 * k)), (int) (rate * (0.7 + 0.1 * k)));
+                check (after[3] < 1.0e-3, "...and it's quiet once released at " + String (rate / 1000.0, 1) + " kHz (rms per 100 ms after: "
+                           + String (after[0], 4) + " " + String (after[1], 4) + " " + String (after[2], 4) + " " + String (after[3], 4) + ")");
+            }
+        }
+
+        // Resonator: each model rings, keeps ringing after the key is up, and soft notes are softer.
+        {
+            auto slot = load ("resonator");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            StringArray dead;
+            for (int m = 0; m < 6; ++m)
+            {
+                d.setCurrentProgram (0);
+                d.set ("model", (float) m);
+                d.set ("damping", 0.7f);   // the first preset is a short marimba
+                const auto out = playNote (d, 44100.0, 57, 1.0f, 44100, 2000);
+                // Still ringing a third of a second after the key is up, at a fair share of how it started.
+                const auto start = rms (out, 0, 8000), tail = rms (out, 8000, 22000);
+                if (tail < 0.002 || tail < start * 0.2 || ! finite (out))
+                    dead.add (String (m) + "=" + String (rms (out, 8000, 22000), 4) + "/" + String (rms (out, 0, 8000), 4));
+            }
+            check (dead.isEmpty(), "Resonator: every model rings on after a short note" + (dead.isEmpty() ? String() : " (not: " + dead.joinIntoString (",") + ")"));
+            d.setCurrentProgram (0);
+            const auto loud = playNote (d, 48000.0, 57, 1.0f, 24000, 1000);
+            const auto soft = playNote (d, 48000.0, 57, 0.15f, 24000, 1000);
+            check (rms (soft, 0, 24000) < rms (loud, 0, 24000) * 0.9, "Resonator: a soft note is softer ("
+                       + String (rms (soft, 0, 24000), 4) + " vs " + String (rms (loud, 0, 24000), 4) + ")");
+        }
+
+        // Grains: wet isn't the dry sound, Freeze keeps playing after the input stops, at any rate and quality.
+        {
+            auto slot = load ("grains");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            bool ok = true;
+            for (const double rate : { 48000.0, 44100.0, 96000.0 })
+                for (int q = 0; q < 4; ++q)
+                {
+                    d.setCurrentProgram (0);
+                    d.set ("quality", (float) q);
+                    d.set ("mix", 1.0f);
+                    d.set ("time", 0.02f);   // grains from just behind what's coming in
+                    d.set ("scatter", 0.0f);
+                    d.set ("density", 0.8f);
+                    d.prepareToPlay (rate, 256);
+                    AudioBuffer<float> buffer (2, 256);
+                    MidiBuffer midi;
+                    std::vector<float> out;
+                    const int total = (int) rate * 3;
+                    for (int pos = 0; pos < total; pos += 256)
+                    {
+                        if (pos >= (int) rate * 2)
+                            d.set ("freeze", 1.0f);
+                        for (int c = 0; c < 2; ++c)
+                            for (int i = 0; i < 256; ++i)
+                                buffer.setSample (c, i, pos + i < (int) rate * 2 ? 0.3f * std::sin ((float) (pos + i) * 0.03f) : 0.0f);
+                        d.processBlock (buffer, midi);
+                        for (int i = 0; i < 256; ++i)
+                            out.push_back (buffer.getSample (0, i));
+                    }
+                    d.set ("freeze", 0.0f);
+                    const double wet = rms (out, (int) rate, (int) rate * 2), frozen = rms (out, (int) (rate * 2.5), total);
+                    if (! finite (out) || wet < 0.01 || frozen < 0.005)
+                    {
+                        ok = false;
+                        std::cout << "    grains at " << rate << " Hz, quality " << q << ": wet " << wet << ", frozen " << frozen << std::endl;
+                    }
+                }
+            check (ok, "Grains: sounds, and Freeze holds the sound after the input stops (every quality, at 44.1, 48 and 96 kHz)");
+            check (d.getTailLengthSeconds() >= 5.0, "Grains: says it has a long tail");
+        }
+
+        // Random Notes: notes only while playing, in the scale and range, the same each time for a Variation.
+        {
+            auto slot = load ("randomnotes");
+            auto& d = dynamic_cast<Device&> (*slot->instance);
+            TestHead head;
+            d.setPlayHead (&head);
+            struct Played { int note, velocity, at; };
+            auto run = [&] (int seconds, std::function<void (int pos, MidiBuffer&)> feed = {})
+            {
+                std::vector<Played> ons;
+                int offs = 0;
+                d.prepareToPlay (48000.0, 256);
+                AudioBuffer<float> buffer (2, 256);
+                head.ppq = 0.0;
+                for (int pos = 0; pos < 48000 * seconds; pos += 256)
+                {
+                    MidiBuffer midi;
+                    if (feed)
+                        feed (pos, midi);
+                    d.processBlock (buffer, midi);
+                    for (const auto m : midi)
+                    {
+                        if (m.getMessage().isNoteOn())
+                            ons.push_back ({ m.getMessage().getNoteNumber(), m.getMessage().getVelocity(), pos + m.samplePosition });
+                        else if (m.getMessage().isNoteOff())
+                            ++offs;
+                    }
+                    if (head.playing)
+                        head.ppq += 256.0 * head.bpm / 60.0 / 48000.0;
+                }
+                return std::make_pair (ons, offs);
+            };
+            d.setCurrentProgram (0);
+            d.set ("scale", 0.0f);   // major
+            d.set ("lowest", 48.0f); // C2
+            d.set ("range", 0.0f);   // two octaves
+            d.set ("play", 2.0f);    // both
+            head.playing = true;
+            auto [ons, offs] = run (8);
+            bool inKey = true, inRange = true;
+            static const std::set<int> major { 0, 2, 4, 5, 7, 9, 11 };
+            for (auto& p : ons)
+            {
+                inKey = inKey && major.count (p.note % 12) > 0;
+                inRange = inRange && p.note >= 48 && p.note <= 72;
+            }
+            check (ons.size() > 20, "Random Notes: plays notes while the song plays (" + String ((int) ons.size()) + " in 8 s)");
+            check (inKey && inRange, "Random Notes: every note is in C major, between C2 and C4");
+            auto again = run (8);
+            bool same = again.first.size() == ons.size();
+            for (size_t i = 0; same && i < ons.size(); ++i)
+                same = again.first[i].note == ons[i].note && again.first[i].at == ons[i].at;
+            check (same, "Random Notes: the same Variation plays the same notes, at the same times");
+            d.set ("variation", 2.0f);
+            auto other = run (8);
+            bool differs = other.first.size() != ons.size();
+            for (size_t i = 0; ! differs && i < ons.size(); ++i)
+                differs = other.first[i].note != ons[i].note;
+            check (differs, "Random Notes: another Variation plays something else");
+            d.set ("variation", 1.0f);
+
+            // Stopping: the notes sounding stop, and nothing else is played.
+            auto stopped = run (2, [&] (int pos, MidiBuffer&) { head.playing = pos < 48000; });
+            bool afterStop = false;
+            for (auto& p : stopped.first)
+                afterStop = afterStop || p.at >= 48000 + 256;
+            check (! afterStop && (int) stopped.first.size() <= stopped.second, "Random Notes: stopping ends every note and plays no more ("
+                       + String ((int) stopped.first.size()) + " on, " + String (stopped.second) + " off)");
+            head.playing = true;
+
+            // Follow keys: hold D3 and the notes move up to start there.
+            d.set ("followKeys", 1.0f);
+            auto followed = run (4, [&] (int pos, MidiBuffer& m) { if (pos == 0) m.addEvent (MidiMessage::noteOn (1, 62, 1.0f), 0); });
+            bool fromD = ! followed.first.empty();
+            for (auto& p : followed.first)
+                fromD = fromD && p.note >= 62 && major.count ((p.note - 62 + 12) % 12) > 0;
+            check (fromD, "Random Notes: with Follow keys, a held D3 moves the scale to start on D3 (and the key isn't played)");
+            d.set ("followKeys", 0.0f);
+            d.setPlayHead (nullptr);
         }
 
         // Mastering: the limiter keeps peaks under the target's ceiling, and it reports its latency.
@@ -3131,8 +3381,15 @@ int main (int argc, char** argv)
             check (listed["plugins"].size() == 5 + (int) devices::all().size() && diceyKind == "note generator"
                    && listed["plugins"][0]["format"].toString() == "built into Lathe",
                    "list_plugins lists Lathe's own first, then these, Arpeggiator as a note generator");
-            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2 + 3,   // + Lathe's own three
+            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2 + 5,   // + Lathe's own five
                    "list_plugins filters by kind");
+            {
+                const auto gens = JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "note generator" } }), status)));
+                bool hasRandomNotes = false;
+                for (auto& g : *gens["plugins"].getArray())
+                    hasRandomNotes = hasRandomNotes || g["name"].toString() == "Random Notes";
+                check (hasRandomNotes, "Lathe's own Random Notes is listed as a note generator");
+            }
 
             // One track: the generator goes before the instrument, whatever order it's given in.
             auto r = tx.call ("edit_session", batchOf ({ change ({ { "action", "add_track" }, { "kind", "midi" }, { "name", "Drums" },
