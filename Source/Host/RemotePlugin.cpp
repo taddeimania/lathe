@@ -108,7 +108,7 @@ public:
             return {};
         }
 
-        if (! launchWorkerProcess (exe, remote::commandLineId(), 10000, 0))
+        if (! launchWorkerProcess (exe, remote::commandLineId(), remote::pingTimeoutMs, 0))
         {
             error = "LatheHost didn't start.";
             return {};

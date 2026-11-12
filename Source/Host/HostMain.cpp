@@ -295,7 +295,9 @@ private:
         o->setProperty ("hasEditor", plugin->hasEditor());
         o->setProperty ("params", describeParams());
 
-        startRealtimeThread (Thread::RealtimeOptions{}.withApproximateAudioProcessingTime (jmax (16, block), rate));
+        // Realtime priority where the system allows it (Linux often doesn't, without permission).
+        if (! startRealtimeThread (Thread::RealtimeOptions{}.withApproximateAudioProcessingTime (jmax (16, block), rate)))
+            startThread (Thread::Priority::highest);
         reply (msg, out);
     }
 
@@ -421,7 +423,7 @@ static int runHost (const String& commandLine)
 {
     ScopedJuceInitialiser_GUI juceInit;
     auto host = std::make_unique<Host>();
-    if (! host->initialiseFromCommandLine (commandLine, remote::commandLineId(), 10000))
+    if (! host->initialiseFromCommandLine (commandLine, remote::commandLineId(), remote::pingTimeoutMs))
         return 2;
     MessageManager::getInstance()->runDispatchLoop();
     host.reset();
