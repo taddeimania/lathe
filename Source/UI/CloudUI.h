@@ -22,6 +22,8 @@ public:
         std::function<File()> projectsDir;
         /** The Cloud menu's contents changed (the Mac's menu bar only rebuilds when told). */
         std::function<void()> menuChanged;
+        /** Changes were set aside or put back (the main window shows a bar while they're aside). */
+        std::function<void()> setAsideChanged;
     };
 
     CloudController (AppContext&, PropertiesFile&, Hooks);
@@ -51,7 +53,13 @@ public:
     String getPlanName() const   { return planName; }
     int getRevisionsKept() const { return revisionsKept; }
     void openSharedProject();
-    void openRevision (const cloud::Revision&);
+    /** Opens a revision (what is open is kept in History first); then runs once it's open. */
+    void openRevision (const cloud::Revision&, std::function<void()> then = {});
+    /** Your changes set aside while you listen to a newer revision: put them back on top of what's
+        open (asking about anything you both changed), or forget them (they stay in History). */
+    bool hasSetAside() const;
+    void putBackChanges();
+    void forgetSetAside();
     /** Cloud > Projects: your projects and songs, sharing, moving, deleting. */
     void showLibrary (const String& selectSongId = {});
     /** Cloud > Friends: requests and the people you can share with. */
@@ -114,7 +122,9 @@ private:
     void updateStatus();
     void ensureReady (std::function<void()> then);   // signed in, project saved
     void doPush (const String& parent, const String& message);
-    void pushOnTop (const String& theirHead, const String& message);
+    /** Someone pushed while you were working: keeps your changes aside (safe in History), pulls,
+        and opens the newest revision so you can listen. `message` is remembered for the push. */
+    void setAsideAndGetNewest (const String& message);
     void poll();
     void pollAccount();                       // notices and friend requests
     void showNotices (const Array<var>& notices);
@@ -138,6 +148,7 @@ private:
     Hooks hooks;
     // Shared with background jobs, so a job finishing after the window closes is safe.
     std::shared_ptr<cloud::Client> client;
+    String pendingPushMessage;   // what you typed for a push that someone else beat
     std::shared_ptr<cloud::LocalStore> store;
     ThreadPool worker { 1 };
     ThreadPool apiWorker { 2 };

@@ -61,10 +61,14 @@ Lathe can share a project with collaborators through Lathe Cloud. It works like 
 - Your plan shows in the Cloud menu next to your email. When something doesn't fit, Lathe says what and why before anything uploads.
 
 **If someone pushed first**
-- Lathe refuses to overwrite their revision and asks you to choose:
-  - **Pull theirs first**, to look at it.
-  - **Push mine on top**: yours becomes the latest, and theirs stays in History.
-- There's no automatic merging of changes yet. The change summaries show what each side did.
+- Lathe never puts your revision on top of theirs as it is (theirs would go missing from the newest revision). You get theirs first, then push yours on top of it:
+  1. **Get the Newest**: Lathe sets your changes aside (kept in History as a Local revision, so nothing can be lost), pulls, and opens the newest revision. A bar under the transport says your changes are set aside. Listen, and change anything you like.
+  2. **Put My Changes Back** (the bar, or the Cloud menu): Lathe puts what you'd changed on top of what's open. Changes are compared per song setting (tempo, time signature), per track setting (fader, pan, mute, plug-ins, EQ, sends, name, routing) and per clip, so if you worked on the vocal and they worked on the guitar, both stay. New tracks and clips from both sides stay.
+  3. If you both changed the same thing (the same fader, the same clip, the tempo), Lathe lists each one in plain words ("Mine: fader -8.0 dB -> -6.0 dB" / "r2: fader -8.0 dB -> -1.0 dB") and you pick which to keep, or Keep All Mine / Keep All r2's. Cancel changes nothing.
+  4. Push. The new revision has everything in theirs, plus your changes.
+- Pulling while you have changes you haven't pushed offers the same thing: **Set Mine Aside and Open r2**.
+- **Forget Them** (the bar, or Cloud > Forget My Set-Aside Changes) drops them; they stay in History.
+- Your record arm and monitoring settings, and the loop region, are always yours: they never count as a conflict.
 
 **Other things to know**
 - While a shared song is open, Lathe checks every two minutes for new revisions, friend requests and notices, and the status bar tells you when something is waiting.

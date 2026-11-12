@@ -1502,6 +1502,134 @@ int main (int argc, char** argv)
             check (JSON::toString (JSON::parse (once)) == once, "a project's JSON reads back exactly as it was written");
         }
 
+        // --- Putting set-aside changes back on top of a newer revision (three-way merge)
+        {
+            // r1: Drums (id 1, one clip), Guitar (id 2), a Plate return (id 3), the master (id 4).
+            const String r1 = R"({"format":"lathe-project","version":1,"tempo":100.0,"timeSignature":[4,4],
+                "loop":{"enabled":false,"start":0.0,"end":16.0},
+                "tracks":[
+                  {"id":1,"kind":"audio","name":"Drums","volume":-6.0,"pan":0.0,"mute":false,
+                   "plugins":[{"description":"<PLUGIN name=\"Comp\"/>","state":"AAA","bypassed":false,"params":{"Ratio":"4:1"}}],
+                   "clips":[{"id":10,"kind":"audio","name":"Drums 1","start":0.0,"length":16.0,"file":"Audio/d.wav","hash":"h10"}]},
+                  {"id":2,"kind":"audio","name":"Guitar","volume":-6.0,"pan":0.0,"mute":false,"plugins":[],"clips":[]}],
+                "returns":[{"id":3,"kind":"audio","name":"Plate","volume":-6.0,"pan":0.0,"plugins":[]}],
+                "master":{"id":4,"kind":"audio","name":"Master","volume":0.0,"pan":0.0,"plugins":[]}})";
+            const auto base = JSON::parse (r1);
+            auto edit = [&] (std::function<void (var&)> change) { auto p = JSON::parse (r1); change (p); return p; };
+            auto track = [] (var& p, int id) -> DynamicObject*
+            {
+                for (auto& t : *p["tracks"].getArray())
+                    if ((int) t["id"] == id)
+                        return t.getDynamicObject();
+                return nullptr;
+            };
+            auto newClip = [] (int id, const String& name, const String& hash)
+            {
+                return JSON::parse ("{\"id\":" + String (id) + ",\"kind\":\"audio\",\"name\":\"" + name
+                                    + "\",\"start\":4.0,\"length\":4.0,\"file\":\"Audio/x.wav\",\"hash\":\"" + hash + "\"}");
+            };
+            auto newTrack = [] (int id, const String& name)
+            {
+                return JSON::parse ("{\"id\":" + String (id) + ",\"kind\":\"audio\",\"name\":\"" + name
+                                    + "\",\"volume\":0.0,\"pan\":0.0,\"plugins\":[],\"clips\":[]}");
+            };
+
+            // You: Guitar louder, a guitar take (clip 11), a new Vocal track (id 5).
+            const auto yours = edit ([&] (var& p)
+            {
+                track (p, 2)->setProperty ("volume", -3.0);
+                track (p, 2)->getProperty ("clips").getArray()->add (newClip (11, "Guitar 1", "hg"));
+                p["tracks"].getArray()->add (newTrack (5, "Vocal"));
+            });
+            // r2: Drums quieter, faster, a drum fill (also clip 11), a new Keys track (also id 5).
+            const auto theirs = edit ([&] (var& p)
+            {
+                p.getDynamicObject()->setProperty ("tempo", 104.0);
+                track (p, 1)->setProperty ("volume", -9.0);
+                track (p, 1)->getProperty ("clips").getArray()->add (newClip (11, "Fill", "hf"));
+                p["tracks"].getArray()->add (newTrack (5, "Keys"));
+            });
+            auto m = cloud::mergeProjects (base, yours, theirs);
+            auto* tracks = m.project["tracks"].getArray();
+            std::set<int> ids;
+            StringArray names;
+            for (auto& t : *tracks)
+            {
+                ids.insert ((int) t["id"]);
+                names.add (t["name"].toString());
+                for (auto& c : *t["clips"].getArray())
+                    ids.insert ((int) c["id"]);
+            }
+            check (m.conflicts.empty() && m.yoursChangedAnything && (double) m.project["tempo"] == 104.0
+                       && (double) track (m.project, 1)->getProperty ("volume") == -9.0
+                       && (double) track (m.project, 2)->getProperty ("volume") == -3.0
+                       && names.joinIntoString (",") == "Drums,Guitar,Keys,Vocal",
+                   "putting changes back: theirs and yours on different tracks both stay");
+            check (ids.size() == 7 && track (m.project, 2)->getProperty ("clips").getArray()->size() == 1
+                       && (int) (*track (m.project, 2)->getProperty ("clips").getArray())[0]["id"] > 11
+                       && track (m.project, 1)->getProperty ("clips").getArray()->size() == 2,
+                   "putting changes back: your new clip and track get new ids where theirs used the same ones");
+
+            // Both moved the Guitar fader: a conflict, theirs until you choose yours.
+            const auto louder = edit ([&] (var& p) { track (p, 2)->setProperty ("volume", -1.0); });
+            m = cloud::mergeProjects (base, yours, louder);
+            check (m.conflicts.size() == 1 && m.conflicts[0].what == "\"Guitar\": fader"
+                       && m.conflicts[0].yours.contains ("-3.0 dB") && m.conflicts[0].theirs.contains ("-1.0 dB")
+                       && (double) track (m.project, 2)->getProperty ("volume") == -1.0,
+                   "putting changes back: the same fader moved both ways is one conflict, in words");
+            m.conflicts[0].takeYours (m.project);
+            check ((double) track (m.project, 2)->getProperty ("volume") == -3.0
+                       && track (m.project, 2)->getProperty ("clips").getArray()->size() == 1,
+                   "putting changes back: keeping yours changes just that");
+
+            // The same change on both sides isn't a conflict; neither are plug-in readouts that
+            // only exist where the plug-in loaded.
+            const auto same = edit ([&] (var& p)
+            {
+                track (p, 2)->setProperty ("volume", -3.0);
+                (*track (p, 1)->getProperty ("plugins").getArray())[0].getDynamicObject()->removeProperty ("params");
+            });
+            m = cloud::mergeProjects (base, edit ([&] (var& p) { track (p, 2)->setProperty ("volume", -3.0); }), same);
+            check (m.conflicts.empty(), "putting changes back: the same change on both sides, or missing plug-in readouts, isn't a conflict");
+
+            // You removed Drums; they changed it: they keep it unless you choose.
+            m = cloud::mergeProjects (base, edit ([&] (var& p) { p["tracks"].getArray()->remove (0); }), theirs);
+            check (m.conflicts.size() == 1 && m.conflicts[0].yours == "removed it" && track (m.project, 1) != nullptr,
+                   "putting changes back: a track you removed and they changed is asked about");
+            m.conflicts[0].takeYours (m.project);
+            check (track (m.project, 1) == nullptr, "putting changes back: choosing yours removes it");
+
+            // You removed Guitar, which they didn't touch: gone, no question.
+            m = cloud::mergeProjects (base, edit ([&] (var& p) { p["tracks"].getArray()->remove (1); }), theirs);
+            check (m.conflicts.empty() && track (m.project, 2) == nullptr && track (m.project, 1) != nullptr,
+                   "putting changes back: a track only you removed goes");
+
+            // Both edited the drum clip.
+            auto moveClip = [&] (double start) { return edit ([&] (var& p)
+            {
+                (*track (p, 1)->getProperty ("clips").getArray())[0].getDynamicObject()->setProperty ("start", start);
+            }); };
+            m = cloud::mergeProjects (base, moveClip (1.0), moveClip (2.0));
+            check (m.conflicts.size() == 1 && m.conflicts[0].what.contains ("clip \"Drums 1\""),
+                   "putting changes back: the same clip edited both ways is asked about");
+
+            // You reordered; they didn't: your order, with their new track after its neighbour.
+            const auto swapped = edit ([&] (var& p) { auto* a = p["tracks"].getArray(); a->swap (0, 1); });
+            m = cloud::mergeProjects (base, swapped, theirs);
+            StringArray order;
+            for (auto& t : *m.project["tracks"].getArray())
+                order.add (t["name"].toString());
+            check (order.joinIntoString (",") == "Guitar,Drums,Keys", "putting changes back: your track order, their new track kept");
+
+            check (! cloud::mergeProjects (base, base, theirs).yoursChangedAnything,
+                   "putting changes back: nothing of yours to put back is said so");
+
+            // Their tempo, your tempo: one plain conflict.
+            m = cloud::mergeProjects (base, edit ([] (var& p) { p.getDynamicObject()->setProperty ("tempo", 90.0); }), theirs);
+            check (m.conflicts.size() == 1 && m.conflicts[0].what == "Tempo" && m.conflicts[0].yours.contains ("90.0"),
+                   "putting changes back: tempo changed both ways is asked about");
+        }
+
         // --- Invite links pasted after a trip through a social site
         {
             const String c ("Ab3_d-9xYz12");

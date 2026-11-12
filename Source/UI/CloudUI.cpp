@@ -12,12 +12,127 @@ enum MenuIds
 {
     signInId = CloudController::menuBase, signOutId, openSharedId, shareId, inviteId,
     pushId, pullId, historyId, libraryId, friendsId, unlinkId, uploadId, inviteLinkId, joinLinkId, listenId,
+    putBackId, forgetAsideId,
     parallelBase = CloudController::menuBase + 20   // + 1, 2, 4, 6, 8
 };
 
 constexpr int parallelChoices[] = { 1, 2, 4, 6, 8 };
 
+/** You and a collaborator both changed these: pick whose to keep, one by one. */
+class ConflictPicker : public Component
+{
+public:
+    ConflictPicker (const std::vector<cloud::MergeConflict>& conflicts, const String& them,
+                    std::function<void (std::vector<bool>)> onPutBack)
+        : done (std::move (onPutBack))
+    {
+        intro.setText ("Your changes and " + them + " both change " + String (conflicts.size() == 1 ? "this" : "these")
+                           + ". For each one, keep yours or keep " + them + "'s. Everything else from both is kept.",
+                       dontSendNotification);
+        intro.setFont (theme::font (13.5f));
+        intro.setJustificationType (Justification::topLeft);
+        addAndMakeVisible (intro);
+
+        int group = 1;
+        for (auto& c : conflicts)
+        {
+            auto* row = rows.add (new Row());
+            row->what.setText (c.what, dontSendNotification);
+            row->what.setFont (theme::font (13.5f, Font::bold));
+            row->yours.setButtonText ("Mine: " + c.yours);
+            row->theirs.setButtonText (them + ": " + c.theirs);
+            for (auto* b : { &row->yours, &row->theirs })
+            {
+                b->setRadioGroupId (group);
+                b->onClick = [this] { update(); };
+                row->addAndMakeVisible (b);
+            }
+            row->addAndMakeVisible (row->what);
+            ++group;
+            list.addAndMakeVisible (row);
+        }
+        viewport.setViewedComponent (&list, false);
+        viewport.setScrollBarsShown (true, false);
+        addAndMakeVisible (viewport);
+
+        allYours.onClick = [this] { for (auto* r : rows) r->yours.setToggleState (true, sendNotification); update(); };
+        allTheirs.onClick = [this] { for (auto* r : rows) r->theirs.setToggleState (true, sendNotification); update(); };
+        allTheirs.setButtonText ("Keep All " + them + "'s");
+        combineButton.setColour (TextButton::buttonColourId, theme::accent);
+        combineButton.setColour (TextButton::textColourOffId, theme::textDark);
+        combineButton.onClick = [this]
+        {
+            std::vector<bool> takeYours;
+            for (auto* r : rows)
+                takeYours.push_back (r->yours.getToggleState());
+            auto callback = done;
+            if (auto* w = findParentComponentOfClass<DialogWindow>())
+                w->exitModalState (1);
+            if (callback)
+                callback (takeYours);
+        };
+        cancelButton.onClick = [this] { if (auto* w = findParentComponentOfClass<DialogWindow>()) w->exitModalState (0); };
+        for (auto* b : { &allYours, &allTheirs, &combineButton, &cancelButton })
+            addAndMakeVisible (b);
+        update();
+        setSize (580, 74 + jmin (5, rows.size()) * rowHeight + 60);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (18, 14);
+        intro.setBounds (r.removeFromTop (40));
+        r.removeFromTop (4);
+        auto buttons = r.removeFromBottom (30);
+        r.removeFromBottom (12);
+        viewport.setBounds (r);
+        list.setSize (r.getWidth() - (rows.size() > 5 ? viewport.getScrollBarThickness() : 0), rows.size() * rowHeight);
+        for (int i = 0; i < rows.size(); ++i)
+        {
+            auto row = Rectangle<int> (0, i * rowHeight, list.getWidth(), rowHeight);
+            rows[i]->setBounds (row);
+            row = row.withZeroOrigin().reduced (0, 4);
+            rows[i]->what.setBounds (row.removeFromTop (22));
+            rows[i]->yours.setBounds (row.removeFromTop (24));
+            rows[i]->theirs.setBounds (row.removeFromTop (24));
+        }
+        combineButton.setBounds (buttons.removeFromRight (110));
+        buttons.removeFromRight (8);
+        cancelButton.setBounds (buttons.removeFromRight (90));
+        allYours.setBounds (buttons.removeFromLeft (110));
+        buttons.removeFromLeft (8);
+        allTheirs.setBounds (buttons.removeFromLeft (120));
+    }
+
+    void paint (Graphics& g) override   { g.fillAll (theme::panel); }
+
+private:
+    static constexpr int rowHeight = 84;
+
+    struct Row : public Component
+    {
+        Label what;
+        ToggleButton yours, theirs;
+    };
+
+    void update()
+    {
+        bool all = true;
+        for (auto* r : rows)
+            all = all && (r->yours.getToggleState() || r->theirs.getToggleState());
+        combineButton.setEnabled (all);
+    }
+
+    std::function<void (std::vector<bool>)> done;
+    Label intro;
+    OwnedArray<Row> rows;
+    Component list;
+    Viewport viewport;
+    TextButton allYours { "Keep All Mine" }, allTheirs, combineButton { "Put Back" }, cancelButton { "Cancel" };
+};
+
 } // namespace
+
 
 //==============================================================================
 class CloudController::StatusLabel : public Label
@@ -561,6 +676,8 @@ void CloudController::projectChanged (bool force)
     if (history != nullptr)
         if (auto* w = dynamic_cast<HistoryWindow*> (history.getComponent()))
             w->refresh();
+    if (hooks.setAsideChanged)
+        hooks.setAsideChanged();
 }
 
 void CloudController::updateStatus()
@@ -654,6 +771,11 @@ void CloudController::addMenuItems (PopupMenu& m)
                               : ctx.isPushLimited() ? "Push " + ctx.pushTrackNames + "..." : String ("Push..."),
                linked && signedIn && idle && ! viewer && ! lostAccess);
     m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle && ! lostAccess);
+    if (linked && hasSetAside())
+    {
+        m.addItem (putBackId, "Put My Changes Back", linked && idle);
+        m.addItem (forgetAsideId, "Forget My Set-Aside Changes...", linked && idle);
+    }
     m.addItem (historyId, "History...", linked);
     // Listening links are public, so only the song's owner shares them (Lathe Cloud checks too).
     const bool notOwner = linked && songRole.isNotEmpty() && songRole != "owner";
@@ -689,6 +811,8 @@ bool CloudController::handleMenuItem (int id)
         case inviteLinkId:  showInviteLink(); return true;
         case joinLinkId:    joinWithLink(); return true;
         case listenId:      shareListeningLink(); return true;
+        case putBackId:     putBackChanges(); return true;
+        case forgetAsideId: forgetSetAside(); return true;
         default:
             if (id > parallelBase && id <= parallelBase + 8)
             {
@@ -1049,22 +1173,26 @@ void CloudController::doPush (const String& parent, const String& message)
     {
         if (outcome->conflict)
         {
-            const auto theirs = outcome->theirHead;
+            // Never on top of theirs as it is: their changes would be missing from the newest revision.
             AlertWindow::showAsync (MessageBoxOptions()
                                         .withIconType (MessageBoxIconType::NoIcon)
                                         .withTitle ("Someone pushed first")
-                                        .withMessage ("A collaborator pushed a newer revision since you started from yours.\n\n"
-                                                      "Pull theirs first to look at it (your work stays in History), or push yours "
-                                                      "on top of it: theirs stays in History, and yours becomes the latest.")
-                                        .withButton ("Pull Theirs First")
-                                        .withButton ("Push Mine on Top")
+                                        .withMessage ("A collaborator pushed a newer revision while you were working. Get it "
+                                                      "first, then push yours on top of it.\n\n"
+                                                      "1. Lathe sets your changes aside (they're safe in History) and opens "
+                                                      "the newest revision, so you can listen to it.\n"
+                                                      "2. Choose Put My Changes Back. If you both changed the same thing, Lathe "
+                                                      "asks which to keep.\n"
+                                                      "3. Push.")
+                                        .withButton ("Get the Newest")
                                         .withButton ("Cancel"),
-                                    [this, theirs, message] (int button)
+                                    [this, message] (int button)
             {
-                if (button == 1)       pull();
-                else if (button == 2)  pushOnTop (theirs, message);
+                if (button == 1)
+                    setAsideAndGetNewest (message);
             });
             return;
+
         }
         if (outcome->result.failed())
         {
@@ -1138,22 +1266,179 @@ void CloudController::pushYourTracks (const String& message, int attempt)
     });
 }
 
-void CloudController::pushOnTop (const String& theirHead, const String& message)
+bool CloudController::hasSetAside() const
 {
-    // Get their revision first (so the summary compares against it), then push on top.
+    return store != nullptr && store->isLinked() && store->getSetAside().isNotEmpty();
+}
+
+void CloudController::setAsideAndGetNewest (const String& message)
+{
+    if (store == nullptr || busy || ! isSignedIn())
+        return;
+    if (hasSetAside())
+    {
+        alert ("Put your other changes back first",
+               "You already have changes set aside. Choose Cloud > Put My Changes Back (or Forget My Set-Aside Changes), "
+               "then try again.");
+        return;
+    }
+    pendingPushMessage = message;
+    auto snapshot = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (ctx.edit));
+    auto outcome = std::make_shared<cloud::SetAsideOutcome>();
     auto c = client;
     auto s = store;
-    auto pulled = std::make_shared<cloud::PullOutcome>();
+    const auto author = client->getSession().email;
     auto progress = progressReporter();
-    run ("Getting their revision", [c, s, pulled, progress] { *pulled = cloud::pull (*c, *s, progress); },
-         [this, theirHead, message, pulled]
+    run ("Getting the newest revision", [c, s, snapshot, outcome, author, progress]
     {
-        if (pulled->result.failed())
+        *outcome = cloud::setAsideAndPull (*c, *s, *snapshot, author, progress);
+    },
+    [this, outcome, message]
+    {
+        waitingHead = waitingText = {};
+        updateStatus();
+        if (history != nullptr)
+            if (auto* w = dynamic_cast<HistoryWindow*> (history.getComponent()))
+                w->refresh();
+        if (outcome->result.failed())
         {
-            alert ("Couldn't get their revision", pulled->result.getErrorMessage());
+            alert ("Couldn't get the newest revision", outcome->result.getErrorMessage());
             return;
         }
-        doPush (pulled->head.isNotEmpty() ? pulled->head : theirHead, message);
+        if (outcome->upToDate)
+        {
+            if (message.isNotEmpty())
+                doPush (store->getBase(), message);
+            else
+                hooks.setStatus ("Up to date: nothing new in the cloud.");
+            return;
+        }
+        const auto head = *outcome->head;
+        openRevision (head, [this, head]
+        {
+            if (hooks.setAsideChanged)
+                hooks.setAsideChanged();
+            if (hooks.menuChanged)
+                hooks.menuChanged();
+            hooks.setStatus (hasSetAside() ? "This is " + head.label() + " from " + shortName (head.author)
+                                                 + ". Your changes are set aside: put them back when you're ready."
+                                           : "This is " + head.label() + " from " + shortName (head.author) + ".");
+        });
+    });
+}
+
+void CloudController::putBackChanges()
+{
+    if (! hasSetAside() || busy)
+        return;
+    const auto base = store->getRevision (store->getBase());
+    if (! base)
+    {
+        alert ("Can't put your changes back", "Lathe doesn't know which revision is open. Open the newest one from History first.");
+        return;
+    }
+    auto current = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (ctx.edit));
+    auto merged = std::make_shared<cloud::MergeResult>();
+    auto result = std::make_shared<Result> (Result::ok());
+    auto s = store;
+    auto progress = progressReporter();
+    const auto author = isSignedIn() ? client->getSession().email : settings.getValue ("cloudEmail");
+    run ("Putting your changes back", [s, current, merged, result, progress]
+    {
+        *result = cloud::putBack (*s, *current, *merged, progress);
+    },
+    [this, merged, result, base, author]
+    {
+        if (result->failed())
+        {
+            alert ("Can't put your changes back", result->getErrorMessage());
+            return;
+        }
+        const auto on = *base;
+        auto finish = [this, merged, on, author]
+        {
+            store->setSetAside ({});
+            const auto rev = cloud::saveCombined (*store, merged->project, on, author);
+            openRevision (rev, [this, on]
+            {
+                if (hooks.setAsideChanged)
+                    hooks.setAsideChanged();
+                if (hooks.menuChanged)
+                    hooks.menuChanged();
+                const auto message = pendingPushMessage;
+                AlertWindow::showAsync (MessageBoxOptions()
+                                            .withIconType (MessageBoxIconType::NoIcon)
+                                            .withTitle ("Your changes are back")
+                                            .withMessage ("They're on top of " + on.label() + " now, so pushing makes a new "
+                                                          "revision with everything in " + on.label() + " and your changes too."
+                                                          "\n\nListen to it, then push.")
+                                            .withButton ("Push Now")
+                                            .withButton ("Not Yet"),
+                                        [this, message] (int button)
+                {
+                    if (button != 1)
+                        return;
+                    pendingPushMessage = {};
+                    if (message.isNotEmpty())
+                        doPush (store->getBase(), message);
+                    else
+                        push();
+                });
+            });
+        };
+
+        if (! merged->yoursChangedAnything)
+        {
+            store->setSetAside ({});
+            if (hooks.setAsideChanged)
+                hooks.setAsideChanged();
+            hooks.setStatus ("Nothing to put back: " + on.label() + " already has your changes.");
+            return;
+        }
+        if (merged->conflicts.empty())
+        {
+            finish();
+            return;
+        }
+        DialogWindow::LaunchOptions o;
+        o.content.setOwned (new ConflictPicker (merged->conflicts, on.label(), [merged, finish] (std::vector<bool> takeYours)
+        {
+            for (size_t i = 0; i < takeYours.size() && i < merged->conflicts.size(); ++i)
+                if (takeYours[i])
+                    merged->conflicts[i].takeYours (merged->project);
+            finish();
+        }));
+        o.dialogTitle = merged->conflicts.size() == 1 ? "You both changed this" : "You both changed these";
+        o.dialogBackgroundColour = theme::panel;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.launchAsync();
+        hooks.setStatus ("Choose which to keep. Nothing has changed yet.");
+    });
+}
+
+void CloudController::forgetSetAside()
+{
+    if (! hasSetAside())
+        return;
+    AlertWindow::showAsync (MessageBoxOptions()
+                                .withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Forget your set-aside changes?")
+                                .withMessage ("They won't be put back. They stay in History as a Local revision, so you can "
+                                              "still open them from there.")
+                                .withButton ("Forget Them")
+                                .withButton ("Cancel"),
+                            [this] (int button)
+    {
+        if (button != 1 || store == nullptr)
+            return;
+        store->setSetAside ({});
+        pendingPushMessage = {};
+        if (hooks.setAsideChanged)
+            hooks.setAsideChanged();
+        if (hooks.menuChanged)
+            hooks.menuChanged();
+        hooks.setStatus ("Forgotten. They're still in History.");
     });
 }
 
@@ -1193,6 +1478,31 @@ void CloudController::pull()
             if (newest.id == store->getBase())
                 return;
 
+            // Changes here that aren't pushed? Then offer to put them on top, like a refused push does.
+            bool yoursChanged = false;
+            if (auto base = store->getRevision (store->getBase()); base && store->hasObject (base->snapshot))
+                yoursChanged = ! cloud::describeChanges (store->readSnapshot (base->snapshot),
+                                                         cloud::Snapshot::capture (ctx.edit).project).isEmpty();
+            if (yoursChanged)
+            {
+                AlertWindow::showAsync (MessageBoxOptions()
+                                            .withIconType (MessageBoxIconType::NoIcon)
+                                            .withTitle (newest.label() + " from " + shortName (newest.author))
+                                            .withMessage ((newest.message.isNotEmpty() ? newest.message + "\n\n" : String())
+                                                          + newest.summary
+                                                          + "\n\nYou have changes you haven't pushed. Lathe can set them "
+                                                          "aside (safe in History) and open " + newest.label()
+                                                          + ". When you're ready, choose Put My Changes Back to put them on top.")
+                                            .withButton ("Set Mine Aside and Open " + newest.label())
+                                            .withButton ("Later"),
+                                        [this] (int button)
+                {
+                    if (button == 1)
+                        setAsideAndGetNewest ({});
+                });
+                return;
+            }
+
             AlertWindow::showAsync (MessageBoxOptions()
                                         .withIconType (MessageBoxIconType::NoIcon)
                                         .withTitle (newest.label() + " from " + shortName (newest.author))
@@ -1211,7 +1521,7 @@ void CloudController::pull()
     });
 }
 
-void CloudController::openRevision (const cloud::Revision& rev)
+void CloudController::openRevision (const cloud::Revision& rev, std::function<void()> then)
 {
     if (store == nullptr || busy)
         return;
@@ -1231,7 +1541,7 @@ void CloudController::openRevision (const cloud::Revision& rev)
         *kept = cloud::keepWorkingCopy (*s, *snapshot, author, "Your work before opening " + rev.label());
         *result = cloud::prepareRevision (c.get(), *s, rev, *project, progress);
     },
-    [this, rev, project, result, kept]
+    [this, rev, project, result, kept, then]
     {
         if (result->failed())
         {
@@ -1250,6 +1560,8 @@ void CloudController::openRevision (const cloud::Revision& rev)
         hooks.setStatus ("Opened " + rev.label() + (kept->local && kept->id != rev.id
                                                         ? ". What you had open is kept in History as Local."
                                                         : String (".")));
+        if (then)
+            then();
     });
 }
 

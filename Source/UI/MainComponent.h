@@ -100,6 +100,16 @@ private:
     /** Over the arrangement on a song shared so you push only some tracks: which ones. */
     Label pushBanner;
     void showPushBanner();
+    /** Under the transport while your changes are set aside to listen to a newer revision. */
+    struct SetAsideBar : public Component
+    {
+        SetAsideBar();
+        void resized() override;
+        void paint (Graphics&) override;
+        Label text;
+        TextButton putBack { "Put My Changes Back" }, forget { "Forget Them..." };
+    } setAsideBar;
+    void showSetAsideBar();
     std::unique_ptr<NotesController> notes;
     std::shared_ptr<assistant::Service> aiAssistant;   // AI assistant (MCP) connection
     std::unique_ptr<Divider> divider;

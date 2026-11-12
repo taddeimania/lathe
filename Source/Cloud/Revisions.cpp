@@ -116,6 +116,22 @@ void LocalStore::setBase (const String& revisionId)
     }
 }
 
+String LocalStore::getSetAside() const   { return readLink()["setAside"].toString(); }
+
+void LocalStore::setSetAside (const String& revisionId)
+{
+    const ScopedLock sl (lock);
+    auto v = readLink();
+    if (auto* o = v.getDynamicObject())
+    {
+        if (revisionId.isEmpty())
+            o->removeProperty ("setAside");
+        else
+            o->setProperty ("setAside", revisionId);
+        writeLink (v);
+    }
+}
+
 void LocalStore::unlink()
 {
     getDir().getChildFile ("cloud.json").deleteFile();
@@ -780,6 +796,79 @@ Revision keepWorkingCopy (LocalStore& store, Snapshot& snap, const String& autho
     r.blobs.add (snap.hash);
     for (auto& a : snap.audio)
         r.blobs.addIfNotAlreadyThere (a.clip["hash"].toString());
+    r.createdAt = Time::currentTimeMillis();
+    store.putRevision (r);
+    return r;
+}
+
+//==============================================================================
+SetAsideOutcome setAsideAndPull (Client& client, LocalStore& store, Snapshot& yours, const String& author, const Progress& progress)
+{
+    SetAsideOutcome out;
+    auto pulled = pull (client, store, [&] (const String& what, double p) { return report (progress, what, 0.75 * p); });
+    if (pulled.result.failed())
+    {
+        out.result = pulled.result;
+        return out;
+    }
+    out.head = store.getRevision (pulled.head);
+    if (! out.head || ! store.hasObject (out.head->snapshot))
+    {
+        out.result = Result::fail ("Couldn't get the newest revision. Try again.");
+        return out;
+    }
+    if (out.head->id == store.getBase())
+    {
+        out.upToDate = true;
+        return out;
+    }
+    if (auto r = yours.finish (store, [&] (const String& what, double p) { return report (progress, what, 0.75 + 0.25 * p); });
+        r.failed())
+    {
+        out.result = r;
+        return out;
+    }
+    // Only something you changed is set aside (an exact copy of a revision has nothing to put back).
+    if (const auto kept = keepWorkingCopy (store, yours, author, "Your changes, set aside to get " + out.head->label()); kept.local)
+        store.setSetAside (kept.id);
+    report (progress, "Your changes are set aside", 1.0);
+    return out;
+}
+
+Result putBack (LocalStore& store, Snapshot& current, MergeResult& out, const Progress& progress)
+{
+    const auto aside = store.getRevision (store.getSetAside());
+    if (! aside || ! store.hasObject (aside->snapshot))
+        return Result::fail ("There are no changes set aside.");
+    if (auto r = current.finish (store, progress); r.failed())
+        return r;
+
+    // Your changes are what the set-aside copy changed since the revision it started from.
+    var base;
+    if (auto from = store.getRevision (aside->parent); from && store.hasObject (from->snapshot))
+        base = store.readSnapshot (from->snapshot);
+    out = mergeProjects (base, store.readSnapshot (aside->snapshot), current.project);
+    return Result::ok();
+}
+
+Revision saveCombined (LocalStore& store, const var& project, const Revision& parent, const String& author)
+{
+    const auto text = JSON::toString (project);
+    MemoryBlock bytes (text.toRawUTF8(), text.getNumBytesAsUTF8());
+    Revision r;
+    r.id = "local-" + String (Time::currentTimeMillis());
+    r.local = true;
+    r.parent = parent.id;
+    r.author = author;
+    r.message = "Your changes put back on top of " + parent.label();
+    r.summary = summariseChanges (store.readSnapshot (parent.snapshot), project);
+    r.snapshot = store.putObject (bytes);
+    r.blobs.add (r.snapshot);
+    forEachAudioClip (project, [&r] (const var& clip)
+    {
+        if (const auto h = clip["hash"].toString(); h.isNotEmpty())
+            r.blobs.addIfNotAlreadyThere (h);
+    });
     r.createdAt = Time::currentTimeMillis();
     store.putRevision (r);
     return r;

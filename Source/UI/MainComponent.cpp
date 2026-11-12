@@ -173,6 +173,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     hooks.setStatus = [this] (const String& m) { setStatus (m); };
     hooks.projectsDir = [] { return getProjectsDir(); };
     hooks.menuChanged = [this] { menuItemsChanged(); };
+    hooks.setAsideChanged = [this] { showSetAsideBar(); };
     cloud = std::make_unique<CloudController> (ctx, settings, hooks);
     cloud->screenshotMode = forScreenshots;
     addAndMakeVisible (cloud->getStatusComponent());
@@ -206,6 +207,11 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     pushBanner.setBorderSize ({ 0, 12, 0, 12 });
     addChildComponent (pushBanner);
     ctx.pushTracksChanged = [this] { showPushBanner(); };
+
+    // Changes set aside while you listen to a newer revision: put them back from here.
+    setAsideBar.putBack.onClick = [this] { if (cloud != nullptr) cloud->putBackChanges(); };
+    setAsideBar.forget.onClick = [this] { if (cloud != nullptr) cloud->forgetSetAside(); };
+    addChildComponent (setAsideBar);
 
     // Space starts and stops from anywhere in Lathe: the mixer, a focused button, a plug-in window.
     if (! forScreenshots)
@@ -914,12 +920,60 @@ void MainComponent::showPushBanner()
     repaintAll (mixer);
 }
 
+MainComponent::SetAsideBar::SetAsideBar()
+{
+    text.setFont (theme::font (13.0f));
+    text.setColour (Label::textColourId, theme::textDark);
+    text.setBorderSize ({ 0, 12, 0, 12 });
+    addAndMakeVisible (text);
+    putBack.setColour (TextButton::buttonColourId, theme::textDark);
+    putBack.setColour (TextButton::textColourOffId, theme::accent);
+    addAndMakeVisible (putBack);
+    addAndMakeVisible (forget);
+}
+
+void MainComponent::SetAsideBar::resized()
+{
+    auto r = getLocalBounds().reduced (6, 3);
+    forget.setBounds (r.removeFromRight (110));
+    r.removeFromRight (6);
+    putBack.setBounds (r.removeFromRight (170));
+    text.setBounds (r);
+}
+
+void MainComponent::SetAsideBar::paint (Graphics& g)
+{
+    g.fillAll (theme::accent);
+}
+
+void MainComponent::showSetAsideBar()
+{
+    const bool aside = cloud != nullptr && cloud->hasSetAside();
+    if (aside)
+    {
+        String on;
+        if (auto* store = cloud->getStore())
+            if (auto rev = store->getRevision (store->getBase()))
+                on = rev->label();
+        setAsideBar.text.setText ("Your changes are set aside" + (on.isNotEmpty() ? " while you listen to " + on : String())
+                                      + ". Put them back on top when you're ready, then push.",
+                                  dontSendNotification);
+    }
+    if (aside != setAsideBar.isVisible())
+    {
+        setAsideBar.setVisible (aside);
+        resized();
+    }
+}
+
 void MainComponent::resized()
 {
     auto r = getLocalBounds();
     transport.setBounds (r.removeFromTop (theme::transportHeight));
     if (pushBanner.isVisible())
         pushBanner.setBounds (r.removeFromTop (28));
+    if (setAsideBar.isVisible())
+        setAsideBar.setBounds (r.removeFromTop (34));
 
     auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
     if (cloud != nullptr)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CloudClient.h"
+#include "Merge.h"
 #include "../Model/Edit.h"
 
 namespace lathe::cloud
@@ -55,6 +56,9 @@ public:
     String getBase() const;         // revision the working copy started from ("" = none)
     void link (const String& projectId, const String& name);
     void setBase (const String& revisionId);
+    /** Your changes set aside (a Local revision) while you look at a newer one; "" = none. */
+    String getSetAside() const;
+    void setSetAside (const String& revisionId);
     void unlink();
 
     // --- snapshots (by hash)
@@ -150,6 +154,26 @@ PullOutcome pull (Client&, LocalStore&, const Progress&);
 /** The revision's project, ready to save as the working copy: audio paths point at
     local files, downloading any that are missing (client may be null if offline). */
 Result prepareRevision (Client*, LocalStore&, const Revision&, var& projectOut, const Progress&);
+
+/** When someone pushed while you were working: like git stash, pull, then stash pop. */
+struct SetAsideOutcome
+{
+    Result result = Result::ok();
+    std::optional<Revision> head;   // the newest revision, pulled (audio included), to open
+    bool upToDate = false;          // your copy already started from it: nothing to set aside
+};
+
+/** Pulls, and keeps your work as a Local revision marked as set aside (getSetAside()). Then open
+    `head`; later, putBack() puts your changes on top. `yours` is captured, not finished. */
+SetAsideOutcome setAsideAndPull (Client&, LocalStore&, Snapshot& yours, const String& author, const Progress&);
+
+/** Your set-aside changes (since the revision they started from) merged onto `current`, which is
+    what's open now (the newer revision, and anything you've changed since). `current` is captured,
+    not finished. Fails if nothing is set aside. */
+Result putBack (LocalStore&, Snapshot& current, MergeResult& out, const Progress&);
+
+/** Stores a merged project as a Local revision on top of `parent`, ready to open and push. */
+Revision saveCombined (LocalStore&, const var& project, const Revision& parent, const String& author);
 
 /** Pins (keeps) or unpins a pushed revision in the cloud, and remembers it here. */
 Result setPinned (Client&, LocalStore&, const String& revisionId, bool pinned);
