@@ -337,39 +337,54 @@ Snapshot Snapshot::capture (const Edit& edit)
 
 Result Snapshot::finish (LocalStore& store, const Progress& progress)
 {
-    StringArray missing;
-    const int total = (int) audio.size();
-    int index = 0;
+    // Clips often share a file (a take split into pieces, a loop pasted along the
+    // song): hash and count each file once, then stamp every clip that uses it.
+    std::vector<File> files;
+    std::vector<std::vector<var>> clipsOf;
     for (auto& a : audio)
     {
-        ++index;
-        if (! report (progress, "Checking audio files (" + String (index) + " of " + String (total) + ")",
-                      total > 0 ? (double) (index - 1) / (double) total : 0.0))
+        auto it = std::find (files.begin(), files.end(), a.file);
+        if (it == files.end())
+        {
+            files.push_back (a.file);
+            clipsOf.emplace_back();
+            it = files.end() - 1;
+        }
+        clipsOf[(size_t) (it - files.begin())].push_back (a.clip);
+    }
+
+    StringArray missing;
+    const int total = (int) files.size();
+    for (int index = 1; index <= total; ++index)
+    {
+        const auto& file = files[(size_t) index - 1];
+        const auto label = "Checking audio files (" + String (index) + " of " + String (total) + ")";
+        if (! report (progress, label, (double) (index - 1) / (double) total))
         {
             store.saveHashCache();   // keep what's done: next time is quicker
             return Result::fail ("Cancelled.");
         }
-        if (! a.file.existsAsFile())
+        if (! file.existsAsFile())
         {
-            missing.addIfNotAlreadyThere (a.file.getFileName());
+            missing.addIfNotAlreadyThere (file.getFileName());
             continue;
         }
-        if (auto* o = a.clip.getDynamicObject())
+        const auto fileHash = store.hashOf (file, [&] (double p)
         {
-            const auto label = "Checking audio files (" + String (index) + " of " + String (total) + ")";
-            const auto fileHash = store.hashOf (a.file, [&] (double p)
-            {
-                return report (progress, label, ((double) (index - 1) + p) / (double) jmax (1, total));
-            });
-            if (fileHash.isEmpty())
-            {
-                store.saveHashCache();
-                return Result::fail ("Cancelled.");
-            }
-            o->setProperty ("hash", fileHash);
-            // Everyone keeps shared audio in Audio/, whatever it's called on this machine.
-            o->setProperty ("file", "Audio/" + a.file.getFileName());
+            return report (progress, label, ((double) (index - 1) + p) / (double) total);
+        });
+        if (fileHash.isEmpty())
+        {
+            store.saveHashCache();
+            return Result::fail ("Cancelled.");
         }
+        for (auto& clip : clipsOf[(size_t) index - 1])
+            if (auto* o = clip.getDynamicObject())
+            {
+                o->setProperty ("hash", fileHash);
+                // Everyone keeps shared audio in Audio/, whatever it's called on this machine.
+                o->setProperty ("file", "Audio/" + file.getFileName());
+            }
     }
     store.saveHashCache();
 

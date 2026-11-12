@@ -19,6 +19,9 @@
 #include "UI/CloudUI.h"
 #include "Demo/Welcome.h"
 #include "UI/CloudLinks.h"
+#include "UI/UndoHistory.h"
+#include "Compare/Compare.h"
+#include "Host/RemotePlugin.h"
 #if ! JUCE_WINDOWS
  #include <sys/stat.h>
 #endif
@@ -420,7 +423,7 @@ int main (int argc, char** argv)
         g->collapsed = true;
         auto json = JSON::toString (e.toVar (false));
         Edit loaded;
-        loaded.loadFrom (JSON::parse (json), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        loaded.loadFrom (JSON::parse (json), File(), [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); });
         auto lg = loaded.groups.empty() ? nullptr : loaded.groups[0];
         check (lg != nullptr && lg->name == "Drums" && lg->mute.load() && lg->collapsed && loaded.groupMembers (lg->id).size() == 3,
                "groups survive save and load");
@@ -757,7 +760,7 @@ int main (int argc, char** argv)
 
         // Saved and loaded; deleting the source clears the input.
         Edit copy;
-        copy.loadFrom (edit.toVar (false), dir, [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        copy.loadFrom (edit.toVar (false), dir, [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); });
         const auto loaded = copy.findTrack (rec->id);
         check (loaded != nullptr && loaded->input.track == synth->id, "the input track is saved with the project");
         rec->arm = false;
@@ -870,7 +873,7 @@ int main (int argc, char** argv)
 
         // Load it the way File > New from Template does.
         Edit fresh;
-        fresh.loadFrom (JSON::parse (templateJson), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        fresh.loadFrom (JSON::parse (templateJson), File(), [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); });
         fresh.workDir = dir.getChildFile ("template-session");
         fresh.sampleRate = 48000.0;
         check (fresh.tracks.size() == 2 && fresh.tracks[0]->input.channel == 0 && fresh.tracks[1]->input.channel == 1,
@@ -1009,7 +1012,7 @@ int main (int argc, char** argv)
         auto text = JSON::toString (edit.toVar (false));
         Edit loaded;
         loaded.workDir = dir;
-        auto result = loaded.loadFrom (JSON::parse (text), dir, [] (const PluginDescription& d, const MemoryBlock& state)
+        auto result = loaded.loadFrom (JSON::parse (text), dir, [] (const PluginDescription& d, const MemoryBlock& state, bool)
         {
             auto slot = std::make_shared<PluginSlot>();
             slot->description = d;
@@ -1044,7 +1047,7 @@ int main (int argc, char** argv)
 
         const auto saved = e.toVar (false);
         Edit back;
-        back.loadFrom (saved, File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        back.loadFrom (saved, File(), [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); });
         check (back.localNotes.size() == 2 && back.localNotes[0].track == bass->id && back.localNotes[0].beat == 240.0
                    && back.localNotes[0].replies.size() == 1 && back.localNotes[1].isSongNote(),
                "notes and their replies survive save and load");
@@ -1102,12 +1105,62 @@ int main (int argc, char** argv)
         keys->getSend (verb->id, true)->levelDb = -12.0f;
         e.changed();
         e.commitUndoStep();
-        keys->volumeDb = -6.0f;   // a fader move: not a step of its own, and undo leaves it alone
-        e.markDirty();
+        // The mix controls are steps too: a fader drag and a pan move (one step once they settle).
+        keys->volumeDb = -3.0f;
+        e.adjusted();
+        keys->volumeDb = -6.0f;
+        keys->pan = 0.4f;
+        e.adjusted();
+        e.commitUndoStep();
+        // And the send level and the channel EQ.
+        keys->sends[0]->levelDb = -20.0f;
+        keys->eq.bands[2].gainDb = -3.0f;
+        keys->eq.bands[2].freq = 300.0f;
+        e.adjusted();
 
+        check (e.undo() && keys->sends[0]->levelDb.load() == -12.0f && keys->eq.bands[2].gainDb.load() == 0.0f
+                 && keys->eq.bands[2].freq.load() != 300.0f, "undo puts the send level and the EQ back");
+        check (e.undo() && keys->volumeDb.load() == 0.0f && keys->pan.load() == 0.0f, "the next undo takes the whole fader move and the pan back");
+        check (e.redo() && keys->volumeDb.load() == -6.0f && keys->pan.load() == 0.4f, "redo puts them where they were left");
+        e.undo();
         check (e.undo() && keys->sends.empty(), "undo takes the new send away");
-        check (keys->plugins.size() == 2 && keys->volumeDb.load() == -6.0f, "and leaves the plug-ins and the fader where they were");
+        check (keys->plugins.size() == 2, "and leaves the plug-ins where they were");
         check (e.redo() && keys->sends.size() == 1 && keys->sends[0]->levelDb.load() == -12.0f, "redo brings the same send back, level and all");
+        {
+            // The history: what each step did, in words, and who did it.
+            e.redo();   // the fader and pan step again; the send level and EQ step stays undone
+            const auto& done = e.getDoneSteps();
+            check ((int) done.size() == e.getUndoDepth(), "history: one entry per step");
+            check (done.back().label.contains ("\"Keys\" fader -6.0 dB") && done.back().label.contains ("pan 20R") && ! done.back().byAssistant,
+                   "history: a fader and pan move is described (" + done.back().label + ")");
+            check (e.getUndoneSteps().size() == 1 && e.getUndoneSteps()[0].label.contains ("send level"),
+                   "history: the undone step waits to be redone (" + (e.getUndoneSteps().empty() ? String() : e.getUndoneSteps()[0].label) + ")");
+            auto rows = UndoHistoryWindow::rowsFor (e);
+            check (rows.size() == done.size() + 2 && rows.front().undone && rows.back().start && ! rows[1].undone
+                     && rows[1].depthWhenClicked == e.getUndoDepth() - 1,
+                   "history window: newest at the top, undone steps above, the opened state at the bottom");
+            keys->name = "Keys 2";
+            e.labelNextStep ("Renamed it for you", true);
+            e.commitUndoStep();
+            check (e.getDoneSteps().back().byAssistant && e.getDoneSteps().back().label == "Renamed it for you" && e.getUndoneSteps().empty(),
+                   "history: the assistant's step carries its own words, and a new step drops the redo");
+            keys->name = "Keys";
+            e.commitUndoStep();
+            check (e.getDoneSteps().back().label == "Renamed \"Keys 2\" to \"Keys\"" && ! e.getDoneSteps().back().byAssistant,
+                   "history: the label is only for that one step (" + e.getDoneSteps().back().label + ")");
+            const int depth = e.getUndoDepth();
+            check (e.goToDepth (depth - 2) && e.getUndoDepth() == depth - 2 && keys->name == "Keys" && e.getUndoneSteps().size() == 2,
+                   "history: going back two steps undoes both");
+            check (e.goToDepth (depth) && e.getUndoDepth() == depth && keys->name == "Keys", "history: and forward again redoes them");
+            e.goToDepth (depth - 2);
+        }
+        {
+            // Cue (monitor) mix levels aren't part of undo.
+            const auto depthBefore = e.getUndoDepth();
+            e.markDirty();
+            e.commitUndoStep();
+            check (e.getUndoDepth() == depthBefore, "a change undo doesn't cover makes no step");
+        }
 
         // Deleting a track brings back the very same track, plug-ins still loaded.
         e.removeTrack (verb->id);
@@ -2093,7 +2146,7 @@ int main (int argc, char** argv)
             tr->plugins.push_back (slot);
             const auto saved = ep.toVar (false);
             Edit back;
-            back.loadFrom (saved, dir, [&] (const PluginDescription& d, const MemoryBlock& s)
+            back.loadFrom (saved, dir, [&] (const PluginDescription& d, const MemoryBlock& s, bool)
             {
                 String error;
                 return engine.makeSlot (d, s, error);
@@ -2131,7 +2184,7 @@ int main (int argc, char** argv)
         w.projectFile = song;
         w.workDir = song.getParentDirectory();
         StringArray foreign;
-        const auto loaded = w.loadFrom (JSON::parse (song), w.workDir, [&] (const PluginDescription& d, const MemoryBlock& s)
+        const auto loaded = w.loadFrom (JSON::parse (song), w.workDir, [&] (const PluginDescription& d, const MemoryBlock& s, bool)
         {
             if (! devices::isBuiltIn (d))
                 foreign.add (d.name);
@@ -2267,6 +2320,102 @@ int main (int argc, char** argv)
                 check (buf.getMagnitude (0, 0, 256) > 0.0f, "and processes audio");
             }
         }
+
+        // --- "Run separately": a plug-in in its own process (LatheHost)
+        std::cout << "Plug-ins run separately" << std::endl;
+        PluginDescription flaky;
+        for (auto& d : scanHost.known.getTypes())
+            if (d.name == "FlakyFixture")
+                flaky = d;
+        check (RemotePluginInstance::hostExecutable().existsAsFile(), "LatheHost sits next to the executable");
+        if (flaky.name.isNotEmpty() && RemotePluginInstance::hostExecutable().existsAsFile())
+        {
+            auto ones = [] { AudioBuffer<float> b (2, 256); for (int ch = 0; ch < 2; ++ch) FloatVectorOperations::fill (b.getWritePointer (ch), 1.0f, 256); return b; };
+            String error;
+            const auto started = Time::getMillisecondCounterHiRes();
+            auto remote = RemotePluginInstance::create (flaky, 48000.0, 256, {}, error);
+            check (remote != nullptr, "it starts in its own process (" + String (roundToInt (Time::getMillisecondCounterHiRes() - started)) + " ms) " + error);
+            if (remote != nullptr)
+            {
+                remote->prepareToPlay (48000.0, 256);
+                auto buf = ones();
+                MidiBuffer midi;
+                remote->processBlock (buf, midi);
+                check (std::abs (buf.getSample (0, 100) - 0.5f) < 1.0e-6f && std::abs (buf.getSample (1, 255) - 0.5f) < 1.0e-6f,
+                       "audio goes through it (its gain: 0.5, got " + String (buf.getSample (0, 100)) + ")");
+                const auto params = remote->getParameters();
+                StringArray names;
+                for (auto* p : params) names.add (p->getName (32));
+                check (params.size() >= 2 && params[0]->getName (32) == "Gain" && (params[1]->isBoolean() || params[1]->getNumSteps() == 2)
+                           && params[0]->getCurrentValueAsText().isNotEmpty(),
+                       "its settings are there, with names and text (" + names.joinIntoString (", ") + "; " + (params.size() > 0 ? params[0]->getCurrentValueAsText() : String()) + ")");
+                params[0]->setValueNotifyingHost (0.25f);
+                MemoryBlock state;
+                remote->getStateInformation (state);   // (in order after the change)
+                buf = ones();
+                remote->processBlock (buf, midi);
+                check (std::abs (buf.getSample (0, 10) - 0.25f) < 1.0e-6f && state.getSize() > 0,
+                       "a setting changed from Lathe reaches it, and its state comes back (got " + String (buf.getSample (0, 10)) + ", state " + String ((int) state.getSize()) + " bytes)");
+
+                {
+                    auto second = RemotePluginInstance::create (flaky, 48000.0, 256, state, error);
+                    check (second != nullptr && std::abs (second->getParameters()[0]->getValue() - 0.25f) < 1.0e-6f,
+                           "a new one starts with the saved state");
+                }
+
+                // Now it crashes. Lathe (this test) carries on.
+                bool told = false;
+                remote->onStopped = [&] { told = true; };
+                params[1]->setValueNotifyingHost (1.0f);
+                MemoryBlock ignore;
+                remote->getStateInformation (ignore);
+                const auto crashAt = Time::getMillisecondCounterHiRes();
+                float through = 0.0f;
+                while (! told && Time::getMillisecondCounterHiRes() - crashAt < 10000)
+                {
+                    buf = ones();
+                    remote->processBlock (buf, midi);
+                    through = buf.getSample (0, 0);
+                    MessageManager::getInstance()->runDispatchLoopUntil (5);
+                }
+                check (told && remote->hasStopped(), "it crashed, Lathe didn't, and Lathe was told ("
+                           + String (roundToInt (Time::getMillisecondCounterHiRes() - crashAt)) + " ms)");
+                buf = ones();
+                remote->processBlock (buf, midi);
+                check (std::abs (buf.getSample (0, 0) - 1.0f) < 1.0e-6f && std::abs (through - 1.0f) < 1.0e-6f,
+                       "after that the effect lets the sound through untouched");
+                MemoryBlock kept;
+                remote->getStateInformation (kept);
+                check (kept == state, "its last settings are kept for saving");
+
+                check (remote->restart (error) && ! remote->hasStopped(), "Restart brings it back " + error);
+                buf = ones();
+                remote->processBlock (buf, midi);
+                check (std::abs (buf.getSample (0, 10) - 0.25f) < 1.0e-6f && ! params[1]->getValue(),
+                       "with its settings (got " + String (buf.getSample (0, 10)) + ")");
+            }
+
+            // Through the engine: a slot that runs separately, saved and loaded as such.
+            Engine sepEngine (scanHost, pool, scanProps);
+            FakeDevice sepDev (2, 2, 0, 0);
+            sepEngine.audioDeviceAboutToStart (&sepDev);
+            String why;
+            auto slot = sepEngine.makeSlot (flaky, {}, why, true);
+            check (slot->separate && dynamic_cast<RemotePluginInstance*> (slot->instance.get()) != nullptr, "makeSlot runs it separately " + why);
+            Edit se;
+            auto st = se.addTrack (TrackKind::audio, "Bass");
+            st->plugins.push_back (slot);
+            const auto saved = se.toVar (false);
+            check ((bool) saved["tracks"][0]["plugins"][0]["separate"], "the project remembers it runs separately");
+            bool askedSeparate = false;
+            Edit back;
+            back.loadFrom (saved, File(), [&] (const PluginDescription&, const MemoryBlock&, bool sep) { askedSeparate = sep; return std::make_shared<PluginSlot>(); });
+            check (askedSeparate, "and loads it that way");
+            auto inside = sepEngine.remakeSlot (*slot, false, why);
+            check (! inside->separate && inside->instance != nullptr && dynamic_cast<RemotePluginInstance*> (inside->instance.get()) == nullptr,
+                   "turning it off loads it inside Lathe, settings and all");
+            sepEngine.audioDeviceStopped();
+        }
     }
     else
     {
@@ -2362,7 +2511,7 @@ int main (int argc, char** argv)
 
         // Save and load.
         Edit loaded;
-        loaded.loadFrom (JSON::parse (JSON::toString (e.toVar (true))), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        loaded.loadFrom (JSON::parse (JSON::toString (e.toVar (true))), File(), [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); });
         auto lc = loaded.cues.empty() ? nullptr : loaded.cues[0];
         auto lhat = loaded.tracks.empty() ? nullptr : loaded.tracks[0];
         check (lc != nullptr && lhat != nullptr && lc->name == "In-ears" && lc->channel.load() == 2
@@ -2589,7 +2738,7 @@ int main (int argc, char** argv)
         check (drums->name == "Kit" && bus->name == "Kit Bus", "renaming the group renames its bus");
 
         Edit loaded;
-        loaded.loadFrom (JSON::parse (JSON::toString (e.toVar (true))), File(), [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); });
+        loaded.loadFrom (JSON::parse (JSON::toString (e.toVar (true))), File(), [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); });
         auto lg = loaded.groups.empty() ? nullptr : loaded.groups[0];
         auto lbus = lg != nullptr ? loaded.findGroupBus (lg->id) : nullptr;
         check (lbus != nullptr && lbus->name == "Kit Bus" && loaded.tracks[0]->output.busId == lbus->id, "a group bus survives a template save and load");
@@ -2807,6 +2956,30 @@ int main (int argc, char** argv)
         again.finish (store);
         check (again.hash == snap.hash, "the same project always hashes the same");
 
+        {
+            // A take split into pieces: three clips, one file. The progress counts files.
+            Edit split;
+            split.projectFile = e.projectFile;
+            split.workDir = projDir;
+            auto st = split.addTrack (TrackKind::audio, "Guitar");
+            for (int i = 0; i < 3; ++i)
+            {
+                Clip piece = c;
+                piece.id = split.newId();
+                piece.start = i * 4.0;
+                st->clips.push_back (piece);
+            }
+            StringArray seen;
+            auto pieces = cloud::Snapshot::capture (split);
+            check (pieces.finish (store, [&] (const String& what, double) { seen.addIfNotAlreadyThere (what); return true; }).wasOk(),
+                   "a split take shares");
+            check (seen.contains ("Checking audio files (1 of 1)") && ! seen.contains ("Checking audio files (1 of 3)"),
+                   "the push counts audio files, not clips (" + seen.joinIntoString (" / ") + ")");
+            const auto& pc = *pieces.project["tracks"][0]["clips"].getArray();
+            check (pc.size() == 3 && pc[2]["hash"].toString() == cloud::sha256OfFile (c.file) && pc[2]["file"].toString() == "Audio/Kick 1.wav",
+                   "and every clip using the file still gets its hash");
+        }
+
         const auto local = cloud::keepWorkingCopy (store, snap, "me", "before switching");
         check (local.local && store.hasObject (local.snapshot) && store.getRevisions().size() == 1, "keeps the working copy as a local revision");
         check (cloud::keepWorkingCopy (store, again, "me", "again").id == local.id, "doesn't keep the same content twice");
@@ -2829,7 +3002,7 @@ int main (int argc, char** argv)
         };
         const auto [maraEmail, maraPass] = user ("LATHE_TEST_USER1");
         const auto [devEmail, devPass] = user ("LATHE_TEST_USER2");
-        auto factory = [] (const PluginDescription&, const MemoryBlock&) { return std::make_shared<PluginSlot>(); };
+        auto factory = [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); };
 
         cloud::Client mara (config), dev (config);
         check (mara.signIn (maraEmail, maraPass, {}).wasOk() && dev.signIn (devEmail, devPass, {}).wasOk(), "both sign in");
@@ -3369,6 +3542,33 @@ int main (int argc, char** argv)
             r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","pan":0.5}])"));
             check (! (bool) r["isError"] && std::abs (gen->pan.load() - 0.5f) < 0.01f, "working together: after Continue it carries on");
 
+            // --- The channel EQ, through edit_session
+            svc.runTool ("describe_session", var (new DynamicObject()));
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_eq","track":"Dice","band":"bell 1","freq_hz":300,"gain_db":-3,"q":1.4},
+                                                          {"action":"set_eq","track":"Dice","band":"Low cut","freq_hz":90}])"));
+            const auto& b1 = gen->eq.bands[2];
+            const auto& lc = gen->eq.bands[0];
+            check (! (bool) r["isError"] && std::abs (b1.freq.load() - 300.0f) < 0.01f && std::abs (b1.gainDb.load() + 3.0f) < 0.01f
+                       && std::abs (b1.q.load() - 1.4f) < 0.01f && lc.on.load() && std::abs (lc.freq.load() - 90.0f) < 0.01f
+                       && txt (r).contains ("Bell 1 300 Hz -3.0 dB"),
+                   "set_eq: a bell cut and a low cut (switched on by setting it) (" + txt (r).substring (0, 200) + ")");
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_eq","track":"Dice","band":"high shelf","gain_db":2},
+                                                          {"action":"set_eq","track":"Dice","band":"low cut","gain_db":-6}])"));
+            check ((bool) r["isError"] && txt (r).contains ("has no gain") && std::abs (gen->eq.bands[4].gainDb.load()) < 0.01f,
+                   "set_eq: a cut has no gain, and the whole list is held back (" + txt (r).substring (0, 160) + ")");
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_eq","track":"Dice","band":"mid","gain_db":2}])"));
+            check ((bool) r["isError"] && txt (r).contains ("bell 1"), "set_eq: an unknown band says which there are");
+            check (e.undo() && std::abs (gen->eq.bands[2].gainDb.load()) < 0.01f && ! gen->eq.bands[0].on.load(),
+                   "set_eq: one undo takes the assistant's EQ back");
+            e.redo();
+            check (std::abs (gen->eq.bands[2].gainDb.load() + 3.0f) < 0.01f, "set_eq: and redo brings it back");
+            check (e.getDoneSteps().back().byAssistant && e.getDoneSteps().back().label.contains ("Bell 1 300 Hz"),
+                   "history: the assistant's change is marked as its own, in its words (" + e.getDoneSteps().back().label + ")");
+            const auto described = JSON::parse (txt (svc.runTool ("describe_track", JSON::parse (R"({"track":"Dice"})"))));
+            check (described["eq"]["bands"].toString().contains ("Bell 1 300 Hz -3.0 dB"), "describe_track shows the EQ it set");
+            gen->eq.reset();
+            e.commitUndoStep();
+
             synth->name = oldName;
             gen->pan = 0.0f;
             gen->volumeDb = 0.0f;
@@ -3669,6 +3869,119 @@ int main (int argc, char** argv)
                 check (tools.startLongTool ("analyze_mix", args2 ({ { "from_bar", 3 }, { "to_bar", 2 } }), again) == nullptr
                            && text (again).contains ("after from_bar"), "analyze_mix: bars the wrong way round are an error");
             }
+        }
+
+        // --- Compare: Before, Now and a reference (compare_mix, and the window's model)
+        {
+            Compare cmp (engine, e, props);
+            tools.compare = &cmp;
+            auto waitJob = [] (const std::shared_ptr<Tools::Job>& j)
+            {
+                for (int i = 0; i < 6000 && j != nullptr && ! j->done.wait (0); ++i)
+                    MessageManager::getInstance()->runDispatchLoopUntil (20);
+                return j != nullptr && j->done.wait (0);
+            };
+            auto waitIdle = [&cmp]
+            {
+                for (int i = 0; i < 6000 && cmp.isBusy(); ++i)
+                    MessageManager::getInstance()->runDispatchLoopUntil (20);
+                return ! cmp.isBusy();
+            };
+            const bool oldLoop = e.loopEnabled;
+            e.loopEnabled = false;
+            // Something to hear: a track playing a tone for the first two bars.
+            auto toneTrack = e.addTrack (TrackKind::audio, "Tone");
+            {
+                const auto toneFile = dir.getChildFile ("compare tone.wav");
+                AudioBuffer<float> tone (1, 96000);
+                for (int i = 0; i < 96000; ++i)
+                    tone.setSample (0, i, 0.3f * (float) std::sin (2.0 * MathConstants<double>::pi * 440.0 * i / 48000.0));
+                toneFile.deleteFile();
+                std::unique_ptr<OutputStream> stream (toneFile.createOutputStream());
+                WavAudioFormat wav;
+                auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (48000.0).withNumChannels (1).withBitsPerSample (24));
+                w->writeFromAudioSampleBuffer (tone, 0, 96000);
+                w.reset();
+                Clip toneClip;
+                toneClip.id = e.newId();
+                toneClip.kind = ClipKind::audio;
+                toneClip.file = toneFile;
+                toneClip.start = 0.0;
+                toneClip.length = 4.0;
+                toneTrack->clips.push_back (toneClip);
+                engine.rebuild();
+            }
+
+            var immediate;
+            auto job = tools.startLongTool ("compare_mix", args2 ({ { "mark_before", true } }), immediate);
+            const bool markedOk = job != nullptr && waitJob (job);
+            check (markedOk && ! (bool) job->result["isError"] && cmp.get (Compare::before).has()
+                       && cmp.get (Compare::before).measures.valid && text (job->result).contains ("Before is set"),
+                   "compare_mix mark_before renders and measures Before ("
+                       + (markedOk ? text (job->result).substring (0, 200) : immediate.isObject() ? text (immediate) : String ("didn't finish")) + ")");
+
+            e.master->volumeDb = -6.0f;   // the change to hear
+            engine.rebuild();
+            job = tools.startLongTool ("compare_mix", args2 ({}), immediate);
+            const bool ran = job != nullptr && waitJob (job);
+            const auto out = ran ? JSON::parse (text (job->result)) : var();
+            const auto& b = cmp.get (Compare::before).measures;
+            const auto& n = cmp.get (Compare::now).measures;
+            check (ran && out["before"].isObject() && out["now"].isObject()
+                       && cmp.get (Compare::now).audio->getNumSamples() == cmp.get (Compare::before).audio->getNumSamples(),
+                   "compare_mix renders Now over the same bars and reports both (" + (ran ? text (job->result).substring (0, 240) : String ("didn't finish")) + ")");
+            check (b.lufsValid && n.lufsValid && std::abs ((n.lufs - b.lufs) + 6.0f) < 0.3f && cmp.summary().contains ("loudness -6"),
+                   "Compare hears a 6 dB fader move (" + cmp.summary() + ")");
+            check (std::abs (cmp.gainFor (Compare::before) - (n.lufsValid && b.lufsValid ? n.lufs - b.lufs : 0.0f)) < 0.01f && cmp.gainFor (Compare::now) == 0.0f,
+                   "match loudness turns the louder one down to the quieter");
+            cmp.setMatchLoudness (false);
+            check (cmp.gainFor (Compare::before) == 0.0f, "and off plays them as they are");
+            cmp.setMatchLoudness (true);
+
+            // A reference at another sample rate, remembered for the song.
+            const auto oldFile = e.projectFile;
+            e.projectFile = dir.getChildFile ("compare-song.lathe");
+            const auto refFile = dir.getChildFile ("reference 44k.wav");
+            {
+                AudioBuffer<float> sine (2, 44100);
+                for (int i = 0; i < 44100; ++i)
+                    sine.setSample (0, i, 0.25f * std::sin (2.0 * MathConstants<double>::pi * 220.0 * i / 44100.0)),
+                    sine.setSample (1, i, sine.getSample (0, i));
+                refFile.deleteFile();
+                std::unique_ptr<OutputStream> stream (refFile.createOutputStream());
+                WavAudioFormat wav;
+                auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (44100.0).withNumChannels (2).withBitsPerSample (24));
+                w->writeFromAudioSampleBuffer (sine, 0, 44100);
+            }
+            check (cmp.loadReference (refFile).wasOk() && waitIdle() && cmp.get (Compare::reference).has()
+                       && std::abs (cmp.get (Compare::reference).audio->getNumSamples() - engine.getSampleRate()) < 4.0
+                       && cmp.get (Compare::reference).measures.lufsValid,
+                   "the reference is read, resampled to the device rate and measured");
+            cmp.projectChanged();
+            check (! cmp.get (Compare::before).has() && waitIdle() && cmp.get (Compare::reference).has() && cmp.get (Compare::reference).file == refFile,
+                   "opening the song again forgets Before and Now and brings its reference back");
+            check (cmp.loadReference (dir.getChildFile ("nope.wav")).failed(), "a missing file is refused");
+
+            // Playing: what you hear replaces the song's output, and switching keeps the place.
+            cmp.setHeard (Compare::reference);
+            cmp.play();
+            const auto heard = runCallbacks (engine, 40);
+            float peak = 0.0f;
+            for (auto v : heard) peak = jmax (peak, std::abs (v));
+            check (cmp.isPlaying() && peak > 0.05f && cmp.getPositionSeconds() > 0.2, "Compare plays the reference through the device");
+            const double at = cmp.getPositionSeconds();
+            cmp.setHeard (Compare::now);
+            runCallbacks (engine, 4);
+            check (cmp.getPositionSeconds() > at, "switching what you hear keeps going from the same place");
+            cmp.stop();
+            check (! cmp.isPlaying(), "and it stops");
+
+            e.projectFile = oldFile;
+            e.master->volumeDb = 0.0f;
+            e.loopEnabled = oldLoop;
+            e.removeTrack (toneTrack->id);
+            engine.rebuild();
+            tools.compare = nullptr;
         }
 
         status = {};
@@ -3977,7 +4290,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 18 && listed["id"].toString() == "a", "tools/list has the eighteen tools");
+        check (listed["result"]["tools"].size() == 19 && listed["id"].toString() == "a", "tools/list has the nineteen tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

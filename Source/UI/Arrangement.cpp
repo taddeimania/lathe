@@ -63,7 +63,7 @@ public:
         volume.onValueChange = [this]
         {
             track->volumeDb = theme::faderPosToDb ((float) volume.getValue());
-            ctx.edit.markDirty();
+            ctx.edit.adjusted();
         };
         volume.setTooltip ("Volume");
         volume.setScrollWheelEnabled (false);   // the wheel scrolls the track list

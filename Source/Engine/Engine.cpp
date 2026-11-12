@@ -1,5 +1,7 @@
 #include "Engine.h"
 #include "RenderPool.h"
+#include "../Host/RemotePlugin.h"
+#include "../Devices/Device.h"
 #if JUCE_MAC
  #include <sys/sysctl.h>
 #endif
@@ -574,7 +576,7 @@ void Engine::prepareSlot (PluginSlot& slot)
     slot.preparedBlock = bs;
 }
 
-std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, const MemoryBlock& state, String& error)
+std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, const MemoryBlock& state, String& error, bool separate)
 {
     auto slot = std::make_shared<PluginSlot>();
     slot->description = saved;
@@ -582,9 +584,40 @@ std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, co
     const double sr = deviceRate.load() > 0 ? deviceRate.load() : 48000.0;
     const int bs = deviceBlock.load() > 0 ? deviceBlock.load() : 512;
 
+    if (auto resolved = host.resolve (saved); resolved && separate && ! devices::isBuiltIn (*resolved))
+    {
+        slot->separate = true;
+        String why;
+        if (auto remote = RemotePluginInstance::create (*resolved, sr, bs, state, why))
+        {
+            auto* r = remote.get();
+            const auto name = resolved->name;
+            r->onStopped = [this, name]
+            {
+                if (onStatus)
+                    onStatus (name + " stopped working. It runs separately, so the rest of Lathe is fine. "
+                              "Right-click it > Restart to bring it back.");
+            };
+            slot->description = *resolved;
+            slot->instance = std::move (remote);
+            slot->instance->setPlayHead (&playHead);
+            prepareSlot (*slot);
+            return slot;
+        }
+        // Not loaded inside Lathe instead: a plug-in someone runs separately may be one that
+        // crashes. It stays as a missing plug-in (settings kept) until it starts or they turn
+        // "Run separately" off.
+        slot->savedState = state;
+        error = resolved->name + " couldn't run separately: " + why;
+        return slot;
+    }
+
     if (auto resolved = host.resolve (saved))
     {
-        slot->instance = host.create (*resolved, sr, bs, error);
+        String createError;
+        slot->instance = host.create (*resolved, sr, bs, createError);
+        if (error.isEmpty())
+            error = createError;
         if (slot->instance != nullptr)
         {
             slot->description = *resolved;
@@ -603,6 +636,18 @@ std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, co
     }
 
     return slot;
+}
+
+std::shared_ptr<PluginSlot> Engine::remakeSlot (PluginSlot& slot, bool separate, String& error)
+{
+    MemoryBlock state;
+    if (slot.instance != nullptr)
+        slot.instance->getStateInformation (state);
+    else
+        state = slot.savedState;
+    auto fresh = makeSlot (slot.description, state, error, separate);
+    fresh->bypassed = slot.bypassed.load();
+    return fresh;
 }
 
 Array<int> Engine::latencySignature() const
@@ -1578,6 +1623,32 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
     }
 
     positionSamples = pos;
+
+    // The Compare window playing: it replaces what goes out of the master's outputs.
+    if (auto* outside = outsideLive.load (std::memory_order_acquire); outside != nullptr && outside->isPlaying() && ! playing.load())
+    {
+        for (int d = 0; d < numDeviceOutputs; ++d)
+            if (outDev[d] != nullptr)
+                FloatVectorOperations::clear (outDev[d], n);
+        for (int at = 0; at < n; at += kPreviewBlock)
+        {
+            const int len = jmin (kPreviewBlock, n - at);
+            outside->render (outsideScratch, len);
+            addToOutput (outsideScratch, len, at, g.master.outChannel, true, outDev, numDeviceOutputs);
+        }
+    }
+}
+
+void Engine::setOutsidePlayer (std::shared_ptr<OutsidePlayer> p)
+{
+    std::shared_ptr<OutsidePlayer> old;
+    {
+        const ScopedLock sl (graphLock);   // the audio callback holds it while it runs
+        old = std::move (outsideOwner);
+        outsideOwner = std::move (p);
+        outsideLive.store (outsideOwner.get(), std::memory_order_release);
+    }
+    // `old` goes here, outside the lock.
 }
 
 namespace
@@ -2521,6 +2592,11 @@ Result Engine::renderOffline (const ExportSettings& s, const std::function<bool 
         p->setNonRealtime (true);
         p->reset();
     }
+    // Faders start where they're set, not ramping from wherever the live mix last had them
+    // (a render that begins with a ramp measures a peak that isn't in the song).
+    for (auto& rt : g->tracks) rt.track->rtGainValid = false;
+    for (auto& rt : g->buses)  rt.track->rtGainValid = false;
+    g->master.track->rtGainValid = false;
 
     float* noOutputs[1] = { nullptr };
     const float* noInputs[1] = { nullptr };

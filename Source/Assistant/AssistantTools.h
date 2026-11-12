@@ -2,6 +2,8 @@
 
 #include "../Engine/Engine.h"
 
+namespace lathe { class Compare; }
+
 namespace lathe::assistant
 {
 //==============================================================================
@@ -14,6 +16,9 @@ class Tools
 public:
     Tools (Edit&, Engine&);
     ~Tools();
+
+    /** The Compare window's versions (compare_mix). The app sets it; null: no Compare. */
+    Compare* compare = nullptr;
 
     /** A tool that takes a while (measure_performance, compare_processing_cores): Lathe plays
         for real meanwhile, so it runs on the message thread's timer, not in one call. */
@@ -78,6 +83,7 @@ private:
     String busyReason() const;
     std::shared_ptr<Job> startExport (const var& args, var& immediate);
     std::shared_ptr<Job> startAnalysis (const var& args, var& immediate);
+    std::shared_ptr<Job> startCompare (const var& args, var& immediate);
     /** An export or an analysis is rendering (they take the engine over, one at a time). */
     bool isRendering() const;
     var getPluginParams (const var& args) const;

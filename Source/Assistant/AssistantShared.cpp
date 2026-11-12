@@ -363,7 +363,7 @@ var toolDefinitions()
             { "action", object ({ { "type", "string" },
                                   { "enum", Array<var> { "add_track", "remove_track", "rename_track", "move_track",
                                                          "add_plugin", "remove_plugin", "move_plugin", "set_plugin_on",
-                                                         "set_input", "set_output", "set_send", "set_mixer", "set_track",
+                                                         "set_input", "set_output", "set_send", "set_mixer", "set_eq", "set_track",
                                                          "set_tempo", "set_time_signature" } },
                                   { "description", "What to change" } }) },
             { "track", prop ("string", "The track it applies to: name or id. Tracks added earlier in the same call can be named") },
@@ -373,7 +373,8 @@ var toolDefinitions()
                                    { "description", "add_track: plug-ins to put on it, in order (names from list_plugins)" } }) },
             { "plugin", prop ("string", "add_plugin: the plug-in's name. remove_plugin, move_plugin, set_plugin_on: its name or 1-based position on the track") },
             { "position", prop ("integer", "add_track, move_track: place in the track list (1 = top). add_plugin, move_plugin: place in the chain (1 = first)") },
-            { "on", prop ("boolean", "set_plugin_on: false bypasses it, true switches it back on. add_plugin: false adds it bypassed") },
+            { "on", prop ("boolean", "set_plugin_on: false bypasses it, true switches it back on. add_plugin: false adds it bypassed. "
+                                     "set_eq with band: false switches that band off; without band: the whole channel EQ off or on") },
             { "from_track", prop ("string", "set_input: take this track's notes (MIDI tracks, from a MIDI track) or sound (audio tracks)") },
             { "interface_input", prop ("integer", "set_input (audio tracks): the interface input to record, 1-based") },
             { "midi_input", prop ("string", "set_input (MIDI tracks): \"all\", \"none\" or a MIDI device's name") },
@@ -388,6 +389,11 @@ var toolDefinitions()
             { "pan", prop ("number", "set_mixer: -1 (left) to 1 (right)") },
             { "mute", prop ("boolean", "set_mixer") },
             { "solo", prop ("boolean", "set_mixer") },
+            { "band", prop ("string", "set_eq: \"low cut\", \"low shelf\", \"bell 1\", \"bell 2\", \"high shelf\" or \"high cut\" (or 1-6, in that order)") },
+            { "freq_hz", prop ("number", "set_eq: the band's frequency, 20 to 20000 Hz") },
+            { "gain_db", prop ("number", "set_eq: boost or cut in dB, -18 to +18 (shelves and bells; cuts have no gain)") },
+            { "q", prop ("number", "set_eq (bells): width, 0.1 (wide) to 10 (narrow); 1 is about an octave and a third") },
+            { "flat", prop ("boolean", "set_eq: true puts every band back to flat first") },
             { "monitor", prop ("string", "set_track (also set_input): \"auto\", \"in\" or \"off\"") },
             { "arm", prop ("boolean", "set_track: arm for recording") },
             { "midi_channel", prop ("integer", "set_track (MIDI tracks): 1-16") },
@@ -397,7 +403,7 @@ var toolDefinitions()
             { "action" });
 
         tools.add (tool ("edit_session", "Change the session",
-                         "Builds or changes the project: tracks, returns, plug-ins, routing, sends, mixer, tempo. Give every "
+                         "Builds or changes the project: tracks, returns, plug-ins, routing, sends, mixer, channel EQ, tempo. Give every "
                          "change for one request in a single call, in order: they all land as ONE undo step in Lathe, or, if one "
                          "can't be made, none of them do (the reply says which and why). Plug-in placement is automatic unless "
                          "position is given: a note generator goes before the instrument it drives, an instrument before the "
@@ -410,7 +416,13 @@ var toolDefinitions()
                          "{\"action\":\"set_input\",\"track\":\"<instrument track>\",\"from_track\":\"<generator track>\"}. "
                          "A reverb return: {\"action\":\"add_track\",\"kind\":\"return\",\"name\":\"Verb\",\"plugins\":[\"Reverb\"]}, "
                          "then set_send from each track. Lathe's own effects start 100% wet on a return.\n"
-                         "Volume, pan, mute, solo, send levels, monitoring and arm change live and aren't part of the undo step.",
+                         "Every track, return and the master has a six-band channel EQ after its plug-ins (low cut, low shelf, "
+                         "bell 1, bell 2, high shelf, high cut; describe_track shows what's active). set_eq changes one band: "
+                         "{\"action\":\"set_eq\",\"track\":\"Guitar\",\"band\":\"bell 1\",\"freq_hz\":300,\"gain_db\":-3,\"q\":1.4} "
+                         "or {\"action\":\"set_eq\",\"track\":\"Vocal\",\"band\":\"low cut\",\"freq_hz\":100}. Changing a band "
+                         "switches it on. Prefer this to adding an EQ plug-in for corrective cuts.\n"
+                         "Volume, pan, send levels and the EQ are part of the undo step; mute, solo, monitoring and arm change "
+                         "live and aren't.",
                          schema ({ { "changes", object ({ { "type", "array" }, { "items", change },
                                                           { "description", "The changes, applied in order" } }) } },
                                  { "changes" }),
@@ -464,11 +476,23 @@ var toolDefinitions()
                      "bars it plays in, where most of its energy is, and its stereo width. Masking: pairs of tracks loud in the "
                      "same band at the same time, within 6 dB of each other, and for how much of the time. Plus notes on "
                      "anything measurably off (clipping, true peak above -1 dBTP, a wide or out-of-phase low end). The loop if "
-                     "it's on, else the whole song, unless bars are given. Use it after changing a mix to check the change.",
+                     "it's on, else the whole song, unless bars are given. Use it after changing a mix to check the change. "
+                     "To act on masking, cut one of the pair where they collide with edit_session's set_eq.",
                      schema ({ { "from_bar", prop ("number", "First bar (1-based)") },
                                { "to_bar", prop ("number", "Where it ends (the bar it stops at)") },
                                { "section_bars", prop ("integer", "Bars per entry in sections (default 4)") } }),
                      true));
+    tools.add (tool ("compare_mix", "Compare the mix with before and a reference",
+                     "Lathe's Compare window keeps up to three versions to switch between while they play in step: Before "
+                     "(the mix as it was when someone marked it), Now (the mix as it is) and a Reference (a finished track the "
+                     "person chose). Each is measured like analyze_mix's mix: integrated loudness, true peak, crest, width, "
+                     "correlation and balance across seven bands. With mark_before, Lathe renders the mix now as Before: do it "
+                     "before changing a mix, so the person can hear what you did by switching between them. Without it, Lathe "
+                     "renders Now (over Before's bars, if there's a Before) and replies with every version's numbers and a summary "
+                     "of what changed and how both stand against the reference. The person picks the reference in the window; "
+                     "the reply says if there's none. Renders over the loop if it's on, else the whole song.",
+                     schema ({ { "mark_before", prop ("boolean", "true: render the mix as it is now as Before (default false: render Now and compare)") } }),
+                     false));
     tools.add (tool ("get_plugin_params", "Get a plug-in's settings",
                      "Every setting a plug-in on a track publishes (Lathe's own devices and VST3s): number, name, id, the "
                      "current value as the plug-in shows it, and either its choices (a menu or a switch) or its range "

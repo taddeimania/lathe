@@ -66,6 +66,16 @@ Every track, return and the master has a built-in EQ after its plug-ins and befo
 - **Double-click** a bell or shelf to set it back to 0 dB, or double-click a cut to turn it on or off.
 - The power button bypasses the whole EQ. **Reset** flattens it.
 
+## Compare (View > Compare, Cmd/Ctrl+K)
+
+Hear what a change did. Compare keeps up to three versions that play in step, and you switch between them without losing your place:
+
+- **Before**: press **Mark Before** (or ask the AI assistant to) and Lathe renders the mix as it is.
+- **Now**: change the mix, then press **Update Now**. It covers the same bars as Before.
+- **Reference**: a finished track you'd like yours to sit next to. Choose it or drop the file on the window. Lathe remembers it for the song on this computer; it isn't part of the song or shared.
+
+Click a version, or press 1, 2 or 3, to hear it; Space plays and stops while the window is in front. **Match loudness** (on by default) plays them all at the loudness of the quietest, so the louder one doesn't win just for being louder. Below, each is measured: loudness, true peak, crest, width, correlation and the balance across seven bands, with Now's difference from Before, and a line on the biggest differences. Versions render over the loop if it's on, else the whole song.
+
 ## Export
 
 **File > Export Mix / Stems** (Cmd/Ctrl+Shift+E). You can export the whole song or the loop region, as 16-bit, 24-bit, or 32-bit float WAV, with a tail. Stems are post-fader, one per track and return, and they line up sample-for-sample with the mix. Silent stems are skipped. Files go to `<project>/Exports/<name> <date>/` unless you choose another folder.

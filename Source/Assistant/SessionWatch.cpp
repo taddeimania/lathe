@@ -5,7 +5,7 @@ namespace lathe::assistant
 {
 namespace
 {
-const StringArray liveChannelKeys { "volume", "pan", "mute", "solo", "sends", "arm", "monitor" };
+const StringArray liveChannelKeys { "volume", "pan", "mute", "solo", "sends", "arm", "monitor", "eq" };
 const StringArray liveSongKeys { "loop", "insertMarker", "notes" };
 
 /** A copy to compare: plug-ins by their readable settings where Lathe could read them (their saved

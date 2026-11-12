@@ -1,6 +1,9 @@
 #include "MainComponent.h"
 #include "../Assistant/AssistantService.h"
 #include "GlobalKeys.h"
+#include "UndoHistory.h"
+#include "CompareWindow.h"
+#include "../Compare/Compare.h"
 #include "../Assistant/AssistantShared.h"
 #include "../Devices/Device.h"
 #include "../Demo/DemoSong.h"
@@ -15,7 +18,7 @@ namespace menu
     enum
     {
         newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, exportTracks, showFolder, quit, openWelcome,
-        undo = 100, redo, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
+        undo = 100, redo, undoHistory, compareMixes, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
         settings = 400, scan, metronome, browser, checkUpdates, autoUpdates, assistant,
@@ -188,6 +191,9 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     };
     notes->addChangeListener (this);
 
+    compare = std::make_unique<Compare> (engine, edit, settings);
+    ctx.compare = compare.get();
+
     // AI assistant (MCP) connection: off unless you turned it on (Options > AI Assistant).
     if (! forScreenshots)
     {
@@ -224,7 +230,15 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
     // Space starts and stops from anywhere in Lathe: the mixer, a focused button, a plug-in window.
     if (! forScreenshots)
-        globalkeys::install ([this] { engine.togglePlay(); });
+        globalkeys::install ([this]
+        {
+            if (! CompareWindow::takeSpace())   // Compare in front: Space plays the comparison
+            {
+                if (compare != nullptr && compare->isPlaying())
+                    compare->stop();
+                engine.togglePlay();
+            }
+        });
 
     setSize (1360, 860);
     startTimerHz (30);
@@ -232,11 +246,15 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
 MainComponent::~MainComponent()
 {
+    UndoHistoryWindow::closeIfOpen();
+    CompareWindow::closeIfOpen();
     globalkeys::uninstall();
     stopTimer();
     if (aiAssistant != nullptr)
         aiAssistant->onActivity = nullptr;   // a dialog may keep it alive a moment longer
     aiAssistant.reset();   // before the project and engine it reads
+    ctx.compare = nullptr;
+    compare.reset();
     notes->removeChangeListener (this);
     ctx.notes = nullptr;
     notes.reset();
@@ -395,10 +413,10 @@ void MainComponent::ensureBuiltInTemplates()
 
 Edit::PluginFactory MainComponent::makePluginFactory (StringArray& missing)
 {
-    return [this, &missing] (const PluginDescription& desc, const MemoryBlock& state)
+    return [this, &missing] (const PluginDescription& desc, const MemoryBlock& state, bool separate)
     {
         String error;
-        auto slot = engine.makeSlot (desc, state, error);
+        auto slot = engine.makeSlot (desc, state, error, separate);
         if (slot->instance == nullptr)
             missing.addIfNotAlreadyThere (desc.name);
         return slot;
@@ -448,6 +466,8 @@ void MainComponent::newProject (const File& templateFile)
     edit.needsRebuild = false;
     edit.dirty = false;
     edit.clearUndo();   // setting the project up isn't something to undo
+    if (compare != nullptr)
+        compare->projectChanged();   // Before and Now were the old song's
     refreshAll();
 
     if (cloud != nullptr)
@@ -531,6 +551,8 @@ void MainComponent::loadProjectFile (const File& file, const File& readFrom)
     edit.needsRebuild = false;
     edit.dirty = false;
     edit.clearUndo();   // setting the project up isn't something to undo
+    if (compare != nullptr)
+        compare->projectChanged();   // Before and Now were the old song's
     refreshAll();
 
     settings.setValue ("lastProject", file.getFullPathName());
@@ -762,7 +784,7 @@ void MainComponent::reloadMissingPlugins()
                 if (slot->instance != nullptr)
                     continue;
                 String error;
-                auto fresh = engine.makeSlot (slot->description, slot->savedState, error);
+                auto fresh = engine.makeSlot (slot->description, slot->savedState, error, slot->separate);
                 if (fresh->instance != nullptr)
                 {
                     fresh->bypassed = slot->bypassed.load();
@@ -1142,6 +1164,7 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
     {
         item (menu::undo, "Undo", cmd + "Z", edit.canUndo() && ! engine.isRecording());
         item (menu::redo, "Redo", cmd + "Shift+Z", edit.canRedo() && ! engine.isRecording());
+        item (menu::undoHistory, "Undo History...", cmd + "Alt+Z");
         m.addSeparator();
         const int numClips = arrangement.numSelectedClips();
         const bool hasClip = numClips > 0;
@@ -1179,6 +1202,7 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::toggleView, mixerShown ? "Show Arrangement" : "Show Mixer", "Tab");
         item (menu::toggleDetail, "Show Bottom Panel", {}, true, detailShown);
         m.addSeparator();
+        item (menu::compareMixes, "Compare...", cmd + "K");
         item (menu::showNotes, "Notes...", cmd + "Shift+N");
         PopupMenu showOn;
         const auto show = notes->getShow();
@@ -1298,10 +1322,26 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::undo:
             if (engine.isRecording()) setStatus ("Stop recording first, then undo.");
             else if (! edit.undo())   setStatus ("Nothing to undo.");
+            else                      setStatus ("Undid: " + edit.getUndoneSteps().front().label);
             break;
         case menu::redo:
-            if (engine.isRecording()) setStatus ("Stop recording first, then redo.");
-            else                      edit.redo();
+            if (engine.isRecording())  setStatus ("Stop recording first, then redo.");
+            else if (edit.redo())      setStatus ("Redid: " + edit.getDoneSteps().back().label);
+            break;
+        case menu::compareMixes:
+            if (compare != nullptr)
+                CompareWindow::show (*compare, [this] (const String& st) { setStatus (st); });
+            break;
+        case menu::undoHistory:
+            UndoHistoryWindow::show (edit,
+                                     [this]
+                                     {
+                                         if (! engine.isRecording())
+                                             return true;
+                                         setStatus ("Stop recording first, then undo.");
+                                         return false;
+                                     },
+                                     [this] (const String& st) { setStatus (st); });
             break;
         case menu::deleteClip:    arrangement.deleteSelectedClip(); break;
         case menu::duplicate:     arrangement.duplicateSelectedClip(); break;
@@ -1382,7 +1422,7 @@ bool MainComponent::keyPressed (const KeyPress& k)
 
     if (cmd)
     {
-        if (is ('z')) { menuItemSelected (shift ? menu::redo : menu::undo, 0); return true; }
+        if (is ('z')) { menuItemSelected (k.getModifiers().isAltDown() ? menu::undoHistory : shift ? menu::redo : menu::undo, 0); return true; }
         if (is ('y')) { menuItemSelected (menu::redo, 0); return true; }
         if (is ('s')) { menuItemSelected (shift ? menu::saveAs : menu::save, 0); return true; }
         if (is ('o')) { menuItemSelected (menu::open, 0); return true; }
@@ -1402,6 +1442,7 @@ bool MainComponent::keyPressed (const KeyPress& k)
         if (is ('t')) { menuItemSelected (mods.isAltDown() ? menu::addReturn : shift ? menu::addMidi : menu::addAudio, 0); return true; }
         if (ch == ',') { menuItemSelected (menu::settings, 0); return true; }
         if (is ('b')) { openPluginBrowser(); return true; }
+        if (is ('k')) { menuItemSelected (menu::compareMixes, 0); return true; }
         if (is ('g')) { menuItemSelected (shift ? menu::ungroupTracks : menu::groupTracks, 0); return true; }
         if (is ('q')) { JUCEApplication::getInstance()->systemRequestedQuit(); return true; }
         return false;

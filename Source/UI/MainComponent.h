@@ -123,6 +123,7 @@ private:
     } assistantBar;
     void showAssistantBar();
     std::unique_ptr<NotesController> notes;
+    std::unique_ptr<Compare> compare;                  // View > Compare's versions
     std::shared_ptr<assistant::Service> aiAssistant;   // AI assistant (MCP) connection
     std::unique_ptr<Divider> divider;
     Label statusLeft, statusRight;

@@ -1,0 +1,449 @@
+// LatheHost: runs one plug-in for Lathe in its own process ("Run separately" on a plug-in),
+// so a plug-in that crashes takes only this process down.
+//
+// Lathe starts it (ChildProcessCoordinator) and sends JSON messages: load, prepare, state,
+// settings, its window. Audio goes through a block of shared memory: Lathe writes a block,
+// posts the semaphore; this process's audio thread wakes, runs the plug-in on the block in
+// place, and says it's done. See RemotePlugin.h and RemoteShared.h.
+//
+// It ends when Lathe goes away or says "quit".
+
+#include "RemoteShared.h"
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <cstdlib>
+
+using namespace juce;
+using namespace lathe;
+
+namespace
+{
+MemoryBlock toBlock (const var& v)
+{
+    const auto text = JSON::toString (v, true);
+    return MemoryBlock (text.toRawUTF8(), text.getNumBytesAsUTF8());
+}
+
+var fromBlock (const MemoryBlock& mb)
+{
+    return JSON::parse (String::fromUTF8 ((const char*) mb.getData(), (int) mb.getSize()));
+}
+
+/** The transport Lathe sent with the block. */
+struct SharedPlayHead : public AudioPlayHead
+{
+    remote::Shared* s = nullptr;
+    double rate = 48000.0;
+    Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo p;
+        if (s == nullptr)
+            return p;
+        p.setPpqPosition (s->ppq);
+        p.setBpm (s->bpm);
+        p.setTimeInSamples (s->timeSamples);
+        p.setTimeInSeconds ((double) s->timeSamples / rate);
+        p.setIsPlaying (s->playing != 0);
+        return p;
+    }
+};
+
+class Host;
+
+/** The plug-in's own window. */
+class EditorWindow : public DocumentWindow
+{
+public:
+    EditorWindow (AudioProcessorEditor* editor, const String& title)
+        : DocumentWindow (title, Colours::darkgrey, DocumentWindow::closeButton | DocumentWindow::minimiseButton)
+    {
+        setUsingNativeTitleBar (true);
+        setContentOwned (editor, true);
+        setResizable (editor->isResizable(), false);
+        centreWithSize (getWidth(), getHeight());
+    }
+    void closeButtonPressed() override   { setVisible (false); }
+};
+
+//==============================================================================
+class Host : public ChildProcessWorker,
+             private Thread,
+             private AudioProcessorListener
+{
+public:
+    Host() : Thread ("LatheHost audio") {}
+
+    ~Host() override
+    {
+        stopAudio();
+        window.reset();
+        if (plugin != nullptr)
+            plugin->removeListener (this);
+        plugin.reset();
+        map.reset();
+    }
+
+    void handleMessageFromCoordinator (const MemoryBlock& mb) override
+    {
+        auto msg = fromBlock (mb);
+        // Plug-ins are loaded and asked things on the message thread.
+        MessageManager::callAsync ([this, msg] { handle (msg); });
+    }
+
+    void handleConnectionLost() override
+    {
+        stopAudio();
+        MessageManager::getInstance()->stopDispatchLoop();
+    }
+
+private:
+    std::unique_ptr<AudioPluginInstance> plugin;
+    std::unique_ptr<MemoryMappedFile> map;
+    remote::Shared* shared = nullptr;
+    remote::Semaphore wake;
+    SharedPlayHead playHead;
+    std::unique_ptr<EditorWindow> window;
+    double rate = 48000.0;
+    int block = 512;
+    std::atomic<bool> fromLathe { false };   // a setting Lathe is changing: don't echo it back
+    int lastLatency = 0;
+
+    void reply (const var& msg, var out)
+    {
+        if (! out.isObject())
+            out = var (new DynamicObject());
+        out.getDynamicObject()->setProperty ("reply", msg["id"]);
+        sendMessageToCoordinator (toBlock (out));
+    }
+
+    static var obj()   { return var (new DynamicObject()); }
+
+    var describeParams() const
+    {
+        Array<var> list;
+        int i = 0;
+        for (auto* p : plugin->getParameters())
+        {
+            auto d = obj();
+            auto* o = d.getDynamicObject();
+            o->setProperty ("name", p->getName (128));
+            o->setProperty ("label", p->getLabel());
+            o->setProperty ("default", p->getDefaultValue());
+            o->setProperty ("value", p->getValue());
+            o->setProperty ("text", p->getCurrentValueAsText());
+            o->setProperty ("steps", p->getNumSteps());
+            o->setProperty ("discrete", p->isDiscrete());
+            o->setProperty ("boolean", p->isBoolean());
+            o->setProperty ("automatable", p->isAutomatable());
+            if (p->isDiscrete() && p->getNumSteps() <= 128)
+            {
+                Array<var> strings;
+                for (auto& s : p->getAllValueStrings())
+                    strings.add (s);
+                o->setProperty ("strings", strings);
+            }
+            list.add (d);
+            if (++i >= 4096)
+                break;
+        }
+        return list;
+    }
+
+    void handle (const var& msg)
+    {
+        const auto type = msg["type"].toString();
+        if (type == "load")        { load (msg); return; }
+        if (type == "quit")
+        {
+            reply (msg, {});
+            stopAudio();
+            MessageManager::getInstance()->stopDispatchLoop();
+            return;
+        }
+        if (plugin == nullptr)
+        {
+            auto out = obj();
+            out.getDynamicObject()->setProperty ("error", "no plug-in loaded");
+            reply (msg, out);
+            return;
+        }
+        auto params = plugin->getParameters();
+        if (type == "prepare")
+        {
+            rate = (double) msg["rate"];
+            block = (int) msg["block"];
+            playHead.rate = rate;
+            const ScopedLock sl (plugin->getCallbackLock());
+            plugin->releaseResources();
+            plugin->setRateAndBufferSizeDetails (rate, block);
+            plugin->prepareToPlay (rate, block);
+            reply (msg, {});
+        }
+        else if (type == "release")  plugin->releaseResources();
+        else if (type == "reset")    plugin->reset();
+        else if (type == "nonRealtime") plugin->setNonRealtime ((bool) msg["on"]);
+        else if (type == "getState")
+        {
+            MemoryBlock state;
+            plugin->getStateInformation (state);
+            auto out = obj();
+            out.getDynamicObject()->setProperty ("state", state.toBase64Encoding());
+            reply (msg, out);
+        }
+        else if (type == "setState")
+        {
+            MemoryBlock state;
+            state.fromBase64Encoding (msg["state"].toString());
+            {
+                fromLathe = true;
+                plugin->setStateInformation (state.getData(), (int) state.getSize());
+                fromLathe = false;
+            }
+            auto out = obj();
+            out.getDynamicObject()->setProperty ("params", describeParams());
+            reply (msg, out);
+            checkLatency();
+        }
+        else if (type == "setParam")
+        {
+            if (auto* p = params[(int) msg["index"]])
+            {
+                fromLathe = true;
+                p->setValueNotifyingHost ((float) (double) msg["value"]);
+                fromLathe = false;
+            }
+        }
+        else if (type == "paramText")
+        {
+            auto out = obj();
+            if (auto* p = params[(int) msg["index"]])
+                out.getDynamicObject()->setProperty ("text", p->getText ((float) (double) msg["value"], 128));
+            reply (msg, out);
+        }
+        else if (type == "valueForText")
+        {
+            auto out = obj();
+            if (auto* p = params[(int) msg["index"]])
+                out.getDynamicObject()->setProperty ("value", p->getValueForText (msg["text"].toString()));
+            reply (msg, out);
+        }
+        else if (type == "showEditor")  showEditor();
+        else if (type == "hideEditor")  { if (window != nullptr) window->setVisible (false); }
+    }
+
+    void load (const var& msg)
+    {
+        auto out = obj();
+        auto* o = out.getDynamicObject();
+        auto fail = [&] (const String& why)
+        {
+            o->setProperty ("ok", false);
+            o->setProperty ("error", why);
+            reply (msg, out);
+        };
+
+        rate = (double) msg["rate"];
+        block = (int) msg["block"];
+        playHead.rate = rate;
+
+        map = std::make_unique<MemoryMappedFile> (File (msg["shm"].toString()), MemoryMappedFile::readWrite, false);
+        if (map->getData() == nullptr || map->getSize() < sizeof (remote::Shared))
+            return fail ("LatheHost couldn't open the shared memory.");
+        shared = static_cast<remote::Shared*> (map->getData());
+        if (shared->magic != remote::kMagic)
+            return fail ("LatheHost found the wrong shared memory.");
+        if (! wake.attach (msg["semaphore"].toString()))
+            return fail ("LatheHost couldn't open the semaphore.");
+        playHead.s = shared;
+
+        PluginDescription desc;
+        if (auto xml = parseXML (msg["plugin"].toString()); xml == nullptr || ! desc.loadFromXml (*xml))
+            return fail ("LatheHost didn't understand which plug-in to load.");
+
+        AudioPluginFormatManager formats;
+        formats.addDefaultFormats();
+        String error;
+        plugin = formats.createPluginInstance (desc, rate, block, error);
+        if (plugin == nullptr)
+            return fail (error.isNotEmpty() ? error : desc.name + " didn't load.");
+
+        // As in Lathe: plain stereo on the main buses if the plug-in takes it.
+        auto layout = plugin->getBusesLayout();
+        if (! layout.inputBuses.isEmpty())  layout.inputBuses.getReference (0) = AudioChannelSet::stereo();
+        if (! layout.outputBuses.isEmpty()) layout.outputBuses.getReference (0) = AudioChannelSet::stereo();
+        if (plugin->checkBusesLayoutSupported (layout))
+            plugin->setBusesLayout (layout);
+
+        MemoryBlock state;
+        state.fromBase64Encoding (msg["state"].toString());
+        if (state.getSize() > 0)
+            plugin->setStateInformation (state.getData(), (int) state.getSize());
+        plugin->setPlayHead (&playHead);
+        plugin->setRateAndBufferSizeDetails (rate, block);
+        plugin->prepareToPlay (rate, block);
+        plugin->addListener (this);
+        lastLatency = plugin->getLatencySamples();
+
+        o->setProperty ("ok", true);
+        o->setProperty ("name", plugin->getName());
+        o->setProperty ("inputs", plugin->getTotalNumInputChannels());
+        o->setProperty ("outputs", plugin->getTotalNumOutputChannels());
+        o->setProperty ("acceptsMidi", plugin->acceptsMidi());
+        o->setProperty ("producesMidi", plugin->producesMidi());
+        o->setProperty ("latency", lastLatency);
+        o->setProperty ("tail", plugin->getTailLengthSeconds());
+        o->setProperty ("hasEditor", plugin->hasEditor());
+        o->setProperty ("params", describeParams());
+
+        startRealtimeThread (Thread::RealtimeOptions{}.withApproximateAudioProcessingTime (jmax (16, block), rate));
+        reply (msg, out);
+    }
+
+    void showEditor()
+    {
+        if (window == nullptr)
+        {
+            auto* editor = plugin->createEditorIfNeeded();
+            if (editor == nullptr)
+                editor = new GenericAudioProcessorEditor (*plugin);
+            window = std::make_unique<EditorWindow> (editor, plugin->getName() + " (running separately)");
+        }
+       #if JUCE_MAC
+        Process::setDockIconVisible (true);   // so the window can come to the front
+       #endif
+        window->setVisible (true);
+        window->toFront (true);
+    }
+
+    void checkLatency()
+    {
+        const int now = plugin->getLatencySamples();
+        if (now == lastLatency)
+            return;
+        lastLatency = now;
+        auto msg = obj();
+        msg.getDynamicObject()->setProperty ("type", "latency");
+        msg.getDynamicObject()->setProperty ("samples", now);
+        sendMessageToCoordinator (toBlock (msg));
+    }
+
+    // --- the plug-in tells us
+    void audioProcessorParameterChanged (AudioProcessor*, int index, float value) override
+    {
+        if (fromLathe.load())
+            return;
+        auto msg = obj();
+        auto* o = msg.getDynamicObject();
+        o->setProperty ("type", "param");
+        o->setProperty ("index", index);
+        o->setProperty ("value", value);
+        if (auto* p = plugin->getParameters()[index])
+            o->setProperty ("text", p->getText (value, 128));
+        sendMessageToCoordinator (toBlock (msg));
+    }
+
+    void audioProcessorChanged (AudioProcessor*, const ChangeDetails& d) override
+    {
+        if (d.latencyChanged)
+            MessageManager::callAsync ([this] { if (plugin != nullptr) checkLatency(); });
+    }
+
+    // --- audio
+    void stopAudio()
+    {
+        if (shared != nullptr)
+            shared->quit = 1;
+        signalThreadShouldExit();
+        wake.post();
+        stopThread (3000);
+    }
+
+    void run() override
+    {
+        uint32_t lastDone = shared->doneSeq.load();
+        MidiBuffer midi;
+        midi.ensureSize (remote::kMaxMidi * 8);
+        float* channels[remote::kMaxChannels] {};
+        for (int ch = 0; ch < remote::kMaxChannels; ++ch)
+            channels[ch] = shared->audio[ch];
+
+        while (! threadShouldExit())
+        {
+            wake.wait();
+            if (threadShouldExit() || shared->quit.load() != 0)
+                break;
+            const uint32_t seq = shared->requestSeq.load (std::memory_order_acquire);
+            if (seq == lastDone)
+                continue;   // a spare wake-up
+
+            const int n = jlimit (0, remote::kMaxBlock, (int) shared->numSamples);
+            const int need = jmax (plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels());
+            const int numCh = jlimit (0, remote::kMaxChannels, jmax ((int) shared->numChannels, need));
+            for (int ch = shared->numChannels; ch < numCh; ++ch)
+                FloatVectorOperations::clear (channels[ch], n);
+
+            midi.clear();
+            for (int i = 0; i < jmin ((int) shared->midiInCount, remote::kMaxMidi); ++i)
+            {
+                const auto& e = shared->midiIn[i];
+                midi.addEvent (e.data, jlimit (1, 3, (int) e.size), jlimit (0, jmax (0, n - 1), (int) e.sampleOffset));
+            }
+
+            {
+                AudioBuffer<float> view (channels, numCh, n);
+                const ScopedLock sl (plugin->getCallbackLock());
+                if (plugin->isSuspended())
+                    view.clear();
+                else
+                    plugin->processBlock (view, midi);
+            }
+
+            int out = 0;
+            for (const auto m : midi)
+            {
+                if (m.numBytes > 3 || out >= remote::kMaxMidi)
+                    continue;
+                auto& e = shared->midiOut[out++];
+                e.sampleOffset = m.samplePosition;
+                e.size = (uint8_t) m.numBytes;
+                std::memcpy (e.data, m.data, (size_t) m.numBytes);
+            }
+            shared->midiOutCount = out;
+            lastDone = seq;
+            shared->doneSeq.store (seq, std::memory_order_release);
+        }
+    }
+};
+} // namespace
+
+//==============================================================================
+static int runHost (const String& commandLine)
+{
+    ScopedJuceInitialiser_GUI juceInit;
+    auto host = std::make_unique<Host>();
+    if (! host->initialiseFromCommandLine (commandLine, remote::commandLineId(), 10000))
+        return 2;
+    MessageManager::getInstance()->runDispatchLoop();
+    host.reset();
+    std::_Exit (0);   // skip static teardown: some plug-ins misbehave when unloaded at exit
+}
+
+#if JUCE_WINDOWS
+int wmain (int argc, wchar_t* argv[])
+{
+    // A crashing plug-in should just end this process, without an error box.
+    SetErrorMode (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+    StringArray args;
+    for (int i = 1; i < argc; ++i)
+        args.add (String (argv[i]));
+    return runHost (args.joinIntoString (" "));
+}
+#else
+int main (int argc, char* argv[])
+{
+    StringArray args;
+    for (int i = 1; i < argc; ++i)
+        args.add (String::fromUTF8 (argv[i]));
+    return runHost (args.joinIntoString (" "));
+}
+#endif

@@ -4,10 +4,16 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.12.5 LANGUAGES C CXX)
+project(Lathe VERSION 0.12.6 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Windows: the C++ runtime is built into Lathe and its helpers instead of coming from the
+# Visual C++ Redistributable. Many PCs have none, or one too old for what Lathe uses (the
+# render pool's semaphore needs MSVCP140_ATOMIC_WAIT.dll, from 2019 16.8 on), and Lathe
+# then won't start. Set before JUCE so its targets (and the test plug-ins) match.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -133,6 +139,8 @@ target_sources(Lathe PRIVATE
     Source/UI/CloudLibrary.cpp
     Source/UI/CloudLinks.cpp
     Source/UI/Notes.cpp
+    Source/UI/UndoHistory.cpp
+    Source/UI/CompareWindow.cpp
     Source/UI/UpdateNotice.cpp
     Source/Patcher/Updater.cpp
     Source/UI/PianoRoll.cpp
@@ -146,6 +154,8 @@ target_sources(Lathe PRIVATE
     Source/Assistant/AssistantServer.cpp
     Source/Assistant/AssistantTools.cpp
     Source/Assistant/MixAnalysis.cpp
+    Source/Compare/Compare.cpp
+    Source/Host/RemotePlugin.cpp
     Source/Assistant/SessionWatch.cpp
     Source/Assistant/AssistantService.cpp
     Source/UI/MainComponent.cpp)
@@ -205,6 +215,27 @@ add_dependencies(Lathe LatheScanner)
 add_custom_command(TARGET Lathe POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheScanner> $<TARGET_FILE_DIR:Lathe>/
     COMMENT "Copying LatheScanner next to Lathe")
+
+# --- Plug-in host helper -------------------------------------------------------------
+# A plug-in set to "Run separately" runs in this process, so if it crashes only this goes
+# down and Lathe carries on. Copied next to Lathe like LatheScanner.
+juce_add_console_app(LatheHost PRODUCT_NAME "LatheHost")
+target_sources(LatheHost PRIVATE Source/Host/HostMain.cpp)
+target_include_directories(LatheHost PRIVATE Source/Host)
+target_compile_definitions(LatheHost PRIVATE
+    JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
+    JUCE_PLUGINHOST_LV2=0 JUCE_PLUGINHOST_LADSPA=0 JUCE_MODAL_LOOPS_PERMITTED=0)
+target_link_libraries(LatheHost PRIVATE
+    juce::juce_audio_processors juce::juce_gui_extra
+    juce::juce_recommended_config_flags)
+if(MSVC)
+    target_compile_options(LatheHost PRIVATE /utf-8)
+endif()
+
+add_dependencies(Lathe LatheHost)
+add_custom_command(TARGET Lathe POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheHost> $<TARGET_FILE_DIR:Lathe>/
+    COMMENT "Copying LatheHost next to Lathe")
 
 # --- LatheMCP: the AI assistant bridge ------------------------------------------------
 # What an AI app (Claude Desktop, Claude Code, any MCP client) runs to reach Lathe: MCP
@@ -296,6 +327,8 @@ if(LATHE_BUILD_TESTS)
         Source/Assistant/AssistantTools.cpp
         Source/Assistant/AssistantService.cpp
         Source/Assistant/MixAnalysis.cpp
+        Source/Compare/Compare.cpp
+        Source/Host/RemotePlugin.cpp
         Source/Assistant/SessionWatch.cpp
         Source/Model/Edit.cpp
         Source/Model/ChannelEq.cpp
@@ -319,6 +352,7 @@ if(LATHE_BUILD_TESTS)
         Source/UI/GlobalKeys.cpp
         Source/UI/Dialogs.cpp
         Source/UI/CloudLinks.cpp
+        Source/UI/UndoHistory.cpp
         # The welcome song (Resources/Welcome.lathe).
         Source/Demo/Welcome.cpp)
     target_include_directories(LatheTests PRIVATE Source)
@@ -333,9 +367,10 @@ if(LATHE_BUILD_TESTS)
     if(MSVC)
         target_compile_options(LatheTests PRIVATE /utf-8)
     endif()
-    add_dependencies(LatheTests LatheScanner)
+    add_dependencies(LatheTests LatheScanner LatheHost)
     add_custom_command(TARGET LatheTests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheScanner> $<TARGET_FILE_DIR:LatheTests>/)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheScanner> $<TARGET_FILE_DIR:LatheTests>/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheHost> $<TARGET_FILE_DIR:LatheTests>/)
 
     # Three tiny VST3s for the scanning tests: one that works, one that crashes
     # while loading and one that never finishes loading. No moduleinfo.json, so
@@ -344,7 +379,7 @@ if(LATHE_BUILD_TESTS)
     # scanning tests they serve run in separate processes anyway.)
     option(LATHE_TEST_FIXTURES "Build the test VST3s for the scanning tests" ON)
     set(LATHE_FIXTURE_DIR ${CMAKE_BINARY_DIR}/test-vst3)
-    set(LATHE_FIXTURE_LIST Gain Crash Hang)
+    set(LATHE_FIXTURE_LIST Gain Crash Hang Flaky)
     if(NOT LATHE_TEST_FIXTURES)
         set(LATHE_FIXTURE_LIST "")
     endif()

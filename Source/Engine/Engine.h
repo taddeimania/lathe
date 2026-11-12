@@ -96,6 +96,22 @@ public:
         Velocity 0..1; 0 ends the note. Never recorded. Message thread. */
     void previewNote (int trackId, int note, float velocity);
 
+    // --- playing something other than the song (the Compare window)
+    /** Plays instead of the song while it says it's playing: what the master would send to the
+        interface is replaced by what this renders. Audio thread: render() must not block or
+        allocate; it fills two channels of `out` (len <= kPreviewBlock) and returns false when
+        it isn't playing, which leaves the song's output alone. */
+    struct OutsidePlayer
+    {
+        virtual ~OutsidePlayer() = default;
+        virtual bool isPlaying() const noexcept = 0;
+        virtual void render (AudioBuffer<float>& out, int len) noexcept = 0;
+    };
+    static constexpr int kPreviewBlock = 4096;
+    /** Installs (or, with nullptr, removes) the player. Message thread; once it returns, the
+        audio thread no longer uses the old one. */
+    void setOutsidePlayer (std::shared_ptr<OutsidePlayer>);
+
     // --- measuring (the AI assistant's measure_performance tool)
     /** Starts timing every audio block and every track, after skipping the first `skipBlocks`
         (a warm-up). Message thread. */
@@ -130,7 +146,12 @@ public:
 
     // --- plug-ins
     /** Loads a plug-in (or a placeholder that keeps its state if it isn't installed). */
-    std::shared_ptr<PluginSlot> makeSlot (const PluginDescription&, const MemoryBlock& state, String& error);
+    /** `separate`: run it in its own process (LatheHost), so its crash can't take Lathe down.
+        Lathe's own devices always run inside. A plug-in that won't start separately is loaded
+        the usual way, with `error` saying so. */
+    std::shared_ptr<PluginSlot> makeSlot (const PluginDescription&, const MemoryBlock& state, String& error, bool separate = false);
+    /** Turns "Run separately" on or off: a new slot with the same settings, the other way. */
+    std::shared_ptr<PluginSlot> remakeSlot (PluginSlot& slot, bool separate, String& error);
     void prepareSlot (PluginSlot&);
     PluginHost& getPluginHost() noexcept   { return host; }
 
@@ -192,6 +213,10 @@ private:
     void handleIncomingMidiMessage (MidiInput*, const MidiMessage&) override;
     void handleAsyncUpdate() override;
     void timerCallback() override;
+
+    std::shared_ptr<OutsidePlayer> outsideOwner;          // message thread
+    std::atomic<OutsidePlayer*> outsideLive { nullptr };  // what the audio thread reads
+    AudioBuffer<float> outsideScratch { 2, kPreviewBlock };
 
     std::unique_ptr<RenderGraph> buildGraph();
     void installGraph (std::unique_ptr<RenderGraph>);

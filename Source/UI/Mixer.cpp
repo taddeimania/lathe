@@ -127,9 +127,8 @@ public:
         };
         pan.onValueChange = [this]
         {
-            if (cueLevel != nullptr) cueLevel->pan = (float) pan.getValue();
-            else                     track->pan = (float) pan.getValue();
-            ctx.edit.markDirty();
+            if (cueLevel != nullptr) { cueLevel->pan = (float) pan.getValue(); ctx.edit.markDirty(); }
+            else                     { track->pan = (float) pan.getValue(); ctx.edit.adjusted(); }
         };
         addAndMakeVisible (pan);
 
@@ -138,7 +137,8 @@ public:
             const float db = theme::faderPosToDb ((float) fader.getValue());
             levelTarget() = db;
             dbLabel.setText (theme::formatDb (db), dontSendNotification);
-            ctx.edit.markDirty();
+            if (cue == nullptr) ctx.edit.adjusted();   // the main mix is undoable; cue mixes aren't
+            else                ctx.edit.markDirty();
         };
         addAndMakeVisible (fader);
         addAndMakeVisible (meter);
@@ -296,7 +296,7 @@ public:
                         if (isNew)
                             ctx.edit.changed();
                         else
-                            ctx.edit.markDirty();
+                            ctx.edit.adjusted();
                     };
                     addAndMakeVisible (k);
 

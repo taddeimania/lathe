@@ -3,6 +3,25 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.6
+
+- **Your AI assistant can EQ.** It can set any band of a track's channel EQ, so when it hears two
+  parts fighting it can make the cut itself instead of telling you where to. One undo takes it back.
+- **Compare** (View menu, Cmd/Ctrl+K). Mark Before, change the mix, press Update Now, and switch
+  between them while they play to hear what you did, with a reference track of your choice next to
+  them, all at matched loudness. Lathe measures each (loudness, peaks, width, the balance across
+  seven bands) and says what changed. Your AI assistant can mark Before and compare too.
+- **Undo History** (Edit menu, Cmd/Ctrl+Alt+Z). Every step since you opened the song, newest first,
+  with who made it, you or the assistant, and what it did. Click a step to go back to just before it,
+  or take back the assistant's latest run of changes in one click.
+- **Fader, pan, send and EQ moves can be undone**, yours and the assistant's. A drag is one step.
+- **Run a plug-in separately.** Right-click a plug-in that keeps crashing and tick Run Separately: it
+  runs in its own helper program, so if it crashes Lathe keeps playing and only that plug-in goes
+  quiet. Right-click > Restart brings it back with its settings.
+- **Fixed: Lathe wouldn't start on some Windows PCs** ("MSVCP140_ATOMIC_WAIT.dll was not found").
+  The C++ runtime is now built into Lathe, so it no longer needs the Visual C++ Redistributable.
+- **Pushing counts audio files, not clips.** A take split into twenty pieces is one file to check.
+
 ## New in 0.12.5
 
 - **Work alongside your AI assistant.** Keep working in Lathe while it does. If you change the song

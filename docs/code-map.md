@@ -2,11 +2,13 @@
 
 ```
 Source/
-  Model/Edit.*          project model, clip split/trim/clear, undo, JSON, monitor (cue) mixes
+  Model/Edit.*          project model, clip split/trim/clear, undo (with step labels and who), JSON, monitor (cue) mixes
   Model/ChannelEq.*     the built-in channel EQ: settings, biquads, response curve
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
+  Host/                 "Run separately": RemotePlugin (Lathe's side, an AudioPluginInstance), HostMain (LatheHost,
+                        runs the plug-in), RemoteShared (the shared audio block and semaphore)
   Demo/                 the "Night Drive" demo song and pretend audio interface, for --screenshots; Welcome.*
                         writes "Welcome to Lathe" (Resources/Welcome.lathe), the song a new install opens
   Assistant/            AI assistant (MCP): Server (127.0.0.1 HTTP, key, JSON-RPC), Tools (what the AI can
@@ -23,6 +25,9 @@ Source/
 ThirdParty/mutable/     the vendored MIT DSP behind those four (see its README for source and changes)
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
   UI/CloudLinks.*       invite links and listening links (pages on getlathe.app), Cloud menu
+  UI/UndoHistory.*      Edit > Undo History: every undo step, who made it (you or the assistant), click to go back
+  Compare/Compare.*     View > Compare: renders Before/Now, reads a reference, measures them, plays them in step
+  UI/CompareWindow.*    its window
   UI/                   transport, arrangement, mixer (+ mix tabs), device chain, EQ editor, piano roll, dialogs
 Tests/EngineTests.cpp   headless engine checks
 ```

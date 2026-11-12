@@ -11,6 +11,7 @@ namespace lathe::assistant
 Service::Service (AppContext& c) : ctx (c), tools (c.edit, c.engine)
 {
     tools.showStatus = [this] (const String& s) { ctx.showStatus (s); };
+    tools.compare = ctx.compare;
     if (ctx.settings.getBoolValue ("assistantOn", false))
         if (auto r = setOn (true); r.failed())
             ctx.showStatus ("AI assistant connection: " + r.getErrorMessage());

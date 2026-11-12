@@ -1,6 +1,7 @@
 #include "Widgets.h"
 #include "../Devices/Device.h"
 #include "Dialogs.h"
+#include "../Host/RemotePlugin.h"
 #include "GlobalKeys.h"
 
 namespace lathe
@@ -576,6 +577,28 @@ std::shared_ptr<Track> addPluginToSelection (AppContext& ctx, const PluginDescri
     return t;
 }
 
+void setRunSeparately (AppContext& ctx, Track& t, const std::shared_ptr<PluginSlot>& slot, bool separate)
+{
+    auto it = std::find (t.plugins.begin(), t.plugins.end(), slot);
+    if (it == t.plugins.end())
+        return;
+    String error;
+    slot->window.reset();
+    auto fresh = ctx.engine.remakeSlot (*slot, separate, error);
+    if (fresh->instance == nullptr && slot->instance != nullptr)
+    {
+        ctx.showStatus (error.isNotEmpty() ? error : slot->getName() + " couldn't be switched.");
+        return;
+    }
+    ctx.edit.commitUndoStep();
+    *it = fresh;
+    ctx.edit.changed();
+    ctx.edit.labelNextStep ((separate ? "Run " : "Stop running ") + slot->getName() + " separately on \"" + t.name + "\"", false);
+    ctx.edit.commitUndoStep();
+    ctx.showStatus (separate ? slot->getName() + " now runs separately: if it crashes, Lathe carries on."
+                             : slot->getName() + " runs inside Lathe again.");
+}
+
 void showPluginSlotMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> track, std::shared_ptr<PluginSlot> slot)
 {
     PopupMenu m;
@@ -586,6 +609,14 @@ void showPluginSlotMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Tra
     m.addItem (4, "Move later");
     m.addSeparator();
     m.addItem (5, "Remove");
+    if (! devices::isBuiltIn (slot->description))
+    {
+        m.addSeparator();
+        m.addItem (6, "Run Separately", true, slot->separate);
+        auto* remote = dynamic_cast<RemotePluginInstance*> (slot->instance.get());
+        if (remote != nullptr && remote->hasStopped())
+            m.addItem (7, "Restart");
+    }
 
     Component::SafePointer<Component> safeAnchor (&anchor);
     auto* context = &ctx;
@@ -601,6 +632,15 @@ void showPluginSlotMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Tra
             case 3: movePlugin (*context, *track, slot, -1); break;
             case 4: movePlugin (*context, *track, slot, 1); break;
             case 5: removePlugin (*context, *track, slot); break;
+            case 6: setRunSeparately (*context, *track, slot, ! slot->separate); break;
+            case 7:
+                if (auto* remote = dynamic_cast<RemotePluginInstance*> (slot->instance.get()))
+                {
+                    String error;
+                    context->showStatus (remote->restart (error) ? slot->getName() + " is running again."
+                                                                 : slot->getName() + " didn't restart: " + error);
+                }
+                break;
             default: break;
         }
     });

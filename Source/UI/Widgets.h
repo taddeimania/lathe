@@ -7,6 +7,7 @@
 namespace lathe
 {
 class NotesController;
+class Compare;
 
 /** Everything a view needs to reach. Owned by MainComponent. */
 struct AppContext
@@ -31,6 +32,7 @@ struct AppContext
     std::function<void()> openPluginBrowser;
     std::function<void()> showDevices;   // opens the device panel (plug-ins and EQ) for the selected track
     NotesController* notes = nullptr;    // notes on the open song (set once the cloud is up)
+    Compare* compare = nullptr;          // the Compare window's versions (set by MainComponent)
 
     /** Which mix the mixer's faders, pans and mutes edit: -1 = the main mix, else a cue mix id. */
     int mixLayer = -1;
@@ -209,6 +211,8 @@ String describeAddTarget (AppContext&, bool isInstrument, bool isMidiTool);
 void showAddPluginMenu (AppContext&, Component& anchor, std::shared_ptr<Track>, int insertIndex);
 void showPluginSlotMenu (AppContext&, Component& anchor, std::shared_ptr<Track>, std::shared_ptr<PluginSlot>);
 void removePlugin (AppContext&, Track&, const std::shared_ptr<PluginSlot>&);
+/** "Run Separately" on or off for a plug-in: swaps in a slot made the other way, settings kept (one undo step). */
+void setRunSeparately (AppContext&, Track&, const std::shared_ptr<PluginSlot>&, bool separate);
 void movePlugin (AppContext&, Track&, const std::shared_ptr<PluginSlot>&, int delta);
 
 /** Track context menu (rename, colour, group, delete, ...). */

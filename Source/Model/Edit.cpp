@@ -598,6 +598,10 @@ struct TrackState
     std::vector<std::shared_ptr<PluginSlot>> plugins;
     std::vector<bool> bypassed;
     std::vector<Clip> clips;
+    // The mix controls: fader, pan, send levels (parallel to sends) and the channel EQ.
+    float volumeDb = 0.0f, pan = 0.0f;
+    std::vector<float> sendLevels;
+    struct Eq { bool enabled = true; bool on[ChannelEq::numBands] {}; float freq[ChannelEq::numBands] {}, gain[ChannelEq::numBands] {}, q[ChannelEq::numBands] {}; } eq;
 };
 
 struct GroupState
@@ -642,6 +646,19 @@ static TrackState captureTrack (const std::shared_ptr<Track>& t)
     for (auto& p : t->plugins)
         s.bypassed.push_back (p->bypassed.load());
     s.clips = t->clips;
+    s.volumeDb = t->volumeDb.load();
+    s.pan = t->pan.load();
+    for (auto& send : t->sends)
+        s.sendLevels.push_back (send->levelDb.load());
+    s.eq.enabled = t->eq.enabled.load();
+    for (int i = 0; i < ChannelEq::numBands; ++i)
+    {
+        const auto& b = t->eq.bands[i];
+        s.eq.on[i] = b.on.load();
+        s.eq.freq[i] = b.freq.load();
+        s.eq.gain[i] = b.gainDb.load();
+        s.eq.q[i] = b.q.load();
+    }
     return s;
 }
 
@@ -661,6 +678,19 @@ static void restoreTrack (const TrackState& s)
     for (size_t i = 0; i < s.plugins.size() && i < s.bypassed.size(); ++i)
         s.plugins[i]->bypassed = s.bypassed[i];
     t.clips = s.clips;
+    t.volumeDb = s.volumeDb;
+    t.pan = s.pan;
+    for (size_t i = 0; i < s.sends.size() && i < s.sendLevels.size(); ++i)
+        s.sends[i]->levelDb = s.sendLevels[i];
+    t.eq.enabled = s.eq.enabled;
+    for (int i = 0; i < ChannelEq::numBands; ++i)
+    {
+        auto& b = t.eq.bands[i];
+        b.on = s.eq.on[i];
+        b.freq = s.eq.freq[i];
+        b.gainDb = s.eq.gain[i];
+        b.q = s.eq.q[i];
+    }
 }
 
 static bool sameNotes (const std::vector<Note>& a, const std::vector<Note>& b)
@@ -701,6 +731,16 @@ static bool sameClips (const std::vector<Clip>& a, const std::vector<Clip>& b)
     return true;
 }
 
+static bool sameEq (const TrackState::Eq& a, const TrackState::Eq& b)
+{
+    if (a.enabled != b.enabled)
+        return false;
+    for (int i = 0; i < ChannelEq::numBands; ++i)
+        if (a.on[i] != b.on[i] || ! exactlyEqual (a.freq[i], b.freq[i]) || ! exactlyEqual (a.gain[i], b.gain[i]) || ! exactlyEqual (a.q[i], b.q[i]))
+            return false;
+    return true;
+}
+
 static bool sameTrack (const TrackState& a, const TrackState& b)
 {
     return a.track == b.track && a.name == b.name && a.colour == b.colour
@@ -710,7 +750,9 @@ static bool sameTrack (const TrackState& a, const TrackState& b)
         && a.output.kind == b.output.kind && a.output.busId == b.output.busId
         && a.output.channel == b.output.channel && a.output.stereo == b.output.stereo
         && a.sends == b.sends && a.plugins == b.plugins && a.bypassed == b.bypassed
-        && sameClips (a.clips, b.clips);
+        && sameClips (a.clips, b.clips)
+        && exactlyEqual (a.volumeDb, b.volumeDb) && exactlyEqual (a.pan, b.pan) && a.sendLevels == b.sendLevels
+        && sameEq (a.eq, b.eq);
 }
 
 static bool sameTracks (const std::vector<TrackState>& a, const std::vector<TrackState>& b)
@@ -737,6 +779,170 @@ static bool sameSnapshot (const EditSnapshot& a, const EditSnapshot& b)
         if (a.cues[i].cue != b.cues[i].cue || a.cues[i].name != b.cues[i].name || a.cues[i].colour != b.cues[i].colour)
             return false;
     return true;
+}
+
+// What a step changed, in a few words, for the Undo History window.
+static String dbWords (float db)
+{
+    if (db <= kSilenceDb + 0.05f)
+        return "off";
+    return (db > 0.05f ? "+" : "") + String (db, 1) + " dB";
+}
+
+static String panWords (float p)
+{
+    const int v = roundToInt (p * 50.0f);
+    return v == 0 ? String ("centre") : String (std::abs (v)) + (v < 0 ? "L" : "R");
+}
+
+static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
+{
+    StringArray out;
+    auto q = [] (const String& name) { return "\"" + name + "\""; };
+
+    if (! exactlyEqual (a.tempo, b.tempo))
+        out.add ("Tempo " + String (b.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + " BPM");
+    if (a.timeSigNum != b.timeSigNum || a.timeSigDen != b.timeSigDen)
+        out.add ("Time signature " + String (b.timeSigNum) + "/" + String (b.timeSigDen));
+
+    auto find = [] (const std::vector<TrackState>& list, const std::shared_ptr<Track>& t) -> const TrackState*
+    {
+        for (auto& ts : list)
+            if (ts.track == t)
+                return &ts;
+        return nullptr;
+    };
+
+    auto compareTrack = [&] (const TrackState& x, const TrackState& y)
+    {
+        const auto& name = y.name;
+        if (x.name != y.name)
+            out.add ("Renamed " + q (x.name) + " to " + q (y.name));
+        if (x.colour != y.colour)
+            out.add ("Colour of " + q (name));
+        if (! exactlyEqual (x.volumeDb, y.volumeDb))
+            out.add (q (name) + " fader " + dbWords (y.volumeDb));
+        if (! exactlyEqual (x.pan, y.pan))
+            out.add (q (name) + " pan " + panWords (y.pan));
+        if (! sameEq (x.eq, y.eq))
+        {
+            String what = q (name) + " EQ";
+            for (int i = 0; i < ChannelEq::numBands; ++i)
+                if (x.eq.on[i] != y.eq.on[i] || ! exactlyEqual (x.eq.freq[i], y.eq.freq[i])
+                    || ! exactlyEqual (x.eq.gain[i], y.eq.gain[i]) || ! exactlyEqual (x.eq.q[i], y.eq.q[i]))
+                {
+                    what << ": " << ChannelEq::bandName (i);
+                    if (! y.eq.on[i])
+                        what << " off";
+                    else
+                    {
+                        what << " " << roundToInt (y.eq.freq[i]) << " Hz";
+                        if (i != 0 && i != ChannelEq::numBands - 1)
+                            what << " " << (y.eq.gain[i] >= 0 ? "+" : "") << String (y.eq.gain[i], 1) << " dB";
+                    }
+                    break;
+                }
+            if (x.eq.enabled != y.eq.enabled)
+                what = q (name) + (y.eq.enabled ? " EQ on" : " EQ off");
+            out.add (what);
+        }
+        if (x.sends != y.sends)
+            out.add (q (name) + " sends");
+        else if (x.sendLevels != y.sendLevels)
+            out.add (q (name) + " send level");
+        if (x.plugins != y.plugins)
+        {
+            int added = 0, removed = 0;
+            String one;
+            for (auto& p : y.plugins)
+                if (std::find (x.plugins.begin(), x.plugins.end(), p) == x.plugins.end())
+                    ++added, one = p->getName();
+            for (auto& p : x.plugins)
+                if (std::find (y.plugins.begin(), y.plugins.end(), p) == y.plugins.end())
+                    ++removed, one = p->getName();
+            if (added == 1 && removed == 0)        out.add ("Added " + one + " to " + q (name));
+            else if (removed == 1 && added == 0)   out.add ("Removed " + one + " from " + q (name));
+            else if (added + removed == 0)         out.add ("Reordered plug-ins on " + q (name));
+            else                                   out.add ("Plug-ins on " + q (name));
+        }
+        else if (x.bypassed != y.bypassed)
+        {
+            for (size_t i = 0; i < y.bypassed.size() && i < x.bypassed.size(); ++i)
+                if (x.bypassed[i] != y.bypassed[i])
+                {
+                    out.add ((y.bypassed[i] ? "Bypassed " : "Switched on ") + y.plugins[i]->getName() + " on " + q (name));
+                    break;
+                }
+        }
+        if (x.input.channel != y.input.channel || x.input.stereo != y.input.stereo || x.input.track != y.input.track
+            || x.midiInput != y.midiInput)
+            out.add ("Input of " + q (name));
+        if (x.output.kind != y.output.kind || x.output.busId != y.output.busId || x.output.channel != y.output.channel
+            || x.output.stereo != y.output.stereo || x.groupId != y.groupId)
+            out.add ("Output of " + q (name));
+        if (x.midiOutput != y.midiOutput || x.midiChannel != y.midiChannel)
+            out.add ("MIDI out of " + q (name));
+        if (! sameClips (x.clips, y.clips))
+        {
+            const int dx = (int) x.clips.size(), dy = (int) y.clips.size();
+            if (dy > dx)        out.add ((dy - dx == 1 ? "Added a clip" : "Added " + String (dy - dx) + " clips") + " on " + q (name));
+            else if (dy < dx)   out.add ((dx - dy == 1 ? "Deleted a clip" : "Deleted " + String (dx - dy) + " clips") + " on " + q (name));
+            else
+            {
+                bool notesOnly = true;
+                for (size_t i = 0; i < x.clips.size(); ++i)
+                {
+                    const auto& c = x.clips[i];
+                    const auto& d = y.clips[i];
+                    if (c.id != d.id || ! exactlyEqual (c.start, d.start) || ! exactlyEqual (c.length, d.length)
+                        || c.sourceOffset != d.sourceOffset || ! exactlyEqual (c.gainDb, d.gainDb) || c.file != d.file)
+                        notesOnly = false;
+                }
+                out.add ((notesOnly ? "Edited notes on " : "Edited clips on ") + q (name));
+            }
+        }
+    };
+
+    auto compareList = [&] (const std::vector<TrackState>& x, const std::vector<TrackState>& y, const String& noun)
+    {
+        for (auto& ts : y)
+            if (find (x, ts.track) == nullptr)
+                out.add ("Added " + noun + " " + q (ts.name));
+        for (auto& ts : x)
+            if (find (y, ts.track) == nullptr)
+                out.add ("Deleted " + noun + " " + q (ts.name));
+        bool moved = false;
+        std::vector<std::shared_ptr<Track>> kx, ky;
+        for (auto& ts : x) if (find (y, ts.track) != nullptr) kx.push_back (ts.track);
+        for (auto& ts : y) if (find (x, ts.track) != nullptr) ky.push_back (ts.track);
+        moved = kx != ky;
+        if (moved)
+            out.add ("Moved " + noun + "s");
+        for (auto& ts : y)
+            if (auto* before = find (x, ts.track))
+                compareTrack (*before, ts);
+    };
+
+    compareList (a.tracks, b.tracks, "track");
+    compareList (a.buses, b.buses, "return");
+    compareTrack (a.master, b.master);
+    if (a.groups.size() != b.groups.size())
+        out.add (b.groups.size() > a.groups.size() ? "Grouped tracks" : "Ungrouped tracks");
+    else
+        for (size_t i = 0; i < a.groups.size(); ++i)
+            if (a.groups[i].name != b.groups[i].name || a.groups[i].colour != b.groups[i].colour)
+            {
+                out.add ("Group " + q (b.groups[i].name));
+                break;
+            }
+    if (a.cues.size() != b.cues.size())
+        out.add ("Cue mixes");
+
+    if (out.isEmpty())
+        return "Change";
+    if (out.size() <= 2)
+        return out.joinIntoString (", ");
+    return out[0] + ", " + out[1] + " and " + String (out.size() - 2) + " more";
 }
 
 std::shared_ptr<const EditSnapshot> Edit::capture() const
@@ -822,12 +1028,42 @@ void Edit::commitUndoStep()
     auto now = capture();
     if (committed != nullptr && ! sameSnapshot (*now, *committed))
     {
+        StepInfo info;
+        info.label = pendingLabel.isNotEmpty() ? pendingLabel : describeStep (*committed, *now);
+        info.byAssistant = pendingByAssistant;
+        info.timeMs = Time::currentTimeMillis();
         undoStack.push_back (committed);
+        doneInfo.push_back (info);
         if (undoStack.size() > 100)
+        {
             undoStack.erase (undoStack.begin());
+            doneInfo.erase (doneInfo.begin());
+        }
         redoStack.clear();
+        undoneInfo.clear();
+        historyChanged.sendChangeMessage();
     }
+    pendingLabel.clear();
+    pendingByAssistant = false;
     committed = now;
+}
+
+void Edit::labelNextStep (const String& label, bool byAssistant)
+{
+    pendingLabel = label;
+    pendingByAssistant = byAssistant;
+}
+
+bool Edit::goToDepth (int depth)
+{
+    commitUndoStep();
+    depth = jlimit (0, getUndoDepth() + (int) redoStack.size(), depth);
+    bool moved = false;
+    while (getUndoDepth() > depth && undo())
+        moved = true;
+    while (getUndoDepth() < depth && redo())
+        moved = true;
+    return moved;
 }
 
 void Edit::discardUncommitted()
@@ -847,7 +1083,12 @@ void Edit::clearUndo()
     stopTimer();
     undoStack.clear();
     redoStack.clear();
+    doneInfo.clear();
+    undoneInfo.clear();
+    pendingLabel.clear();
+    pendingByAssistant = false;
     committed = capture();
+    historyChanged.sendChangeMessage();
 }
 
 bool Edit::undo()
@@ -859,6 +1100,9 @@ bool Edit::undo()
     redoStack.push_back (committed);
     committed = undoStack.back();
     undoStack.pop_back();
+    undoneInfo.push_back (doneInfo.back());
+    doneInfo.pop_back();
+    historyChanged.sendChangeMessage();
     {
         const ScopedValueSetter<bool> busy (restoring, true);
         restore (*committed);
@@ -876,6 +1120,9 @@ bool Edit::redo()
     undoStack.push_back (committed);
     committed = redoStack.back();
     redoStack.pop_back();
+    doneInfo.push_back (undoneInfo.back());
+    undoneInfo.pop_back();
+    historyChanged.sendChangeMessage();
     {
         const ScopedValueSetter<bool> busy (restoring, true);
         restore (*committed);
@@ -1083,6 +1330,8 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
 
         po->setProperty ("state", state.toBase64Encoding());
         po->setProperty ("bypassed", p->bypassed.load());
+        if (p->separate)
+            po->setProperty ("separate", true);
         plugins.add (var (po.get()));
     }
     o->setProperty ("plugins", plugins);
@@ -1162,7 +1411,7 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
             MemoryBlock state;
             state.fromBase64Encoding (p["state"].toString());
 
-            if (auto slot = makePlugin (desc, state))
+            if (auto slot = makePlugin (desc, state, (bool) p.getProperty ("separate", false)))
             {
                 slot->bypassed = (bool) p["bypassed"];
                 t->plugins.push_back (slot);

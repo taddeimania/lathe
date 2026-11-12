@@ -2,6 +2,8 @@
 //   LATHE_FIXTURE_GAIN   passes audio through (must be found and load)
 //   LATHE_FIXTURE_CRASH  crashes as soon as the host creates it
 //   LATHE_FIXTURE_HANG   never finishes being created
+//   LATHE_FIXTURE_FLAKY  for "Run separately": halves the audio (Gain), keeps its settings in
+//                        its state, and crashes in processBlock once "Crash" is switched on
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -30,6 +32,38 @@ public:
     void setStateInformation (const void*, int) override {}
 };
 
+#if LATHE_FIXTURE_FLAKY
+class FlakyProcessor : public FixtureProcessor
+{
+public:
+    FlakyProcessor()
+    {
+        addParameter (gain = new juce::AudioParameterFloat (juce::ParameterID { "gain", 1 }, "Gain", 0.0f, 1.0f, 0.5f));
+        addParameter (crash = new juce::AudioParameterBool (juce::ParameterID { "crash", 1 }, "Crash", false));
+    }
+    void processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer&) override
+    {
+        if (crash->get())
+        {
+            volatile int* nowhere = nullptr;
+            *nowhere = 1;
+        }
+        b.applyGain (gain->get());
+    }
+    void getStateInformation (juce::MemoryBlock& out) override
+    {
+        juce::MemoryOutputStream (out, false).writeFloat (gain->get());
+    }
+    void setStateInformation (const void* data, int size) override
+    {
+        if (size >= 4)
+            *gain = juce::MemoryInputStream (data, (size_t) size, false).readFloat();
+    }
+    juce::AudioParameterFloat* gain = nullptr;
+    juce::AudioParameterBool* crash = nullptr;
+};
+#endif
+
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
    #if LATHE_FIXTURE_CRASH
@@ -39,5 +73,9 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
     for (;;)
         juce::Thread::sleep (1000);
    #endif
+   #if LATHE_FIXTURE_FLAKY
+    return new FlakyProcessor();
+   #else
     return new FixtureProcessor();
+   #endif
 }

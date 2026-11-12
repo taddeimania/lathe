@@ -18,7 +18,9 @@
 | Cmd/Ctrl+J | Join the selected clips on each track into one clip (audio is rendered to a new file) |
 | Cmd/Ctrl+E | Split the selected clips at the start marker |
 | Delete | Delete the selected clips (or notes in the piano roll) |
-| Cmd/Ctrl+Z, Shift+Z | Undo / redo: clips and notes, tracks, returns, groups, plug-ins, routing, sends, names, tempo |
+| Cmd/Ctrl+Z, Shift+Z | Undo / redo: clips and notes, tracks, returns, groups, plug-ins, routing, sends, names, tempo, and fader, pan, send level and channel EQ moves |
+| Cmd/Ctrl+K | Compare: Before, Now and a reference track, playing in step (1, 2, 3 switch; Space plays) |
+| Cmd/Ctrl+Alt+Z | Undo History: every step, who made it (you or the AI assistant) and when; click one to go back to just before it |
 | File > New from Template > Delete Template | Delete any template, built-in ones too (**Restore Built-in Templates** brings those back) |
 | Cmd/Ctrl+scroll | Zoom. Shift+scroll scrolls sideways. Hold Alt while dragging to ignore the grid. |
 | Piano roll | Double-click to add or delete a note, drag to move, drag a note's end to resize, drag on empty space to select, ↑↓ to transpose (Shift moves an octave), Q to quantize. Click or drag the keyboard on the left to hear a pitch; notes also sound as you add, grab, drag and transpose them. Turn this off with Hear notes in the toolbar |

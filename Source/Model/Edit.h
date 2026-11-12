@@ -87,6 +87,7 @@ struct PluginSlot
     std::unique_ptr<AudioPluginInstance> instance;   // null when the plug-in is missing
     std::atomic<bool> bypassed { false };
     MemoryBlock savedState;   // kept for a missing plug-in so saving doesn't lose it
+    bool separate = false;    // runs in its own process (LatheHost): its crash can't take Lathe down
     double preparedRate = 0.0;
     int preparedBlock = 0;
     std::unique_ptr<Component> window;   // editor window; destroyed before the instance
@@ -287,7 +288,10 @@ public:
     void changed()  { dirty = true; needsRebuild = true; sendChangeMessage(); scheduleUndoStep(); }
     /** For changes the engine already reads live (mute, solo, arm, monitor): UI refresh only. */
     void touched()  { dirty = true; sendChangeMessage(); scheduleUndoStep(); }
-    /** For continuous controls (faders, knobs): no notification at all. */
+    /** For the mix controls that undo covers (fader, pan, send level, channel EQ): no
+        notification, but a move becomes an undo step once it settles. */
+    void adjusted()  { dirty = true; scheduleUndoStep(); }
+    /** For other continuous controls (cue mixes, the click level): no notification, not undone. */
     void markDirty() { dirty = true; }
 
     bool dirty = false;
@@ -295,9 +299,10 @@ public:
 
     // --- undo
     // Covers tracks, returns, groups, cue mixes, routing, sends, plug-ins (added, removed,
-    // moved, bypassed), names, colours, tempo, time signature, clips and notes. Not the
-    // continuous controls (faders, pans, send levels, EQ), mute/solo/arm, the loop or the
-    // playhead: those live in the shared Track objects and keep their current values.
+    // moved, bypassed), names, colours, tempo, time signature, clips and notes, and the mix
+    // controls: faders, pans, send levels and the channel EQ (a drag is one step). Not
+    // plug-in settings, cue mix levels, mute/solo/arm, the loop or the playhead: those keep
+    // their current values.
     //
     // Steps are recorded automatically: changed() schedules one, and every change made
     // until things go quiet (a few hundred ms) becomes that one step, so an action that
@@ -320,8 +325,30 @@ public:
     bool canRedo() const   { return ! redoStack.empty(); }
     int getUndoDepth() const   { return (int) undoStack.size(); }
 
+    // --- the history of steps (the Undo History window)
+    /** One step: what it changed in words, who made it, and when. */
+    struct StepInfo
+    {
+        String label;
+        bool byAssistant = false;
+        int64 timeMs = 0;
+    };
+    /** Names the next step and says who made it, instead of the description Lathe works out
+        by comparing before and after. The AI assistant's tools call this before they commit. */
+    void labelNextStep (const String& label, bool byAssistant);
+    /** The steps that can be undone, oldest first (the last one is what Cmd/Ctrl+Z undoes). */
+    const std::vector<StepInfo>& getDoneSteps() const      { return doneInfo; }
+    /** The steps that were undone and can be redone, the next redo first. */
+    std::vector<StepInfo> getUndoneSteps() const           { return { undoneInfo.rbegin(), undoneInfo.rend() }; }
+    /** Undoes or redoes until exactly `depth` steps are done (0 = before the first). */
+    bool goToDepth (int depth);
+    /** Told whenever a step is made, undone, redone or forgotten (on the message thread). */
+    ChangeBroadcaster historyChanged;
+
     // --- files
-    using PluginFactory = std::function<std::shared_ptr<PluginSlot> (const PluginDescription&, const MemoryBlock& state)>;
+    /** Makes a plug-in slot from its saved description and state; `separate`: it runs in its own
+        process (PluginSlot::separate). */
+    using PluginFactory = std::function<std::shared_ptr<PluginSlot> (const PluginDescription&, const MemoryBlock& state, bool separate)>;
 
     /** Serialises the project. Templates leave out clips and the playhead. */
     var toVar (bool asTemplate) const;
@@ -335,6 +362,9 @@ private:
     int lastId = 0;
     int colourIndex = 0;
     std::vector<std::shared_ptr<const EditSnapshot>> undoStack, redoStack;
+    std::vector<StepInfo> doneInfo, undoneInfo;   // parallel to undoStack and redoStack
+    String pendingLabel;
+    bool pendingByAssistant = false;
     std::shared_ptr<const EditSnapshot> committed;   // the state after the last step
     bool stepPending = false;
     bool restoring = false;

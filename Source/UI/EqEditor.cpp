@@ -88,7 +88,7 @@ int EqEditor::bandAt (Point<float> p) const
 
 void EqEditor::changed()
 {
-    ctx.edit.markDirty();
+    ctx.edit.adjusted();
     repaint();
     if (onBandChanged)
         onBandChanged();

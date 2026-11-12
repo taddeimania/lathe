@@ -3,6 +3,8 @@
 #include "../Devices/Device.h"
 #include "../Devices/Master/Loudness.h"
 #include "MixAnalysis.h"
+#include "../Compare/Compare.h"
+#include "../Host/RemotePlugin.h"
 
 #if JUCE_MAC
  #include <sys/sysctl.h>
@@ -186,6 +188,13 @@ var Tools::pluginList (const Track& t) const
                         : isGenerator (p) ? (p.isInstrument() ? "note generator (also makes sound)" : "note generator")
                         : p.isInstrument() ? "instrument" : "effect");
         set (o, "bypassed", p.bypassed.load());
+        if (p.separate)
+        {
+            auto* remote = dynamic_cast<RemotePluginInstance*> (p.instance.get());
+            set (o, "runs_separately", remote != nullptr && remote->hasStopped()
+                                           ? String ("yes, but it stopped working (silent until the person restarts it)")
+                                           : String ("yes (its own process, so a crash can't take Lathe down)"));
+        }
         list.add (o);
     }
     return list;
@@ -638,6 +647,9 @@ var Tools::writeNotes (const var& args, String& status)
     edit.changed();
 
     const int count = (int) notes.size() * repeat;
+    edit.labelNextStep ("Wrote " + String (count) + (count == 1 ? " note" : " notes") + " on \"" + t->name + "\", bars "
+                        + barText (from) + " to " + barText (to), true);
+    edit.commitUndoStep();
     status = "AI assistant: wrote " + String (count) + " notes on " + ("\"" + t->name + "\"");
     return toolText ("Wrote " + String (count) + (count == 1 ? " note" : " notes") + " on " + ("\"" + t->name + "\"")
                      + ", bars " + barText (from) + " to " + barText (to) + " (clip " + String (clipId) + "). "
@@ -908,7 +920,7 @@ namespace
 struct Batch
 {
     Edit& edit;
-    std::vector<std::function<void()>> revert;   // for what undo doesn't cover (levels, monitoring)
+    std::vector<std::function<void()>> revert;   // puts values back if a later change in the list fails
     StringArray notes;                           // things worth telling the assistant
 
     template <typename T>
@@ -1382,6 +1394,97 @@ var Tools::editSession (const var& args, String& status)
             return quoted (t->name) + ": " + what.joinIntoString (", ");
         }
 
+        if (action == "set_eq")
+        {
+            auto t = needTrack();
+            if (t == nullptr) return {};
+            auto& eq = t->eq;
+            StringArray what;
+            if (hasKey (c, "flat") && (bool) c["flat"])
+            {
+                eq.reset();
+                what.add ("EQ flat");
+            }
+            if (! hasKey (c, "band"))
+            {
+                if (hasKey (c, "freq_hz") || hasKey (c, "gain_db") || hasKey (c, "q"))
+                {
+                    error = "say which band: \"low cut\", \"low shelf\", \"bell 1\", \"bell 2\", \"high shelf\" or \"high cut\".";
+                    return {};
+                }
+                if (hasKey (c, "on"))
+                {
+                    eq.enabled = (bool) c["on"];
+                    what.add ((bool) c["on"] ? "EQ on" : "EQ off");
+                }
+                if (what.isEmpty()) { error = "give a band with freq_hz, gain_db, q or on; or on, or flat."; return {}; }
+                return quoted (t->name) + ": " + what.joinIntoString (", ");
+            }
+
+            // Which band: by name ("bell 1", "Low cut", "low-shelf") or 1-6.
+            int index = -1;
+            const auto bandVar = c["band"];
+            if (bandVar.isInt() || bandVar.isInt64() || bandVar.isDouble())
+                index = (int) bandVar - 1;
+            else
+            {
+                const auto want = bandVar.toString().toLowerCase().replaceCharacters ("-_", "  ").trim();
+                if (want.containsOnly ("0123456789") && want.isNotEmpty())
+                    index = want.getIntValue() - 1;
+                for (int i = 0; i < ChannelEq::numBands && index < 0; ++i)
+                    if (ChannelEq::bandName (i).toLowerCase() == want || ChannelEq::bandName (i).toLowerCase().removeCharacters (" ") == want.removeCharacters (" "))
+                        index = i;
+            }
+            if (! isPositiveAndBelow (index, ChannelEq::numBands))
+            {
+                error = "there's no band " + quoted (bandVar.toString()) + ": use \"low cut\", \"low shelf\", \"bell 1\", \"bell 2\", \"high shelf\" or \"high cut\".";
+                return {};
+            }
+            auto& band = eq.bands[index];
+            const auto name = ChannelEq::bandName (index);
+
+            if (hasKey (c, "freq_hz"))
+            {
+                const double hz = (double) c["freq_hz"];
+                if (! (hz >= ChannelEq::minFreq && hz <= ChannelEq::maxFreq)) { error = "freq_hz is 20 to 20000."; return {}; }
+                band.freq = (float) hz;
+            }
+            if (hasKey (c, "gain_db"))
+            {
+                if (! band.hasGain()) { error = name + " has no gain: set its freq_hz (it cuts everything past it)."; return {}; }
+                const double db = (double) c["gain_db"];
+                if (! (db >= -ChannelEq::maxGain && db <= ChannelEq::maxGain)) { error = "gain_db is -18 to +18."; return {}; }
+                band.gainDb = (float) db;
+            }
+            if (hasKey (c, "q"))
+            {
+                if (! band.hasQ()) { error = name + " has no q (only the bells do)."; return {}; }
+                const double q = (double) c["q"];
+                if (! (q >= 0.1 && q <= 10.0)) { error = "q is 0.1 to 10."; return {}; }
+                band.q = (float) q;
+            }
+            const bool changedBand = hasKey (c, "freq_hz") || hasKey (c, "gain_db") || hasKey (c, "q");
+            if (hasKey (c, "on"))
+                band.on = (bool) c["on"];
+            else if (changedBand)
+                band.on = true;   // changing a band means using it
+            if (! changedBand && ! hasKey (c, "on")) { error = "give freq_hz, gain_db, q or on for " + name + "."; return {}; }
+            if (band.on.load())
+                eq.enabled = true;
+
+            String d = name + " ";
+            if (! band.on.load())
+                d << "off";
+            else
+            {
+                d << String (roundToInt (band.freq.load())) << " Hz";
+                if (band.hasGain()) d << " " << (band.gainDb.load() >= 0 ? "+" : "") << String (band.gainDb.load(), 1) << " dB";
+                if (band.hasQ())    d << " Q " << String (band.q.load(), 2);
+            }
+            what.add ("EQ " + d);
+            return quoted (t->name) + ": " + what.joinIntoString (", ");
+        }
+
         if (action == "set_track")
         {
             auto t = needTrack();
@@ -1457,13 +1560,16 @@ var Tools::editSession (const var& args, String& status)
     }
 
     edit.changed();
+    edit.labelNextStep (done.size() == 1 ? done[0]
+                        : done.size() == 2 ? done[0] + "; " + done[1]
+                        : done[0] + "; " + done[1] + " and " + String (done.size() - 2) + " more", true);
     edit.commitUndoStep();
 
     status = "AI assistant: " + (done.size() == 1 ? done[0] : String (done.size()) + " changes to the session")
              + ". Cmd/Ctrl+Z undoes it.";
 
-    String text = "Done. In Lathe this is one undo step (Cmd/Ctrl+Z); volume, pan, mute, solo, send levels, "
-                  "monitoring and arm change live and stay as they are on undo.\n";
+    String text = "Done. In Lathe this is one undo step (Cmd/Ctrl+Z), volume, pan, send levels and EQ included; "
+                  "mute, solo, monitoring and arm change live and stay as they are on undo.\n";
     for (auto& d : done)
         text << "- " << d << "\n";
     const auto problems = findProblems();
@@ -2173,6 +2279,62 @@ private:
     std::function<void (const String&)> showStatus;
 };
 
+std::shared_ptr<Tools::Job> Tools::startCompare (const var& args, var& immediate)
+{
+    if (compare == nullptr)
+    {
+        immediate = toolText ("Compare isn't available here.", true);
+        return {};
+    }
+    if (isRendering())
+    {
+        immediate = toolText ("Lathe is already rendering. Wait for that to finish.", true);
+        return {};
+    }
+    if (const auto busy = busyReason(); busy.isNotEmpty())
+    {
+        immediate = toolText (busy, true);
+        return {};
+    }
+    const bool markBefore = (bool) args.getProperty ("mark_before", false);
+    const auto slot = markBefore ? Compare::before : Compare::now;
+    auto job = std::make_shared<Job>();
+    auto* cmp = compare;
+    auto say = showStatus;
+    const auto started = compare->render (slot, [job, cmp, markBefore, say] (Result r)
+    {
+        if (r.failed())
+            job->result = toolText ("Couldn't render the mix: " + r.getErrorMessage(), true);
+        else
+        {
+            auto out = cmp->toVar();
+            if (auto* o = out.getDynamicObject())
+            {
+                if (markBefore)
+                    o->setProperty ("note", "Before is set. Make your changes, then call compare_mix again to compare. "
+                                            "The person can switch between Before and Now in Compare (View > Compare).");
+                else if (! cmp->get (Compare::before).has() && ! cmp->get (Compare::reference).has())
+                    o->setProperty ("note", "There's nothing to compare Now with yet: call compare_mix with mark_before "
+                                            "before changing the mix, and the person can choose a reference in Compare.");
+                else if (! cmp->get (Compare::reference).has())
+                    o->setProperty ("note", "No reference track: the person can choose one in Compare (View > Compare).");
+            }
+            job->result = toolText (JSON::toString (out, true, 4));
+            if (say)
+                say (markBefore ? "AI assistant: marked Before in Compare" : "AI assistant: compared the mix (View > Compare to listen)");
+        }
+        job->done.signal();
+    });
+    if (started.failed())
+    {
+        immediate = toolText (started.getErrorMessage(), true);
+        return {};
+    }
+    if (showStatus)
+        showStatus (markBefore ? "AI assistant: rendering Before for Compare..." : "AI assistant: rendering Now for Compare...");
+    return job;
+}
+
 bool Tools::isRendering() const
 {
     return (exporter != nullptr && ! exporter->isFinished()) || (analyser != nullptr && ! analyser->isFinished());
@@ -2640,6 +2802,8 @@ std::shared_ptr<Tools::Job> Tools::startLongTool (const String& name, const var&
         return startExport (args, immediate);
     if (name == "analyze_mix")
         return startAnalysis (args, immediate);
+    if (name == "compare_mix")
+        return startCompare (args, immediate);
     if (const auto busy = busyReason(); busy.isNotEmpty())
     {
         immediate = toolText (busy, true);
