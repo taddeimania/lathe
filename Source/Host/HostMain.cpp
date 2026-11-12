@@ -12,6 +12,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cstdlib>
+#if ! JUCE_WINDOWS
+ #include <unistd.h>
+#endif
 
 using namespace juce;
 using namespace lathe;
@@ -88,6 +91,19 @@ public:
         auto msg = fromBlock (mb);
         // Plug-ins are loaded and asked things on the message thread.
         MessageManager::callAsync ([this, msg] { handle (msg); });
+    }
+
+    void handleConnectionMade() override
+    {
+        // First thing: who we are, so Lathe can tell at once if this process goes away.
+        auto msg = obj();
+        msg.getDynamicObject()->setProperty ("type", "hello");
+       #if JUCE_WINDOWS
+        msg.getDynamicObject()->setProperty ("pid", (int) GetCurrentProcessId());
+       #else
+        msg.getDynamicObject()->setProperty ("pid", (int) getpid());
+       #endif
+        sendMessageToCoordinator (toBlock (msg));
     }
 
     void handleConnectionLost() override

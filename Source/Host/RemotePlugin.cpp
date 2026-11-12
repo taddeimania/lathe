@@ -7,6 +7,9 @@
 #include <thread>
 #if ! JUCE_WINDOWS
  #include <unistd.h>
+ #include <signal.h>
+ #include <sys/wait.h>
+ #include <cerrno>
 #endif
 
 namespace lathe
@@ -48,7 +51,8 @@ std::atomic<int> nextConnection { 1 };
 
 //==============================================================================
 /** One running host: the control connection, the shared block and the semaphore. */
-class RemotePluginInstance::Connection : private ChildProcessCoordinator
+class RemotePluginInstance::Connection : private ChildProcessCoordinator,
+                                          private Timer
 {
 public:
     Connection()
@@ -61,15 +65,42 @@ public:
 
     ~Connection() override
     {
+        stopTimer();
         if (shared != nullptr)
         {
             shared->quit = 1;
             wake.post();
         }
         killWorkerProcess();
+       #if JUCE_WINDOWS
+        if (process != nullptr) CloseHandle (process);
+       #endif
         map.reset();
         wake.close();
         shmFile.deleteFile();
+    }
+
+    /** False once the host process has ended (any thread). */
+    bool hostAlive()
+    {
+        const int id = pid.load();
+        if (id <= 0)
+            return true;   // not said who it is yet
+       #if JUCE_WINDOWS
+        if (process == nullptr)
+            return true;
+        DWORD code = 0;
+        return ! (GetExitCodeProcess (process, &code) && code != STILL_ACTIVE);
+       #else
+        const ScopedLock sl (reapLock);
+        if (reaped)
+            return false;
+        int status = 0;
+        const auto r = waitpid ((pid_t) id, &status, WNOHANG);
+        if (r == (pid_t) id || (r < 0 && errno == ECHILD && kill ((pid_t) id, 0) != 0))
+            reaped = true;
+        return ! reaped;
+       #endif
     }
 
     /** Starts the host and loads the plug-in. The reply, or a void var and `error`. */
@@ -113,6 +144,7 @@ public:
             error = "LatheHost didn't start.";
             return {};
         }
+        startTimer (200);   // watch the process from here on
         auto reply = request (object ({ { "type", "load" },
                                         { "plugin", desc.createXml()->toString() },
                                         { "rate", sr }, { "block", bs },
@@ -153,7 +185,17 @@ public:
             waiting.erase (id);
             return {};
         }
-        pending->done.wait (timeoutMs);
+        // Wait in short steps, so a host that dies meanwhile is noticed straight away.
+        for (int waited = 0; waited < timeoutMs; waited += 50)
+        {
+            if (pending->done.wait (50))
+                break;
+            if (! hostAlive())
+            {
+                handleConnectionLost();
+                break;
+            }
+        }
         const ScopedLock sl (lock);
         waiting.erase (id);
         return pending->reply;
@@ -180,6 +222,19 @@ private:
     };
     String name;
     File shmFile;
+    std::atomic<int> pid { 0 };
+   #if JUCE_WINDOWS
+    HANDLE process = nullptr;
+   #else
+    CriticalSection reapLock;
+    bool reaped = false;
+   #endif
+
+    void timerCallback() override
+    {
+        if (! lost.load() && ! hostAlive())
+            handleConnectionLost();
+    }
     std::unique_ptr<MemoryMappedFile> map;
     CriticalSection lock;
     std::map<int, std::shared_ptr<Pending>> waiting;
@@ -197,6 +252,15 @@ private:
     void handleMessageFromWorker (const MemoryBlock& mb) override
     {
         const auto msg = fromBlock (mb);
+        if (msg["type"].toString() == "hello")
+        {
+           #if JUCE_WINDOWS
+            if (process == nullptr)
+                process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) (int) msg["pid"]);
+           #endif
+            pid = (int) msg["pid"];
+            return;
+        }
         if (msg.hasProperty ("reply"))
         {
             const ScopedLock sl (lock);

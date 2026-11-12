@@ -26,10 +26,10 @@ constexpr int kMaxChannels = 32;
 constexpr int kMaxBlock = 8192;
 constexpr int kMaxMidi = 2048;
 constexpr uint32_t kMagic = 0x4c48'5354;   // "LHST"
-/** How long without a ping before each side counts the other as gone. Pings come every second
-    from their own thread on both sides, so a busy plug-in or message thread doesn't miss them.
-    On Windows this is how Lathe hears that the host crashed (the pipe doesn't always say). */
-constexpr int pingTimeoutMs = 2000;
+/** How long without a ping before each side counts the other as gone. Generous: a first launch
+    on a fresh machine can take seconds. Lathe doesn't wait for this to notice a crash: the host
+    says its process id as soon as it connects and Lathe watches the process itself. */
+constexpr int pingTimeoutMs = 10000;
 /** The id on the host's command line (ChildProcessWorker). */
 inline const char* commandLineId() { return "lathe-plugin-host"; }
 
