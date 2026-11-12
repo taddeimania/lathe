@@ -655,7 +655,11 @@ void CloudController::addMenuItems (PopupMenu& m)
                linked && signedIn && idle && ! viewer && ! lostAccess);
     m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle && ! lostAccess);
     m.addItem (historyId, "History...", linked);
-    m.addItem (listenId, "Share a Listening Link...", configured && idle && ! viewer && ! lostAccess);
+    // Listening links are public, so only the song's owner shares them (Lathe Cloud checks too).
+    const bool notOwner = linked && songRole.isNotEmpty() && songRole != "owner";
+    m.addItem (listenId, notOwner ? String ("Share a Listening Link (the song's owner shares these)")
+                                  : String ("Share a Listening Link..."),
+               configured && idle && ! notOwner && ! lostAccess);
     if (linked)
         m.addItem (unlinkId, "Disconnect This Song from the Cloud...", idle);
     m.addSeparator();

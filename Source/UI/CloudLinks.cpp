@@ -397,9 +397,10 @@ void CloudController::shareListeningLink()
                "then share the link.");
         return;
     }
-    if (songRole == "viewer" || lostAccess)
+    if (lostAccess || (songRole.isNotEmpty() && songRole != "owner"))
     {
-        alert ("You can only listen to this song", "Its owner or an editor can share a listening link to it.");
+        alert ("Only the song's owner shares listening links",
+               "A listening link is public, so it's up to the song's owner. Ask them to share the mix.");
         return;
     }
 

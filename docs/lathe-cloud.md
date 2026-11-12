@@ -19,6 +19,17 @@ Lathe can share a project with collaborators through Lathe Cloud. It works like 
 - Only the owner manages a project or song: share, change someone's access, **Stop Sharing** (with one person or everyone), **Rename** (shares stay), **Move to Project** (a song; people who had it only through its old project, or shared on its own, lose it), and **Delete from Cloud**. Anyone can **Leave**.
 - When you lose access to something or become a viewer, Lathe tells you. Your copy on your computer is never touched: you just can't pull or push it anymore. **Cloud > Disconnect This Song** stops it asking.
 
+**Invite links**
+- **Cloud > Invite Someone by Link** makes a link (getlathe.app/join.html#...) to send however you like. Choose what it's for: just being friends, or the open song (if it's yours), to edit or view only. Song invites need a paid plan, like sharing.
+- Whoever opens it types their email. Without an account, Lathe Cloud makes one and emails a temporary password. The invite waits under that email and is claimed when they next sign in: you become friends, they get the song, and Lathe offers to open it. If your plan has no room for another free editor, they join as a viewer and are told so.
+- Someone already in Lathe can paste the link into **Cloud > Join with an Invite Link** instead.
+- A link works for 14 days, for up to 10 people. You can have 20 open at once.
+
+**Listening links**
+- **Cloud > Share a Listening Link** renders the song's mix as it sounds now (start to end, like File > Export Mix), uploads it (FLAC, lossless) and gives you a link (getlathe.app/listen.html#...). Anyone with it can play the mix in a browser, without Lathe or an account. Only the song's owner can share one (or stop it), on a paid plan; everyone on the song can see the link.
+- Listeners can leave a note at a moment in the song, with their name. It arrives as a song note ("At 1:15: ..." from "Sam (listening link)"), and the owner gets a notice.
+- A song has one link. **Share the Latest Mix** after changes updates what it plays; the link stays the same. **Stop Sharing** ends it, and deleting the song does too.
+
 **Notes and conversations**
 - Leave a note on a track at a moment in the song: right-click the lane (or a clip) and choose **Add Note Here**, or **Track > Add Note at Start Marker** (Cmd/Ctrl+Alt+N). It shows as a speech bubble on the lane; the number is how many messages are in the thread.
 - **Song notes** are about the whole song (the plan so far, what's left): **Track > Add Song Note**, or **Add Song Note** in the Notes window.
