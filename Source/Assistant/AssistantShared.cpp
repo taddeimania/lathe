@@ -561,4 +561,12 @@ var toolText (const String& text, bool isError)
     content.add (object ({ { "type", "text" }, { "text", text } }));
     return object ({ { "content", content }, { "isError", isError } });
 }
+
+var withNote (const var& result, const String& note)
+{
+    auto copy = JSON::parse (JSON::toString (result, true));
+    if (auto* content = copy["content"].getArray())
+        content->add (object ({ { "type", "text" }, { "text", note } }));
+    return copy;
+}
 } // namespace lathe::assistant

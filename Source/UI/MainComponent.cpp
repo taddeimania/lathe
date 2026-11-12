@@ -193,6 +193,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     {
         aiAssistant = std::make_shared<assistant::Service> (ctx);
         connectAssistantToProjects();
+        aiAssistant->onActivity = [this] { showAssistantBar(); };
     }
 
     updateNotice = std::make_unique<UpdateNotice> (settings, [this] { openPatcher(); });
@@ -213,6 +214,14 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     setAsideBar.forget.onClick = [this] { if (cloud != nullptr) cloud->forgetSetAside(); };
     addChildComponent (setAsideBar);
 
+    // While an AI app works in the session: what it's doing, and a way to make it stop and wait.
+    assistantBar.pause.onClick = [this]
+    {
+        if (aiAssistant != nullptr)
+            aiAssistant->setPaused (! aiAssistant->isPaused());
+    };
+    addChildComponent (assistantBar);
+
     // Space starts and stops from anywhere in Lathe: the mixer, a focused button, a plug-in window.
     if (! forScreenshots)
         globalkeys::install ([this] { engine.togglePlay(); });
@@ -225,6 +234,8 @@ MainComponent::~MainComponent()
 {
     globalkeys::uninstall();
     stopTimer();
+    if (aiAssistant != nullptr)
+        aiAssistant->onActivity = nullptr;   // a dialog may keep it alive a moment longer
     aiAssistant.reset();   // before the project and engine it reads
     notes->removeChangeListener (this);
     ctx.notes = nullptr;
@@ -845,6 +856,7 @@ void MainComponent::timerCallback()
 
     if (++ticks % 30 == 0)
     {
+        showAssistantBar();   // goes away a little after the assistant's last step
         if (statusTime != 0 && Time::getMillisecondCounter() - statusTime > 12000)
         {
             statusLeft.setText ({}, dontSendNotification);
@@ -966,6 +978,56 @@ void MainComponent::showSetAsideBar()
     }
 }
 
+MainComponent::AssistantBar::AssistantBar()
+{
+    text.setFont (theme::font (13.0f));
+    text.setColour (Label::textColourId, theme::text);
+    text.setBorderSize ({ 0, 12, 0, 12 });
+    addAndMakeVisible (text);
+    addAndMakeVisible (pause);
+}
+
+void MainComponent::AssistantBar::resized()
+{
+    auto r = getLocalBounds().reduced (6, 3);
+    pause.setBounds (r.removeFromRight (110));
+    text.setBounds (r);
+}
+
+void MainComponent::AssistantBar::paint (Graphics& g)
+{
+    g.fillAll (paused ? theme::accent.interpolatedWith (theme::panel, 0.7f) : theme::panelRaised);
+    g.setColour (theme::accent);
+    g.fillRect (0, 0, 3, getHeight());   // the assistant's mark, at the left edge
+}
+
+void MainComponent::showAssistantBar()
+{
+    if (aiAssistant == nullptr)
+        return;
+    const bool paused = aiAssistant->isPaused();
+    const bool show = paused || (aiAssistant->isOn() && aiAssistant->isWorking());
+    if (show)
+    {
+        const auto last = aiAssistant->lastAction();
+        assistantBar.paused = paused;
+        assistantBar.text.setText (paused ? String ("Your assistant is paused: it stops at its next step. Work as you like, "
+                                                    "then press Continue and tell it to carry on.")
+                                          : "Your assistant is working" + (last.isNotEmpty() ? ": " + last : String())
+                                                + ". You can keep working: it's told what you change before it changes anything.",
+                                   dontSendNotification);
+        assistantBar.pause.setButtonText (paused ? "Continue" : "Pause");
+        assistantBar.pause.setTooltip (paused ? "Let the assistant carry on when you tell it to"
+                                              : "Stop the assistant at its next step, until you press Continue");
+        assistantBar.repaint();
+    }
+    if (show != assistantBar.isVisible())
+    {
+        assistantBar.setVisible (show);
+        resized();
+    }
+}
+
 void MainComponent::resized()
 {
     auto r = getLocalBounds();
@@ -974,6 +1036,8 @@ void MainComponent::resized()
         pushBanner.setBounds (r.removeFromTop (28));
     if (setAsideBar.isVisible())
         setAsideBar.setBounds (r.removeFromTop (34));
+    if (assistantBar.isVisible())
+        assistantBar.setBounds (r.removeFromTop (34));
 
     auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
     if (cloud != nullptr)

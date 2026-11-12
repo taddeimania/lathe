@@ -82,4 +82,6 @@ var rpcResult (const var& id, const var& result);
 var rpcError (const var& id, int code, const String& message);
 /** A tool result: one text item. */
 var toolText (const String& text, bool isError = false);
+/** A tool result with one more paragraph of text after what it already says. */
+var withNote (const var& result, const String& note);
 } // namespace lathe::assistant

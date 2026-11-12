@@ -110,6 +110,18 @@ private:
         TextButton putBack { "Put My Changes Back" }, forget { "Forget Them..." };
     } setAsideBar;
     void showSetAsideBar();
+    /** Under the transport while an AI app is working in the session: what it did last, and Pause
+        (Continue while paused). Paused, the assistant is turned away at its next step. */
+    struct AssistantBar : public Component
+    {
+        AssistantBar();
+        void resized() override;
+        void paint (Graphics&) override;
+        Label text;
+        TextButton pause { "Pause" };
+        bool paused = false;
+    } assistantBar;
+    void showAssistantBar();
     std::unique_ptr<NotesController> notes;
     std::shared_ptr<assistant::Service> aiAssistant;   // AI assistant (MCP) connection
     std::unique_ptr<Divider> divider;

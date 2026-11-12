@@ -13,6 +13,8 @@
 #include "Assistant/AssistantServer.h"
 #include "Assistant/AssistantTools.h"
 #include "Assistant/MixAnalysis.h"
+#include "Assistant/SessionWatch.h"
+#include "Assistant/AssistantService.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
 #include "Demo/Welcome.h"
@@ -1500,6 +1502,50 @@ int main (int argc, char** argv)
             const auto snap = cloud::Snapshot::capture (e);
             const auto once = JSON::toString (snap.project);
             check (JSON::toString (JSON::parse (once)) == once, "a project's JSON reads back exactly as it was written");
+        }
+
+        // --- The assistant is told what the person changed since it last looked
+        {
+            const String base = R"({"format":"lathe-project","version":1,"tempo":100.0,"timeSignature":[4,4],
+                "loop":{"enabled":false,"start":0.0,"end":16.0},"insertMarker":0.0,
+                "tracks":[{"id":1,"kind":"audio","name":"Bass","volume":-6.0,"pan":0.0,"mute":false,
+                  "plugins":[{"description":"<PLUGIN name=\"Comp\"/>","state":"AAA","bypassed":false,"params":{"Ratio":"4:1"}}],
+                  "clips":[]}],
+                "returns":[],"master":{"id":4,"kind":"audio","name":"Master","volume":0.0,"pan":0.0,"plugins":[]}})";
+            const File song ("/tmp/song.lathe");
+            assistant::SessionWatch w;
+            check (! w.compare (JSON::parse (base), song).any, "assistant watch: nothing to compare before it has looked");
+            w.seen (JSON::parse (base), song);
+
+            auto changed = [&] (std::function<void (var&)> f) { auto p = JSON::parse (base); f (p); return p; };
+            auto bass = [] (var& p) { return (*p["tracks"].getArray())[0].getDynamicObject(); };
+
+            auto c = w.compare (changed ([&] (var& p) { bass (p)->setProperty ("volume", -3.0); p.getDynamicObject()->setProperty ("insertMarker", 8.0); }), song);
+            check (c.any && ! c.structural && c.list().contains ("fader"), "assistant watch: a fader move is reported but doesn't stop it");
+
+            c = w.compare (changed ([&] (var& p)
+            {
+                (*bass (p)->getProperty ("plugins").getArray())[0].getDynamicObject()->setProperty ("state", "BBB");
+            }), song);
+            check (! c.any, "assistant watch: a plug-in's saved state changing by itself, same settings, isn't a change");
+
+            c = w.compare (changed ([&] (var& p)
+            {
+                auto* plug = (*bass (p)->getProperty ("plugins").getArray())[0].getDynamicObject();
+                plug->setProperty ("state", "CCC");
+                plug->setProperty ("params", JSON::parse (R"({"Ratio":"8:1"})"));
+            }), song);
+            check (c.structural && c.list().contains ("Ratio"), "assistant watch: a plug-in setting the person turned stops a change, in words");
+
+            c = w.compare (changed ([&] (var& p) { p["tracks"].getArray()->clear(); }), song);
+            check (c.structural, "assistant watch: a removed track stops a change");
+
+            c = w.compare (JSON::parse (base), File ("/tmp/other.lathe"));
+            check (c.structural && c.otherProject == "other", "assistant watch: another project open now is said by name");
+
+            check (assistant::SessionWatch::changesSong ("edit_session") && ! assistant::SessionWatch::changesSong ("describe_session")
+                       && ! assistant::SessionWatch::changesSong ("analyze_mix"),
+                   "assistant watch: only tools that change the song are held back");
         }
 
         // --- Putting set-aside changes back on top of a newer revision (three-way merge)
@@ -3277,6 +3323,57 @@ int main (int argc, char** argv)
         check (! (bool) session["isError"] && sessionJson["tracks"].size() == 2 && (double) sessionJson["tempo_bpm"] == 120.0
                && sessionJson["tracks"][1]["input"].toString() == "from track \"Dice\"" && sessionJson["tracks"][0]["plugins"][0]["role"].toString() == "note generator",
                "describe_session lists the tracks, their inputs and plug-in roles");
+
+        // --- Working together: the assistant is told what the person changed, and can be paused
+        {
+            AppContext actx { e, engine, host, pool, props };
+            StringArray said;
+            actx.showStatus = [&] (const String& st) { said.add (st); };
+            assistant::Service svc (actx);
+            int activity = 0;
+            svc.onActivity = [&] { ++activity; };
+            auto txt = [] (const var& r)
+            {
+                StringArray parts;
+                if (auto* c = r["content"].getArray())
+                    for (auto& x : *c)
+                        parts.add (x["text"].toString());
+                return parts.joinIntoString ("\n");
+            };
+            auto change = [] (const String& json) { return JSON::parse (R"({"changes":)" + json + "}"); };
+
+            svc.runTool ("describe_session", var (new DynamicObject()));
+            check (activity == 1 && svc.isWorking(), "working together: a tool call counts as the assistant working");
+
+            const auto oldName = synth->name;
+            synth->name = "Lead";   // the person renames a track between the assistant's calls
+            auto r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","volume_db":-4}])"));
+            check ((bool) r["isError"] && txt (r).contains ("Nothing was changed") && txt (r).contains ("Lead")
+                       && std::abs (gen->volumeDb.load() + 4.0f) > 0.01f,
+                   "working together: a change on an out-of-date picture is held back, saying what the person changed (" + txt (r).substring (0, 160) + ")");
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","volume_db":-4}])"));
+            check (! (bool) r["isError"] && std::abs (gen->volumeDb.load() + 4.0f) < 0.01f,
+                   "working together: once told, the same change goes through");
+
+            synth->volumeDb = -9.0f;   // the person rides a fader
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","pan":0.2}])"));
+            check (! (bool) r["isError"] && txt (r).contains ("Since you last looked") && txt (r).contains ("fader"),
+                   "working together: a fader the person moved doesn't stop a change, but it's mentioned");
+
+            svc.setPaused (true);
+            r = svc.runTool ("describe_session", var (new DynamicObject()));
+            check ((bool) r["isError"] && txt (r).contains ("Paused") && svc.isPaused(), "working together: paused, every tool answers that it's paused");
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","pan":0.5}])"));
+            check ((bool) r["isError"] && std::abs (gen->pan.load() - 0.2f) < 0.01f, "working together: and nothing changes while paused");
+            svc.setPaused (false);
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","pan":0.5}])"));
+            check (! (bool) r["isError"] && std::abs (gen->pan.load() - 0.5f) < 0.01f, "working together: after Continue it carries on");
+
+            synth->name = oldName;
+            gen->pan = 0.0f;
+            gen->volumeDb = 0.0f;
+            synth->volumeDb = 0.0f;
+        }
 
         auto args = var (new DynamicObject());
         args.getDynamicObject()->setProperty ("track", "dice");

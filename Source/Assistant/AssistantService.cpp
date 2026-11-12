@@ -1,4 +1,10 @@
 #include "AssistantService.h"
+#include "../Cloud/Revisions.h"
+#include <thread>
+
+#ifndef JUCE_APPLICATION_VERSION_STRING
+ #define JUCE_APPLICATION_VERSION_STRING ""   // the tests build this file without the app's version
+#endif
 
 namespace lathe::assistant
 {
@@ -89,12 +95,7 @@ var Service::callTool (const String& name, const var& args, const std::atomic<bo
     MessageManager::callAsync ([this, flag, pending, name, args]
     {
         if (flag->load())
-        {
-            String status;
-            pending->result = tools.call (name, args, status);
-            if (status.isNotEmpty())
-                ctx.showStatus (status);
-        }
+            pending->result = runTool (name, args);
         pending->done.signal();
     });
 
@@ -116,6 +117,7 @@ var Service::callLongTool (const String& name, const var& args, const std::atomi
         WaitableEvent done;
         std::shared_ptr<Tools::Job> job;
         var immediate;
+        String note;   // what the person changed since the assistant last looked
     };
     auto started = std::make_shared<Started>();
     auto flag = alive;
@@ -123,7 +125,22 @@ var Service::callLongTool (const String& name, const var& args, const std::atomi
     MessageManager::callAsync ([this, flag, started, name, args]
     {
         if (flag->load())
-            started->job = tools.startLongTool (name, args, started->immediate);
+        {
+            noteActivity();
+            if (paused.load())
+                started->immediate = pausedText();
+            else
+            {
+                // These read the song (or play it): they run on what's there now, and say what changed.
+                const auto change = watch.compare (currentProject(), ctx.edit.projectFile);
+                started->job = tools.startLongTool (name, args, started->immediate);
+                watch.seen (currentProject(), ctx.edit.projectFile);
+                if (change.any)
+                    started->note = "Since you last looked, the person changed:\n" + change.list();
+                if (started->job != nullptr)
+                    ++(*longToolsRunning);
+            }
+        }
         started->done.signal();
     });
 
@@ -134,16 +151,101 @@ var Service::callLongTool (const String& name, const var& args, const std::atomi
     if (started->job == nullptr)
         return started->immediate.isVoid() ? toolText ("Lathe is closing.", true) : started->immediate;
 
+    // Counted as working until the job ends, even if this wait gives up first.
+    std::shared_ptr<void> done (nullptr, [count = longToolsRunning] (void*) { --(*count); });
     for (int waited = 0; waited < kLongToolSeconds * 1000; waited += 100)
     {
         if (started->job->done.wait (100))
-            return started->job->result;
+            return started->note.isEmpty() ? started->job->result : withNote (started->job->result, started->note);
         if (! running.load() || ! flag->load())
             break;
     }
+    // Still running: count it until it finishes.
+    std::thread ([job = started->job, done] { job->done.wait (-1); }).detach();
     return toolText (name == "export_audio" ? "The export is still going. Lathe's status bar says when it's done."
                      : name == "analyze_mix" ? "The analysis didn't finish in time. Try fewer bars."
                                              : "The measurement didn't finish in time.", true);
+}
+
+//==============================================================================
+var Service::currentProject() const
+{
+    return cloud::Snapshot::capture (ctx.edit).project;
+}
+
+void Service::noteActivity (const String& status)
+{
+    lastCallMs = Time::getMillisecondCounter();
+    if (status.isNotEmpty())
+        lastStatus = status;
+    if (onActivity)
+        onActivity();
+}
+
+bool Service::isWorking() const
+{
+    if (longToolsRunning->load() > 0)
+        return true;
+    return lastCallMs != 0 && Time::getMillisecondCounter() - lastCallMs < 45000;
+}
+
+void Service::setPaused (bool p)
+{
+    paused.store (p);
+    ctx.showStatus (p ? "Assistant paused: it stops at its next step"
+                      : "Assistant can carry on: tell it to, in your AI app");
+    if (onActivity)
+        onActivity();
+}
+
+var Service::pausedText() const
+{
+    return toolText ("Paused: the person pressed Pause in Lathe, so nothing ran and nothing changed. Stop here. "
+                     "Tell them what you've done so far and what's left, then wait. When they want you to carry on "
+                     "they press Continue in Lathe; if they tell you to go on and you get this message again, ask "
+                     "them to press Continue. Every Lathe tool answers like this until then.", true);
+}
+
+var Service::runTool (const String& name, const var& args)
+{
+    if (paused.load())
+    {
+        noteActivity();
+        return pausedText();
+    }
+
+    const auto file = ctx.edit.projectFile;
+    const auto now = currentProject();
+    const auto change = watch.compare (now, file);
+
+    // Never change the song on an out-of-date picture of it: the person edited it since the
+    // assistant last looked. Faders, pans, mutes, sends and the like don't stop it (people move
+    // those while listening); the assistant is just told.
+    if (change.structural && SessionWatch::changesSong (name))
+    {
+        watch.seen (now, file);   // it knows now: the next try goes through
+        noteActivity ("Assistant held back: you changed the session since it last looked");
+        ctx.showStatus (lastStatus);
+        if (change.otherProject.isNotEmpty())
+            return toolText ("Nothing was changed. The person opened a different project (\"" + change.otherProject
+                             + "\") since you last looked. Ask them whether to carry on in this one before changing anything.", true);
+        return toolText ("Nothing was changed. The person has edited the session since you last looked, so this was held "
+                         "back rather than made on an out-of-date picture of the song. They changed:\n" + change.list()
+                         + "\nLook again (describe_session, or describe_track for those tracks), check your plan still fits, "
+                           "then make the change again. If what they did conflicts with what you were about to do, ask them.", true);
+    }
+
+    String status;
+    auto result = tools.call (name, args, status);
+    if (status.isNotEmpty())
+        ctx.showStatus (status);
+    noteActivity (status);
+    watch.seen (currentProject(), ctx.edit.projectFile);
+
+    if (change.any)
+        result = withNote (result, "Since you last looked, the person changed:\n" + change.list()
+                                       + (SessionWatch::changesSong (name) ? "\n(Your change was made on top of theirs.)" : String()));
+    return result;
 }
 
 String Service::statusText() const

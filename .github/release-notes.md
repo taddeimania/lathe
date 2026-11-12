@@ -3,6 +3,27 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.5
+
+- **Work alongside your AI assistant.** Keep working in Lathe while it does. If you change the song
+  between its steps (a track, a plug-in, a clip, the tempo), its next change is held back and it's
+  told what you changed, so it looks again instead of working from an out-of-date picture. Faders,
+  pans and mutes don't stop it; it's just told.
+- **Pause it.** While the assistant works, a bar under the transport says what it did last. Press
+  Pause and it stops at its next step and waits; press Continue when you want it to carry on.
+
+## New in 0.12.4
+
+- **Someone pushed first? Get theirs, then put yours on top.** Lathe sets your changes aside (safe in
+  History), opens the newest revision so you can listen, and puts your changes back on top. If you
+  both changed the same thing, it asks which to keep. Nobody's revision is pushed over any more.
+
+## New in 0.12.3
+
+- **Space plays and stops from anywhere**, plug-in windows and the mixer included.
+- **Share a song so a bandmate pushes only their own track.** They can change anything on their
+  computer; only that track goes up.
+
 ## New in 0.12.2
 
 - **Your AI assistant can listen to the mix.** A new tool, analyze_mix, renders the song (or some
