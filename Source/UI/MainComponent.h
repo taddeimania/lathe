@@ -32,6 +32,9 @@ public:
     void runScreenshots (const File& outDir);
     /** The AI assistant demo's pictures (ai-1.jpg ... and ai-session.json), after the others. */
     void runAssistantShots (const File& outDir, const File& work, std::function<void (bool, StringArray)> done);
+    /** The pictures for the site's DAW page (daw-*.jpg): the piano roll with a loop, Lathe's
+        own devices, Compare and Undo History, from Night Drive with some built-ins added. */
+    void runDawShots (const File& outDir, const File& work, const File& song, std::function<void (bool, StringArray)> done);
 
     void newProject (const File& templateFile);
     void openProject (const File&);

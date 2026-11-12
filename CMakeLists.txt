@@ -367,10 +367,15 @@ if(LATHE_BUILD_TESTS)
     if(MSVC)
         target_compile_options(LatheTests PRIVATE /utf-8)
     endif()
-    add_dependencies(LatheTests LatheScanner LatheHost)
-    add_custom_command(TARGET LatheTests POST_BUILD
+    # Copied on every build, not only when LatheTests itself relinks: a change to just the
+    # host or the scanner would otherwise leave the tests running the old one.
+    add_custom_target(LatheTestsHelpers
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:LatheTests>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheScanner> $<TARGET_FILE_DIR:LatheTests>/
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheHost> $<TARGET_FILE_DIR:LatheTests>/)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:LatheHost> $<TARGET_FILE_DIR:LatheTests>/
+        COMMENT "Copying LatheScanner and LatheHost next to LatheTests")
+    add_dependencies(LatheTestsHelpers LatheScanner LatheHost)
+    add_dependencies(LatheTests LatheTestsHelpers)
 
     # Three tiny VST3s for the scanning tests: one that works, one that crashes
     # while loading and one that never finishes loading. No moduleinfo.json, so

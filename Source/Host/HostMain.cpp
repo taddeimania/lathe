@@ -12,15 +12,89 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <cstdlib>
+#include <cstdio>
+#include <cstring>
 #if ! JUCE_WINDOWS
  #include <unistd.h>
+ #include <fcntl.h>
+ #include <csignal>
 #endif
 
 using namespace juce;
 using namespace lathe;
 
+#if JUCE_MAC
+// JUCE makes the NSApplication only in JUCEApplication's own main(). This process has its
+// own main(), so without this NSApp is nil, [NSApp run] returns at once and the host quits
+// straight after connecting (the macOS "LatheHost stopped while loading" failure).
+namespace juce { void initialiseNSApplication(); }
+#endif
+
 namespace
 {
+//==============================================================================
+// A log of how far this process got, one line per step, in the file Lathe names in
+// LATHE_HOST_LOG. Lathe reads it if this process goes quiet: the first line gives it our
+// process id before we can say hello, and the last line says where we stopped.
+#if JUCE_WINDOWS
+HANDLE logFile = INVALID_HANDLE_VALUE;
+#else
+int logFd = -1;
+#endif
+
+void hostLog (const char* text) noexcept
+{
+    char line[512];
+    const auto n = std::snprintf (line, sizeof (line), "%s\n", text);
+    if (n <= 0)
+        return;
+   #if JUCE_WINDOWS
+    DWORD written = 0;
+    if (logFile != INVALID_HANDLE_VALUE)
+        WriteFile (logFile, line, (DWORD) jmin (n, (int) sizeof (line) - 1), &written, nullptr);
+   #else
+    if (logFd >= 0)
+        (void) ::write (logFd, line, (size_t) jmin (n, (int) sizeof (line) - 1));
+   #endif
+}
+
+void hostLog (const String& text) noexcept   { hostLog (text.toRawUTF8()); }
+
+#if ! JUCE_WINDOWS
+/** A crash says so in the log first, so Lathe knows at once: macOS keeps a crashed process
+    alive while it writes the crash report, and until then Lathe couldn't tell it had gone.
+    Then the crash goes on as usual, so the system's crash report (with the stack) is kept. */
+void crashed (int sig)
+{
+    char line[64];
+    const auto n = std::snprintf (line, sizeof (line), "crashed (signal %d)\n", sig);
+    if (logFd >= 0 && n > 0)
+        (void) ::write (logFd, line, (size_t) n);
+    std::signal (sig, SIG_DFL);
+    std::raise (sig);
+}
+#endif
+
+void openLog()
+{
+   #if JUCE_WINDOWS
+    wchar_t path[2048] = {};
+    if (const auto len = GetEnvironmentVariableW (L"LATHE_HOST_LOG", path, 2048); len > 0 && len < 2048)
+        logFile = CreateFileW (path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    char line[64];
+    std::snprintf (line, sizeof (line), "pid %lu", (unsigned long) GetCurrentProcessId());
+   #else
+    if (const auto* path = std::getenv ("LATHE_HOST_LOG"); path != nullptr && *path != 0)
+        logFd = ::open (path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    for (int sig : { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT })
+        std::signal (sig, crashed);
+    char line[64];
+    std::snprintf (line, sizeof (line), "pid %d", (int) getpid());
+   #endif
+    hostLog (line);
+}
+
 MemoryBlock toBlock (const var& v)
 {
     const auto text = JSON::toString (v, true);
@@ -104,10 +178,12 @@ public:
         msg.getDynamicObject()->setProperty ("pid", (int) getpid());
        #endif
         sendMessageToCoordinator (toBlock (msg));
+        hostLog ("said hello");
     }
 
     void handleConnectionLost() override
     {
+        hostLog ("Lathe went away");
         stopAudio();
         MessageManager::getInstance()->stopDispatchLoop();
     }
@@ -168,7 +244,7 @@ private:
     void handle (const var& msg)
     {
         const auto type = msg["type"].toString();
-        if (type == "load")        { load (msg); return; }
+        if (type == "load")        { hostLog ("load"); load (msg); hostLog ("load answered"); return; }
         if (type == "quit")
         {
             reply (msg, {});
@@ -279,7 +355,9 @@ private:
         AudioPluginFormatManager formats;
         formats.addDefaultFormats();
         String error;
+        hostLog ("loading " + desc.name + " from " + desc.fileOrIdentifier);
         plugin = formats.createPluginInstance (desc, rate, block, error);
+        hostLog (plugin != nullptr ? "plug-in loaded" : "plug-in didn't load: " + error);
         if (plugin == nullptr)
             return fail (error.isNotEmpty() ? error : desc.name + " didn't load.");
 
@@ -312,8 +390,13 @@ private:
         o->setProperty ("params", describeParams());
 
         // Realtime priority where the system allows it (Linux often doesn't, without permission).
-        if (! startRealtimeThread (Thread::RealtimeOptions{}.withApproximateAudioProcessingTime (jmax (16, block), rate)))
+        if (startRealtimeThread (Thread::RealtimeOptions{}.withApproximateAudioProcessingTime (jmax (16, block), rate)))
+            hostLog ("audio thread started (realtime)");
+        else
+        {
             startThread (Thread::Priority::highest);
+            hostLog ("audio thread started");
+        }
         reply (msg, out);
     }
 
@@ -437,11 +520,22 @@ private:
 //==============================================================================
 static int runHost (const String& commandLine)
 {
+    openLog();
+   #if JUCE_MAC
+    initialiseNSApplication();
+   #endif
     ScopedJuceInitialiser_GUI juceInit;
+    hostLog ("JUCE started");
     auto host = std::make_unique<Host>();
     if (! host->initialiseFromCommandLine (commandLine, remote::commandLineId(), remote::pingTimeoutMs))
+    {
+        hostLog ("couldn't connect to Lathe (" + commandLine + ")");
         return 2;
+    }
+    hostLog ("connected to Lathe");
+    MessageManager::callAsync ([] { hostLog ("running"); });
     MessageManager::getInstance()->runDispatchLoop();
+    hostLog ("message loop ended");
     host.reset();
     std::_Exit (0);   // skip static teardown: some plug-ins misbehave when unloaded at exit
 }

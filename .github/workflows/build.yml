@@ -97,6 +97,15 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      # If a helper (LatheHost, LatheScanner) crashed, show the stack macOS kept for it.
+      - name: Crash reports (macOS, on failure)
+        if: failure() && runner.os == 'macOS'
+        run: |
+          for f in ~/Library/Logs/DiagnosticReports/Lathe*; do
+            [ -f "$f" ] || continue
+            echo "===== $f"; head -n 120 "$f"
+          done
+
       # macOS: sign with a Developer ID and notarize, so the app opens with a double-click.
       # Needs the secrets MACOS_CERT_P12 (base64 .p12), MACOS_CERT_PASSWORD,
       # MACOS_SIGN_IDENTITY, NOTARY_KEY_P8 (base64 .p8), NOTARY_KEY_ID, NOTARY_ISSUER_ID.

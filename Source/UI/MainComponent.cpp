@@ -1744,13 +1744,228 @@ void MainComponent::runScreenshots (const File& outDir)
                 auto view = self->cloud->makeHistoryView();
                 view->setSize (900, 540);
                 shot (*view, "history.jpg");
-                self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                self->runDawShots (run->out, run->work, run->songs.plain, [self, run, finish] (bool dawOk, StringArray dawWritten)
                 {
-                    run->ok = run->ok && ok;
-                    run->written.addArray (written);
-                    finish();
+                    run->ok = run->ok && dawOk;
+                    run->written.addArray (dawWritten);
+                    if (self == nullptr) return;
+                    self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                    {
+                        run->ok = run->ok && ok;
+                        run->written.addArray (written);
+                        finish();
+                    });
                 });
             });
+        });
+    });
+}
+
+void MainComponent::runDawShots (const File& outDir, const File& work, const File& song, std::function<void (bool, StringArray)> done)
+{
+    struct Run
+    {
+        StringArray written;
+        bool ok = true;
+    };
+    auto run = std::make_shared<Run>();
+    auto shot = [outDir, run] (Component& c, const String& name)
+    {
+        if (saveShot (c, outDir.getChildFile (name)))
+            run->written.add (name);
+        else
+        {
+            run->ok = false;
+            std::cerr << "Couldn't draw " << name << std::endl;
+        }
+    };
+    auto fail = [run] (const String& why) { run->ok = false; std::cerr << why << std::endl; };
+
+    loadProjectFile (song, song);
+    auto named = [this] (const String& name) -> std::shared_ptr<Track>
+    {
+        for (auto* list : { &edit.tracks, &edit.buses })
+            for (auto& t : *list)
+                if (t->name == name)
+                    return t;
+        return {};
+    };
+    // Some of Lathe's own devices, as a band would put them on Night Drive.
+    auto add = [this] (Track& t, const String& id)
+    {
+        for (auto& info : devices::all())
+            if (info.id == id)
+            {
+                String error;
+                auto slot = engine.makeSlot (devices::describe (info), {}, error);
+                if (slot->instance != nullptr && t.isBus())
+                    devices::startOnReturn (*slot->instance);
+                t.plugins.push_back (slot);
+                return slot->instance != nullptr;
+            }
+        return false;
+    };
+    auto keys = named ("Keys"), lead = named ("Lead"), plate = named ("Plate"), echo = named ("Echo"), bass = named ("Bass"), vocal = named ("Vocal");
+    if (keys == nullptr || lead == nullptr || plate == nullptr || echo == nullptr || bass == nullptr || vocal == nullptr
+        || ! add (*keys, "poly") || ! add (*keys, "compressor") || ! add (*keys, "saturator") || ! add (*lead, "multi") || ! add (*plate, "reverb") || ! add (*echo, "delay"))
+    {
+        fail ("The DAW pictures need Night Drive's tracks and Lathe's devices");
+        done (false, {});
+        return;
+    }
+    // The synths come in hot: bring the master down to a level a mix would sit at.
+    edit.master->volumeDb = -9.0f;
+    edit.changed();
+    engine.rebuild();
+    edit.clearUndo();
+    edit.dirty = false;
+    // A loop over the chorus.
+    edit.loopEnabled = true;
+    edit.loopStart = 32.0;
+    edit.loopEnd = 48.0;
+
+    Component::SafePointer<MainComponent> self (this);
+
+    // 1. The piano roll, open on the lead line, with the loop on.
+    ctx.selection = {};
+    ctx.selection.trackId = lead->id;
+    if (! lead->clips.empty())
+        ctx.openClipEditor (lead->id, lead->clips.front().id);
+    arrangement.refresh();
+    Timer::callAfterDelay (800, [self, run, shot, fail, keys, bass, vocal, work, done]
+    {
+        if (self == nullptr) return;
+        shot (*self, "daw-pianoroll.jpg");
+
+        // 2. Lathe's own synth on the keys, in the panel under the song.
+        self->ctx.selection = {};
+        self->ctx.selection.trackId = keys->id;
+        if (self->ctx.selectionChanged)
+            self->ctx.selectionChanged();
+        self->showDetail (false);
+        self->detailHeight = 290;
+        self->resized();
+        Timer::callAfterDelay (800, [self, run, shot, fail, bass, vocal, work, done]
+        {
+            if (self == nullptr) return;
+            shot (*self, "daw-devices.jpg");
+
+            // 3. Compare: Before, then a few mix moves (they make the Undo History too), Now, and
+            // a reference: the same song mixed brighter and louder, rendered to a file.
+            auto& cmp = *self->compare;
+            auto r = cmp.render (Compare::before, [self, run, shot, fail, bass, vocal, work, done] (Result rb)
+            {
+                if (self == nullptr) return;
+                if (rb.failed()) fail ("Compare Before: " + rb.getErrorMessage());
+                auto& e = self->edit;
+
+                // Your moves, one step each, then the assistant's (labelled the way its tools do).
+                e.commitUndoStep();
+                vocal->volumeDb = vocal->volumeDb.load() + 1.5f;
+                e.adjusted();
+                e.commitUndoStep();
+                bass->eq.bands[2].freq = 250.0f;
+                bass->eq.bands[2].gainDb = -3.0f;
+                bass->eq.bands[2].q = 1.2f;
+                e.adjusted();
+                e.commitUndoStep();
+                vocal->getSend (vocal->sends.empty() ? -1 : vocal->sends.front()->busId, false);
+                for (auto& s : vocal->sends) s->levelDb = s->levelDb.load() - 3.0f;
+                e.adjusted();
+                e.labelNextStep ("\"Vocal\": send to \"Plate\" -9.0 dB; \"Vocal\": send to \"Echo\" -15.0 dB", true);
+                e.commitUndoStep();
+                // One more of yours, taken back, so the list shows a step that can be redone.
+                if (auto g = self->edit.tracks.size() > 2 ? self->edit.tracks[2] : nullptr)
+                {
+                    g->pan = -0.3f;
+                    e.adjusted();
+                    e.commitUndoStep();
+                    e.undo();
+                }
+                self->engine.rebuild();
+
+                // The reference: master up and brighter for one render, then back as it was.
+                const auto refFile = work.getChildFile ("Finished single.wav");
+                {
+                    auto& m = *e.master;
+                    const float oldVol = m.volumeDb.load();
+                    const auto oldOn = m.eq.bands[4].on.load();
+                    const float oldGain = m.eq.bands[4].gainDb.load(), oldFreq = m.eq.bands[4].freq.load();
+                    m.volumeDb = oldVol + 4.0f;
+                    m.eq.bands[4].on = true;
+                    m.eq.bands[4].freq = 6000.0f;
+                    m.eq.bands[4].gainDb = 3.5f;
+                    AudioBuffer<float> mix;
+                    Engine::ExportSettings s;
+                    s.mix = true;
+                    s.stems = false;
+                    s.startBeat = e.loopStart;
+                    s.endBeat = e.loopEnd;
+                    s.tailSeconds = 0.0;
+                    auto rr = self->engine.renderOffline (s, [] (double) { return true; },
+                        [&mix] (const std::vector<Engine::RenderTap>&, int64 length) { mix.setSize (2, (int) length); mix.clear(); return Result::ok(); },
+                        [&mix] (int tap, const AudioBuffer<float>& b, int start, int count, int64 at)
+                        {
+                            if (tap != 0 || at >= mix.getNumSamples()) return;
+                            const int n = (int) jmin ((int64) count, (int64) mix.getNumSamples() - at);
+                            for (int ch = 0; ch < 2; ++ch)
+                                mix.copyFrom (ch, (int) at, b, jmin (ch, b.getNumChannels() - 1), start, n);
+                        });
+                    m.volumeDb = oldVol;
+                    m.eq.bands[4].on = oldOn;
+                    m.eq.bands[4].gainDb = oldGain;
+                    m.eq.bands[4].freq = oldFreq;
+                    if (rr.failed())
+                        fail ("The reference render: " + rr.getErrorMessage());
+                    refFile.deleteFile();
+                    std::unique_ptr<OutputStream> stream (refFile.createOutputStream());
+                    WavAudioFormat wav;
+                    if (auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (self->engine.getSampleRate())
+                                                                  .withNumChannels (2).withBitsPerSample (24)))
+                        w->writeFromAudioSampleBuffer (mix, 0, mix.getNumSamples());
+                }
+
+                auto& cmp2 = *self->compare;
+                auto rn = cmp2.render (Compare::now, [self, run, shot, fail, refFile, done] (Result rnow)
+                {
+                    if (self == nullptr) return;
+                    if (rnow.failed()) fail ("Compare Now: " + rnow.getErrorMessage());
+                    auto rl = self->compare->loadReference (refFile, [self, run, shot, fail, done] (Result rref)
+                    {
+                        if (self == nullptr) return;
+                        if (rref.failed()) fail ("Compare reference: " + rref.getErrorMessage());
+                        self->compare->setHeard (Compare::now);
+                        self->compare->setPositionSeconds (self->compare->getLengthSeconds() * 0.38);
+                        CompareWindow::show (*self->compare, nullptr);
+                        UndoHistoryWindow::show (self->edit, nullptr, nullptr);
+                        Timer::callAfterDelay (600, [self, run, shot, done]
+                        {
+                            if (self == nullptr) return;
+                            for (int i = 0; i < TopLevelWindow::getNumTopLevelWindows(); ++i)
+                            {
+                                auto* w = TopLevelWindow::getTopLevelWindow (i);
+                                if (dynamic_cast<CompareWindow*> (w) != nullptr)
+                                    shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-compare.jpg");
+                                else if (dynamic_cast<UndoHistoryWindow*> (w) != nullptr)
+                                    shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-undo-history.jpg");
+                            }
+                            CompareWindow::closeIfOpen();
+                            UndoHistoryWindow::closeIfOpen();
+                            self->compare->projectChanged();
+                            self->showDetail (false);
+                            self->detailHeight = 190;
+                            // Leave nothing behind for the assistant pictures, which start a new song.
+                            self->edit.loopEnabled = false;
+                            self->edit.clearUndo();
+                            self->edit.dirty = false;
+                            done (run->ok, run->written);
+                        });
+                    });
+                    if (rl.failed()) { fail ("Compare reference: " + rl.getErrorMessage()); done (false, run->written); }
+                });
+                if (rn.failed()) { fail ("Compare Now: " + rn.getErrorMessage()); done (false, run->written); }
+            });
+            if (r.failed()) { fail ("Compare Before: " + r.getErrorMessage()); done (false, run->written); }
         });
     });
 }

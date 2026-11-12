@@ -61,6 +61,7 @@ public:
         const auto pid = String ((int) getpidPortable());
         name = "lathe-" + pid + "-" + String (n);
         shmFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-host-" + pid + "-" + String (n) + ".shm");
+        logFile = shmFile.withFileExtension ("log");
     }
 
     ~Connection() override
@@ -78,15 +79,59 @@ public:
         map.reset();
         wake.close();
         shmFile.deleteFile();
+        logFile.deleteFile();
     }
 
-    /** False once the host process has ended (any thread). */
+    /** The host's own log: how far it got (see HostMain.cpp). */
+    StringArray hostLog() const
+    {
+        // Read again only when it has grown: hostAlive asks several times a second.
+        const ScopedLock sl (logLock);
+        const auto size = logFile.getSize();
+        if (size != logSize)
+        {
+            logSize = size;
+            logLines.clear();
+            logLines.addLines (logFile.loadFileAsString());
+            logLines.removeEmptyStrings();
+        }
+        return logLines;
+    }
+
+    /** Why the host stopped answering, from its log, for an error message. */
+    String whereItStopped() const
+    {
+        const auto lines = hostLog();
+        if (lines.isEmpty())
+            return "it didn't start running";
+        const auto last = lines[lines.size() - 1];
+        if (last.startsWith ("crashed"))
+            return "it " + last + (lines.size() > 1 ? " after \"" + lines[lines.size() - 2] + "\"" : String());
+        if (lines.size() == 1)
+            return "it stopped before JUCE started";
+        return "its last step was \"" + last + "\"";
+    }
+
+    /** False once the host process has ended, or has crashed and is only being kept for its
+        crash report (any thread). */
     bool hostAlive()
     {
-        const int id = pid.load();
+        if (const auto lines = hostLog(); lines.size() > 0 && lines[lines.size() - 1].startsWith ("crashed"))
+            return false;
+        int id = pid.load();
         if (id <= 0)
-            return true;   // not said who it is yet
+        {
+            // Not said hello yet: its log's first line says who it is.
+            const auto first = hostLog()[0];
+            if (! first.startsWith ("pid "))
+                return true;
+            id = first.fromFirstOccurrenceOf ("pid ", false, false).getIntValue();
+            if (id <= 0)
+                return true;
+            learnPid (id);
+        }
        #if JUCE_WINDOWS
+        const ScopedLock sl (processLock);
         if (process == nullptr)
             return true;
         DWORD code = 0;
@@ -139,6 +184,14 @@ public:
             return {};
         }
 
+        // The host logs its steps here (its process id first), so a host that goes quiet
+        // before it can say hello is still noticed, and the error can say where it stopped.
+        logFile.deleteFile();
+       #if JUCE_WINDOWS
+        SetEnvironmentVariableW (L"LATHE_HOST_LOG", logFile.getFullPathName().toWideCharPointer());
+       #else
+        setenv ("LATHE_HOST_LOG", logFile.getFullPathName().toRawUTF8(), 1);
+       #endif
         if (! launchWorkerProcess (exe, remote::commandLineId(), remote::pingTimeoutMs, 0))
         {
             error = "LatheHost didn't start.";
@@ -154,7 +207,7 @@ public:
                               60000);
         if (! reply.isObject())
         {
-            error = "LatheHost stopped while loading " + desc.name + ".";
+            error = "LatheHost stopped while loading " + desc.name + ": " + whereItStopped() + ".";
             return {};
         }
         if (! (bool) reply["ok"])
@@ -221,14 +274,28 @@ private:
         var reply;
     };
     String name;
-    File shmFile;
+    File shmFile, logFile;
+    CriticalSection logLock;
+    mutable int64 logSize = -1;
+    mutable StringArray logLines;
     std::atomic<int> pid { 0 };
    #if JUCE_WINDOWS
     HANDLE process = nullptr;
+    CriticalSection processLock;
    #else
     CriticalSection reapLock;
     bool reaped = false;
    #endif
+
+    void learnPid (int id)
+    {
+       #if JUCE_WINDOWS
+        const ScopedLock sl (processLock);
+        if (process == nullptr)
+            process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) id);
+       #endif
+        pid = id;
+    }
 
     void timerCallback() override
     {
@@ -254,11 +321,7 @@ private:
         const auto msg = fromBlock (mb);
         if (msg["type"].toString() == "hello")
         {
-           #if JUCE_WINDOWS
-            if (process == nullptr)
-                process = OpenProcess (PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD) (int) msg["pid"]);
-           #endif
-            pid = (int) msg["pid"];
+            learnPid ((int) msg["pid"]);
             return;
         }
         if (msg.hasProperty ("reply"))
