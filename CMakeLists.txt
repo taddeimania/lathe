@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.12.2 LANGUAGES C CXX)
+project(Lathe VERSION 0.12.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -122,6 +122,7 @@ target_sources(Lathe PRIVATE
     Source/Engine/ClipJoin.cpp
     Source/UI/Theme.cpp
     Source/UI/Widgets.cpp
+    Source/UI/GlobalKeys.cpp
     Source/UI/TransportBar.cpp
     Source/UI/Arrangement.cpp
     Source/UI/Mixer.cpp
@@ -255,6 +256,11 @@ if(MSVC)
     target_compile_options(LathePatcher PRIVATE /utf-8)
 endif()
 
+# Space for play from anywhere: on the Mac, an app-wide key monitor (Objective-C++).
+if(APPLE)
+    target_sources(Lathe PRIVATE Source/UI/GlobalKeys.mm)   # compiled as Objective-C++, like JUCE's own .mm files
+endif()
+
 add_dependencies(Lathe LathePatcher)
 if(APPLE)
     add_custom_command(TARGET Lathe POST_BUILD
@@ -305,6 +311,7 @@ if(LATHE_BUILD_TESTS)
         Source/UI/CloudLibrary.cpp
         Source/UI/Theme.cpp
         Source/UI/Widgets.cpp
+        Source/UI/GlobalKeys.cpp
         Source/UI/Dialogs.cpp
         Source/UI/CloudLinks.cpp
         # The welcome song (Resources/Welcome.lathe).

@@ -272,7 +272,7 @@ Snapshot Snapshot::capture (const Edit& edit)
         o->removeProperty ("notes");          // notes live on the server for cloud songs
     }
 
-    auto describe = [&s] (const var& trackVar, const Track& t)
+    auto describe = [&s] (const var& trackVar, const Track& t, bool isTrack)
     {
         // Readable plug-in settings, so a change can say "Decay 2.1 s -> 3.4 s".
         if (auto* plugins = trackVar["plugins"].getArray())
@@ -305,17 +305,17 @@ Snapshot Snapshot::capture (const Edit& edit)
         if (auto* clips = trackVar["clips"].getArray())
             for (size_t i = 0; i < t.clips.size() && (int) i < clips->size(); ++i)
                 if (t.clips[i].kind == ClipKind::audio)
-                    s.audio.push_back ({ clips->getReference ((int) i), t.clips[i].file });
+                    s.audio.push_back ({ clips->getReference ((int) i), t.clips[i].file, isTrack ? t.id : -1 });
     };
 
     if (auto* tracks = s.project["tracks"].getArray())
         for (size_t i = 0; i < edit.tracks.size() && (int) i < tracks->size(); ++i)
-            describe (tracks->getReference ((int) i), *edit.tracks[i]);
+            describe (tracks->getReference ((int) i), *edit.tracks[i], true);
     if (auto* returns = s.project["returns"].getArray())
         for (size_t i = 0; i < edit.buses.size() && (int) i < returns->size(); ++i)
-            describe (returns->getReference ((int) i), *edit.buses[i]);
+            describe (returns->getReference ((int) i), *edit.buses[i], false);
     if (edit.master != nullptr)
-        describe (s.project["master"], *edit.master);
+        describe (s.project["master"], *edit.master, false);
     return s;
 }
 
@@ -395,7 +395,7 @@ Result createCloudSong (Client& client, LocalStore& store, const String& name, c
 }
 
 PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const String& parent,
-                  const String& message, const Progress& progress)
+                  const String& message, const Progress& progress, const StringArray& keepBlobs)
 {
     PushOutcome out;
     const auto projectId = store.getProjectId();
@@ -449,6 +449,9 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
     Array<var> blobList;
     for (auto& h : blobs)
         blobList.add (h);
+    for (auto& h : keepBlobs)
+        if (! blobs.contains (h))
+            blobList.add (h), blobs.add (h);
     body->setProperty ("blobs", blobList);
     body->setProperty ("message", message);
     body->setProperty ("summary", summariseChanges (before, snap.project));
@@ -480,6 +483,74 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
     store.setBase (out.revision.id);
     report (progress, "Pushed", 1.0);
     return out;
+}
+
+Result mergeTracks (const var& base, const var& local, const std::set<int>& trackIds, var& merged)
+{
+    // A deep copy of the base, so the newest revision's content goes up exactly as it is.
+    merged = JSON::parse (JSON::toString (base));
+    auto* into = merged["tracks"].getArray();
+    auto* from = local["tracks"].getArray();
+    if (into == nullptr || from == nullptr)
+        return Result::fail ("The project has no tracks.");
+    for (const int id : trackIds)
+    {
+        int at = -1;
+        for (int i = 0; i < into->size(); ++i)
+            if ((int) (*into)[i]["id"] == id)
+                at = i;
+        var mine;
+        for (auto& t : *from)
+            if ((int) t["id"] == id)
+                mine = t;
+        if (at < 0)
+            return Result::fail ("The owner has removed this track from the song, so there's nothing to push it into. "
+                                 "Ask them to share another track.");
+        if (! mine.isObject())
+            return Result::fail ("\"" + (*into)[at]["name"].toString() + "\" isn't in your copy anymore. Open the newest "
+                                 "revision (Cloud > History) to get it back, then push.");
+        // The same object as in `local`, so hashing its audio fills in the merged project too.
+        into->set (at, mine);
+    }
+    return Result::ok();
+}
+
+PushOutcome pushTracks (Client& client, LocalStore& store, Snapshot& local, const std::set<int>& trackIds,
+                        const String& message, const Progress& progress)
+{
+    PushOutcome out;
+    // The newest revision: yours go on top of it, whoever made it.
+    auto pulled = pull (client, store, [&] (const String& what, double p) { return report (progress, what, 0.2 * p); });
+    if (pulled.result.failed() || pulled.head.isEmpty())
+    {
+        out.result = pulled.result.failed() ? pulled.result
+                                            : Result::fail ("The song has nothing in the cloud yet. Ask the owner to push it first.");
+        return out;
+    }
+    const auto head = store.getRevision (pulled.head);
+    if (! head || ! store.hasObject (head->snapshot))
+    {
+        out.result = Result::fail ("Couldn't get the newest revision. Try again.");
+        return out;
+    }
+
+    var merged;
+    if (auto r = mergeTracks (store.readSnapshot (head->snapshot), local.project, trackIds, merged); r.failed())
+    {
+        out.result = r;
+        return out;
+    }
+    // Only your tracks' audio goes up; the rest is what the newest revision already has.
+    local.audio.erase (std::remove_if (local.audio.begin(), local.audio.end(),
+                                       [&] (const Snapshot::Audio& a) { return trackIds.count (a.trackId) == 0; }),
+                       local.audio.end());
+    local.project = merged;
+    StringArray keep;
+    for (auto& b : head->blobs)
+        if (b != head->snapshot)
+            keep.add (b);
+    return push (client, store, local, head->id, message,
+                 [&] (const String& what, double p) { return report (progress, what, 0.2 + 0.8 * p); }, keep);
 }
 
 PullOutcome pull (Client& client, LocalStore& store, const Progress& progress)

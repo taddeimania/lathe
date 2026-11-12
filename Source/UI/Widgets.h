@@ -35,6 +35,16 @@ struct AppContext
     /** Which mix the mixer's faders, pans and mutes edit: -1 = the main mix, else a cue mix id. */
     int mixLayer = -1;
 
+    /** The open song was shared with you so you push only some of its tracks (a guitarist gets
+        the guitar). Those are drawn as yours; the rest is dimmed: you can change it, but it stays
+        on this computer. Empty pushTracks: no limit. Set by the cloud (CloudController). */
+    std::set<int> pushTracks;
+    String pushTrackNames;               // "Guitar", or "Guitar and Vocal"
+    bool isPushLimited() const noexcept              { return ! pushTracks.empty(); }
+    bool isYourTrack (int trackId) const noexcept    { return pushTracks.count (trackId) > 0; }
+    bool isLocalOnly (int trackId) const noexcept    { return isPushLimited() && ! isYourTrack (trackId); }
+    std::function<void()> pushTracksChanged;
+
     void selectTrack (int id)
     {
         selection.trackId = id;

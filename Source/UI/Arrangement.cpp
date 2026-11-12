@@ -8,7 +8,7 @@ namespace lathe
 //==============================================================================
 // Track header (left column)
 //==============================================================================
-class ArrangementView::Header : public Component
+class ArrangementView::Header : public Component, public TooltipClient
 {
 public:
     Header (ArrangementView& o, std::shared_ptr<Track> t)
@@ -117,10 +117,19 @@ public:
         g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
 
-        // tiny kind tag so audio and MIDI tracks are told apart at a glance
-        g.setColour (theme::textDim);
+        // tiny kind tag so audio and MIDI tracks are told apart at a glance (or, on a song shared
+        // so you push only some tracks, which ones are yours)
         g.setFont (theme::font (10.5f));
-        g.drawText (track->isMidi() ? "MIDI" : "AUDIO", x + 12, getHeight() - 17, 40, 12, Justification::centredLeft);
+        if (ctx.isYourTrack (track->id))
+        {
+            g.setColour (theme::accent);
+            g.drawText ("Yours", x + 12, getHeight() - 17, 40, 12, Justification::centredLeft);
+        }
+        else
+        {
+            g.setColour (theme::textDim);
+            g.drawText (track->isMidi() ? "MIDI" : "AUDIO", x + 12, getHeight() - 17, 40, 12, Justification::centredLeft);
+        }
     }
 
     void paintOverChildren (Graphics& g) override
@@ -128,6 +137,27 @@ public:
         auto a = arm.getBounds().toFloat().withSizeKeepingCentre (9.0f, 9.0f);
         g.setColour (track->arm.load() ? theme::textDark : theme::record.withSaturation (0.45f));
         g.fillEllipse (a);
+
+        if (ctx.isLocalOnly (track->id))
+        {
+            g.setColour (theme::window.withAlpha (0.62f));
+            g.fillRect (getLocalBounds());
+        }
+        else if (ctx.isYourTrack (track->id))
+        {
+            g.setColour (theme::accent);
+            g.drawRect (getLocalBounds().withTrimmedBottom (1), 2);
+        }
+    }
+
+    String getTooltip() override
+    {
+        if (ctx.isLocalOnly (track->id))
+            return "Not yours to push: change it if you like, but it stays on this computer. You push "
+                   + ctx.pushTrackNames + ".";
+        if (ctx.isYourTrack (track->id))
+            return "Your track: Cloud > Push sends this (and only what the owner shared with you).";
+        return {};
     }
 
     void resized() override
@@ -623,6 +653,29 @@ public:
                 drawClip (g, t, c, r);
             }
         }
+
+        // Shared so you push only some tracks: yours stand out, the rest is dimmed (you can still
+        // change it, but it stays on this computer).
+        if (ctx.isPushLimited())
+            for (int i = 0; i < (int) edit.tracks.size(); ++i)
+            {
+                if (! owner.isTrackShown (i))
+                    continue;
+                const auto row = Rectangle<int> (clip.getX(), owner.trackTop (i), clip.getWidth(), theme::trackHeight - 1);
+                if (ctx.isLocalOnly (edit.tracks[(size_t) i]->id))
+                {
+                    g.setColour (theme::window.withAlpha (0.62f));
+                    g.fillRect (row);
+                }
+                else
+                {
+                    g.setColour (theme::accent.withAlpha (0.06f));
+                    g.fillRect (row);
+                    g.setColour (theme::accent.withAlpha (0.75f));
+                    g.fillRect (row.withHeight (2));
+                    g.fillRect (row.withY (row.getBottom() - 2).withHeight (2));
+                }
+            }
 
         // what's being recorded right now: a red clip growing on each armed track
         const bool recording = ctx.engine.isRecording() && ctx.engine.isPlaying();

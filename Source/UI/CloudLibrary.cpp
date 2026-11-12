@@ -18,6 +18,110 @@ String roleText (const String& role)
     return "can edit";
 }
 
+/** "Guitar" or "Guitar and Vocal", from [{"id", "name"}]. */
+String trackNames (const var& tracks)
+{
+    StringArray names;
+    if (auto* list = tracks.getArray())
+        for (auto& t : *list)
+            names.add (t["name"].toString());
+    String text;
+    for (int i = 0; i < names.size(); ++i)
+        text << (i == 0 ? "" : i == names.size() - 1 ? " and " : ", ") << names[i];
+    return text;
+}
+
+/** Which tracks of the open song someone may push: a tick per track. done() gets their ids. */
+class TrackPicker : public Component
+{
+public:
+    TrackPicker (AppContext& ctx, const String& who, const std::set<int>& ticked, std::function<void (Array<var>)> onShare)
+        : done (std::move (onShare))
+    {
+        intro.setText (who + " can change anything on their computer, but a push only sends the tracks you tick. "
+                       "Everything else stays as you have it.", dontSendNotification);
+        intro.setFont (theme::font (13.5f));
+        intro.setJustificationType (Justification::topLeft);
+        addAndMakeVisible (intro);
+        for (auto& t : ctx.edit.tracks)
+        {
+            auto* box = boxes.add (new ToggleButton (t->name + (t->isMidi() ? "  (MIDI)" : "")));
+            box->setToggleState (ticked.count (t->id) > 0, dontSendNotification);
+            box->onClick = [this] { update(); };
+            box->getProperties().set ("id", t->id);
+            addAndMakeVisible (box);
+        }
+        share.setColour (TextButton::buttonColourId, theme::accent);
+        share.setColour (TextButton::textColourOffId, theme::textDark);
+        share.onClick = [this]
+        {
+            Array<var> ids;
+            for (auto* b : boxes)
+                if (b->getToggleState())
+                    ids.add (b->getProperties()["id"]);
+            if (auto* w = findParentComponentOfClass<DialogWindow>())
+                w->exitModalState (1);
+            if (done)
+                done (ids);
+        };
+        cancel.onClick = [this] { if (auto* w = findParentComponentOfClass<DialogWindow>()) w->exitModalState (0); };
+        addAndMakeVisible (share);
+        addAndMakeVisible (cancel);
+        update();
+        setSize (420, 110 + boxes.size() * 28 + 50);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (18, 14);
+        intro.setBounds (r.removeFromTop (64));
+        r.removeFromTop (6);
+        for (auto* b : boxes)
+            b->setBounds (r.removeFromTop (28));
+        auto buttons = r.removeFromBottom (30);
+        share.setBounds (buttons.removeFromRight (110));
+        buttons.removeFromRight (8);
+        cancel.setBounds (buttons.removeFromRight (90));
+    }
+
+    void paint (Graphics& g) override   { g.fillAll (theme::panel); }
+
+private:
+    void update()
+    {
+        bool any = false;
+        for (auto* b : boxes)
+            any = any || b->getToggleState();
+        share.setEnabled (any);
+    }
+
+    std::function<void (Array<var>)> done;
+    Label intro;
+    OwnedArray<ToggleButton> boxes;
+    TextButton share { "Share" }, cancel { "Cancel" };
+};
+
+void pickTracks (AppContext& ctx, const String& title, const String& who, const std::set<int>& ticked,
+                 std::function<void (Array<var>)> done)
+{
+    DialogWindow::LaunchOptions o;
+    o.content.setOwned (new TrackPicker (ctx, who, ticked, std::move (done)));
+    o.dialogTitle = title;
+    o.dialogBackgroundColour = theme::panel;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+    o.launchAsync();
+}
+
+std::set<int> idsOf (const var& tracks)
+{
+    std::set<int> ids;
+    if (auto* list = tracks.getArray())
+        for (auto& t : *list)
+            ids.insert ((int) t["id"]);
+    return ids;
+}
+
 String esc (const String& s)
 {
     return URL::addEscapeChars (s, true);
@@ -48,8 +152,11 @@ class CloudController::PeopleList : public Component
 public:
     std::function<void (const String& id, const String& role)> onRole;
     std::function<void (const String& id, const String& email)> onRemove;
+    /** "Can push some tracks..." chosen: id, email, the tracks they have now (or void). */
+    std::function<void (const String& id, const String& email, const var& tracks)> onTracks;
 
-    void setPeople (const Array<var>& people, bool canManage, const String& footnote)
+    /** tracksPossible: a song (someone can be limited to some of its tracks), not a project. */
+    void setPeople (const Array<var>& people, bool canManage, const String& footnote, bool tracksPossible = false)
     {
         rows.clear();
         for (auto& p : people)
@@ -60,12 +167,31 @@ public:
             row->email.setFont (theme::font (13.0f));
             row->addAndMakeVisible (row->email);
             const auto role = p["role"].toString();
+            const auto tracks = p["tracks"];
+            const bool limited = role == "editor" && tracks.isArray();
             if (canManage && role != "owner")
             {
                 row->role.addItem ("Can edit", 1);
                 row->role.addItem ("Can view", 2);
-                row->role.setSelectedId (role == "viewer" ? 2 : 1, dontSendNotification);
-                row->role.onChange = [this, row] { if (onRole) onRole (row->id, row->role.getSelectedId() == 2 ? "viewer" : "editor"); };
+                if (tracksPossible)
+                    row->role.addItem (limited ? "Pushes " + trackNames (tracks) : String ("Can push some tracks..."), 3);
+                row->role.setSelectedId (role == "viewer" ? 2 : limited ? 3 : 1, dontSendNotification);
+                row->role.setTooltip (limited ? "They can change anything on their computer, but push only " + trackNames (tracks) + "."
+                                              : String());
+                row->role.onChange = [this, row, tracks, limited]
+                {
+                    const int choice = row->role.getSelectedId();
+                    if (choice == 3)
+                    {
+                        // Put it back until they've picked (Cancel leaves it as it was).
+                        row->role.setSelectedId (limited ? 3 : 1, dontSendNotification);
+                        if (onTracks) onTracks (row->id, row->email.getText(), tracks);
+                    }
+                    else if (onRole)
+                    {
+                        onRole (row->id, choice == 2 ? "viewer" : "editor");
+                    }
+                };
                 row->addAndMakeVisible (row->role);
                 row->remove.setButtonText ("Remove");
                 row->remove.onClick = [this, row] { if (onRemove) onRemove (row->id, row->email.getText()); };
@@ -73,7 +199,7 @@ public:
             }
             else
             {
-                row->roleText.setText (roleText (role), dontSendNotification);
+                row->roleText.setText (limited ? "pushes " + trackNames (tracks) : roleText (role), dontSendNotification);
                 row->roleText.setColour (Label::textColourId, theme::textDim);
                 row->roleText.setFont (theme::font (12.5f));
                 row->addAndMakeVisible (row->roleText);
@@ -101,11 +227,11 @@ public:
             {
                 row->remove.setBounds (b.removeFromRight (70));
                 b.removeFromRight (6);
-                row->role.setBounds (b.removeFromRight (100));
+                row->role.setBounds (b.removeFromRight (160));
             }
             else
             {
-                row->roleText.setBounds (b.removeFromRight (100));
+                row->roleText.setBounds (b.removeFromRight (160));
             }
             row->email.setBounds (b);
         }
@@ -183,6 +309,7 @@ private:
                 addAndMakeVisible (l);
             addAndMakeVisible (people);
             people.onRole = [this] (const String& id, const String& role) { setRole (id, role); };
+            people.onTracks = [this] (const String& id, const String& email, const var& tracks) { setTracks (id, email, tracks); };
             people.onRemove = [this] (const String& id, const String& email) { removePerson (id, email); };
 
             for (auto* b : actionButtons())
@@ -482,7 +609,7 @@ private:
                 {
                     note = "They get every song in this project, including ones added later.";
                 }
-                people.setPeople (memberList, isOwner(), note);
+                people.setPeople (memberList, isOwner(), note, selectedIsSong);
                 resized();
             });
         }
@@ -549,13 +676,18 @@ private:
                              "Open Friends", [this] { cc.showFriends(); });
                     return;
                 }
+                // Some tracks only: for the song that's open (its tracks are the ones to pick from).
+                const bool open = song && selected["id"].toString() == cc.getSongId();
                 PopupMenu m;
                 m.addSectionHeader (song ? "Share this song with..." : "Share every song in this project with...");
                 for (int i = 0; i < friendsList.size(); ++i)
                 {
                     PopupMenu roles;
-                    roles.addItem (1 + i * 2, "Can edit (pull and push)");
-                    roles.addItem (2 + i * 2, "Can view (pull only)");
+                    roles.addItem (1 + i * 3, "Can edit (pull and push)");
+                    roles.addItem (2 + i * 3, "Can view (pull only)");
+                    if (song)
+                        roles.addItem (3 + i * 3, open ? String ("Can push only some tracks...")
+                                                       : String ("Can push only some tracks (open the song first)"), open);
                     m.addSubMenu (friendsList[i]["email"].toString(), roles);
                 }
                 m.showMenuAsync (PopupMenu::Options().withTargetComponent (&shareButton),
@@ -563,18 +695,56 @@ private:
                 {
                     if (r <= 0)
                         return;
-                    const auto f = friendsList[(r - 1) / 2];
-                    const auto role = (r % 2 == 1) ? "editor" : "viewer";
-                    DynamicObject::Ptr body = new DynamicObject();
-                    body->setProperty ("friend", f["id"]);
-                    body->setProperty ("role", role);
+                    const auto f = friendsList[(r - 1) / 3];
+                    const int choice = (r - 1) % 3;
                     const auto email = f["email"].toString();
-                    api ("POST", path, var (body.get()), [this, email, what] (const var&, const cloud::ApiError& e)
+                    auto send = [this, f, path, what, email] (const String& role, const var& tracks)
                     {
-                        if (e.status != 0)
-                            return failed ("share", e);
-                        afterChange ("Shared \"" + what + "\" with " + email + ".");
-                    });
+                        DynamicObject::Ptr body = new DynamicObject();
+                        body->setProperty ("friend", f["id"]);
+                        body->setProperty ("role", role);
+                        if (tracks.isArray())
+                            body->setProperty ("tracks", tracks);
+                        api ("POST", path, var (body.get()), [this, email, what, tracks] (const var& resp, const cloud::ApiError& e)
+                        {
+                            if (e.status != 0)
+                                return failed ("share", e);
+                            afterChange ("Shared \"" + what + "\" with " + email
+                                         + (tracks.isArray() ? ": they can push " + trackNames (resp["tracks"]) + "." : String (".")));
+                        });
+                    };
+                    if (choice == 2)
+                    {
+                        pickTracks (cc.getContext(), "Share \"" + what + "\" with " + email, email,
+                                    cc.getContext().selection.trackIds,
+                                    [send] (Array<var> ids) { send ("editor", var (ids)); });
+                        return;
+                    }
+                    send (choice == 0 ? "editor" : "viewer", {});
+                });
+            });
+        }
+
+        void setTracks (const String& id, const String& email, const var& current)
+        {
+            if (selected["id"].toString() != cc.getSongId())
+            {
+                alert ("Open the song first", "Pick tracks from the song itself: open \"" + selected["name"].toString()
+                                                  + "\" in Lathe, then choose again.");
+                return;
+            }
+            const auto ticked = current.isArray() ? idsOf (current) : cc.getContext().selection.trackIds;
+            pickTracks (cc.getContext(), "What " + email + " can push", email, ticked, [this, id] (Array<var> ids)
+            {
+                DynamicObject::Ptr body = new DynamicObject();
+                body->setProperty ("role", "editor");
+                body->setProperty ("tracks", ids);
+                api ("PATCH", selectedPath() + "/members/" + esc (id), var (body.get()),
+                     [this] (const var& resp, const cloud::ApiError& err)
+                {
+                    if (err.status != 0)
+                        return failed ("change what they can push", err);
+                    afterChange ("They can push " + trackNames (resp["tracks"]) + " now.");
                 });
             });
         }

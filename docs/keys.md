@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Space | Play / stop. Stop twice to return to the start. |
+| Space | Play / stop. Stop twice to return to the start. Works from anywhere in Lathe: the mixer, a plug-in's window, a dialog without a text box. While you type in a text box, Space types a space. |
 | R | Record |
 | C | Metronome |
 | L | Loop on/off (drag in the top strip of the ruler to set the loop) |

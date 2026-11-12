@@ -148,6 +148,10 @@ private:
     std::unique_ptr<StatusLabel> status;
     Component::SafePointer<DocumentWindow> history, library, friends;
     String songRole;                     // this song: owner, editor or viewer ("" until known)
+    /** The tracks the owner lets you push (from the server), or none: no limit. Updates
+        ctx.pushTracks and tells the app. */
+    void setPushTracks (const var& tracks);
+    void pushYourTracks (const String& message, int attempt);
     String songProjectName;
     bool lostAccess = false;             // the server says we can't open this song anymore
     bool oldServer = false;              // a Lathe Cloud server without /v2 (projects, friends)

@@ -1433,6 +1433,75 @@ int main (int argc, char** argv)
                    "analysis: two-bar sections, the mix's loudness and band balance (" + JSON::toString (r["sections"], true).substring (0, 300) + ")");
         }
 
+        // --- Pushing only the tracks the owner shared (a guitarist pushes the guitar)
+        {
+            auto project = [] (double tempo, double bassVolume, const String& guitarComment, bool withKeys)
+            {
+                Array<var> tracks;
+                auto track = [] (int id, const String& name, double volume, const String& comment)
+                {
+                    DynamicObject::Ptr o = new DynamicObject();
+                    o->setProperty ("id", id);
+                    o->setProperty ("name", name);
+                    o->setProperty ("volume", volume);
+                    o->setProperty ("comment", comment);
+                    o->setProperty ("clips", Array<var>());
+                    return var (o.get());
+                };
+                tracks.add (track (1, "Drums", -3.0, {}));
+                tracks.add (track (2, "Bass", bassVolume, {}));
+                tracks.add (track (3, "Guitar", 0.0, guitarComment));
+                if (withKeys)
+                    tracks.add (track (9, "Keys", -4.25, {}));
+                DynamicObject::Ptr p = new DynamicObject();
+                p->setProperty ("format", "lathe-project");
+                p->setProperty ("tempo", tempo);
+                p->setProperty ("tracks", tracks);
+                return var (p.get());
+            };
+            // The owner's newest revision, and the guitarist's copy: new guitar, and (just for
+            // them) a faster tempo, a louder bass and a keys track.
+            const auto base = project (100.0, -6.0, "DI", false);
+            const auto local = project (128.0, 0.0, "Crunch, doubled", true);
+            var merged;
+            const auto r = cloud::mergeTracks (base, local, { 3 }, merged);
+            auto* m = merged["tracks"].getArray();
+            check (r.wasOk() && m != nullptr && m->size() == 3 && (double) merged["tempo"] == 100.0
+                       && (double) (*m)[1]["volume"] == -6.0 && (*m)[2]["comment"].toString() == "Crunch, doubled"
+                       && (int) (*m)[2]["id"] == 3,
+                   "pushing a track: only it comes from your copy, the rest is the newest revision as it is");
+            // Everything but the guitar is exactly the newest revision (what Lathe Cloud checks).
+            auto blank = [] (const var& v)
+            {
+                auto copy = JSON::parse (JSON::toString (v));
+                if (auto* list = copy["tracks"].getArray())
+                    for (int i = 0; i < list->size(); ++i)
+                        if ((int) (*list)[i]["id"] == 3)
+                            list->set (i, var());
+                return JSON::toString (copy);
+            };
+            check (blank (merged) == blank (base), "pushing a track: nothing outside it changes, byte for byte");
+
+            var none;
+            check (cloud::mergeTracks (base, local, { 9 }, none).getErrorMessage().contains ("removed"),
+                   "pushing a track the owner no longer has: refused, and says so");
+            check (cloud::mergeTracks (base, project (100.0, -6.0, "", false), { 3 }, none).wasOk()
+                       && cloud::mergeTracks (base, [&] { auto v = JSON::parse (JSON::toString (local));
+                                                          v["tracks"].getArray()->remove (2); return v; }(), { 3 }, none)
+                              .getErrorMessage().contains ("isn't in your copy"),
+                   "pushing a track you've deleted here: refused, and says how to get it back");
+
+            // A real project survives the copy unchanged (numbers and all), so the rest matches.
+            Edit e;
+            e.tempo = 97.3;
+            auto t1 = e.addTrack (TrackKind::audio, "Take");
+            t1->volumeDb = -7.123456789;
+            t1->pan = 0.3333333;
+            const auto snap = cloud::Snapshot::capture (e);
+            const auto once = JSON::toString (snap.project);
+            check (JSON::toString (JSON::parse (once)) == once, "a project's JSON reads back exactly as it was written");
+        }
+
         // --- Invite links pasted after a trip through a social site
         {
             const String c ("Ab3_d-9xYz12");

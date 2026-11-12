@@ -364,6 +364,19 @@ public:
             g.setColour (track->arm.load() ? theme::textDark : theme::record.withSaturation (0.45f));
             g.fillEllipse (a);
         }
+
+        // Shared so you push only some tracks: yours stand out, the rest is dimmed. Changes to
+        // the rest (levels, sends, returns, the master) stay on this computer.
+        if (ctx.isLocalOnly (track->id))
+        {
+            g.setColour (theme::window.withAlpha (0.62f));
+            g.fillRect (getLocalBounds());
+        }
+        else if (ctx.isYourTrack (track->id))
+        {
+            g.setColour (theme::accent);
+            g.drawRect (getLocalBounds().withTrimmedRight (1), 2);
+        }
     }
 
     void resized() override

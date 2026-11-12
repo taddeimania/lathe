@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "../Assistant/AssistantService.h"
+#include "GlobalKeys.h"
 #include "../Assistant/AssistantShared.h"
 #include "../Devices/Device.h"
 #include "../Demo/DemoSong.h"
@@ -197,12 +198,26 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     updateNotice->onShowOrHide = [this] { resized(); };
     addChildComponent (*updateNotice);
 
+    // A song shared so you push only some tracks: say which, dim the rest, outline yours.
+    pushBanner.setColour (Label::backgroundColourId, theme::accent);
+    pushBanner.setColour (Label::textColourId, theme::textDark);
+    pushBanner.setFont (theme::font (13.0f));
+    pushBanner.setJustificationType (Justification::centredLeft);
+    pushBanner.setBorderSize ({ 0, 12, 0, 12 });
+    addChildComponent (pushBanner);
+    ctx.pushTracksChanged = [this] { showPushBanner(); };
+
+    // Space starts and stops from anywhere in Lathe: the mixer, a focused button, a plug-in window.
+    if (! forScreenshots)
+        globalkeys::install ([this] { engine.togglePlay(); });
+
     setSize (1360, 860);
     startTimerHz (30);
 }
 
 MainComponent::~MainComponent()
 {
+    globalkeys::uninstall();
     stopTimer();
     aiAssistant.reset();   // before the project and engine it reads
     notes->removeChangeListener (this);
@@ -872,10 +887,39 @@ void MainComponent::paint (Graphics& g)
     g.fillRect (getLocalBounds().removeFromBottom (theme::statusHeight));
 }
 
+void MainComponent::showPushBanner()
+{
+    const bool limited = ctx.isPushLimited();
+    if (limited)
+    {
+        auto name = cloud != nullptr && cloud->getStore() != nullptr ? cloud->getStore()->getCloudName() : String();
+        if (name.isEmpty())
+            name = edit.projectFile.getFileNameWithoutExtension();
+        pushBanner.setText ((name.isNotEmpty() ? "In \"" + name + "\" you push " : String ("In this song you push "))
+                                + ctx.pushTrackNames + ". Everything else you change stays on this computer.",
+                            dontSendNotification);
+    }
+    pushBanner.setVisible (limited);
+    resized();
+    arrangement.refresh();
+    mixer.refresh();
+    // Every header, lane and strip draws the difference.
+    std::function<void (Component&)> repaintAll = [&] (Component& c)
+    {
+        c.repaint();
+        for (auto* child : c.getChildren())
+            repaintAll (*child);
+    };
+    repaintAll (arrangement);
+    repaintAll (mixer);
+}
+
 void MainComponent::resized()
 {
     auto r = getLocalBounds();
     transport.setBounds (r.removeFromTop (theme::transportHeight));
+    if (pushBanner.isVisible())
+        pushBanner.setBounds (r.removeFromTop (28));
 
     auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
     if (cloud != nullptr)
@@ -1213,7 +1257,8 @@ bool MainComponent::keyPressed (const KeyPress& k)
         return ch == c || (code > 0 && code < 256 && CharacterFunctions::toLowerCase ((juce_wchar) code) == c);
     };
 
-    if (code == KeyPress::spaceKey && ! cmd)   { engine.togglePlay(); return true; }
+    if (code == KeyPress::spaceKey && ! cmd && ! shift && ! mods.isAltDown())
+        return globalkeys::handleSpace();   // where there's no app-wide hook (Linux); see GlobalKeys.h
     if (code == KeyPress::homeKey)             { edit.insertMarker = 0.0; engine.seekTo (0.0); edit.sendChangeMessage(); return true; }
     if (code == KeyPress::tabKey && ! cmd)     { setMixerShown (! mixerShown); return true; }
 

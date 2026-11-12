@@ -1,6 +1,7 @@
 #include "Widgets.h"
 #include "../Devices/Device.h"
 #include "Dialogs.h"
+#include "GlobalKeys.h"
 
 namespace lathe
 {
@@ -393,6 +394,15 @@ public:
         setResizable (editor->isResizable(), false);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
+    }
+
+    // Space starts and stops playback here too (on the Mac and Windows it never gets this far:
+    // Lathe catches it first, see GlobalKeys.h).
+    bool keyPressed (const KeyPress& k) override
+    {
+        if (k == KeyPress (KeyPress::spaceKey) && globalkeys::handleSpace())
+            return true;
+        return DocumentWindow::keyPressed (k);
     }
 
     void closeButtonPressed() override

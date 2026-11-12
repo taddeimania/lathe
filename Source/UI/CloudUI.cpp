@@ -553,6 +553,7 @@ void CloudController::projectChanged (bool force)
     if (moved || force)
     {
         songRole = songProjectName = {};
+        setPushTracks ({});
         lostAccess = false;
     }
     pollCountdown = 2;   // check for news shortly after opening
@@ -586,6 +587,8 @@ void CloudController::updateStatus()
             text << "  ·  new revision waiting";
         else if (songRole == "viewer")
             text << "  ·  view only";
+        else if (ctx.isPushLimited())
+            text << "  ·  you push " << ctx.pushTrackNames;
     }
     const bool attention = busy || waitingHead.isNotEmpty() || (isLinked() && (isUnfinishedShare() || lostAccess));
 
@@ -594,7 +597,8 @@ void CloudController::updateStatus()
     String menu;
     menu << (int) isSignedIn() << "|" << getEmail() << "|" << planName << "|" << (int) busy.load() << "|"
          << (int) isLinked() << "|" << (int) lostAccess << "|" << songRole << "|" << (int) waitingHead.isNotEmpty() << "|"
-         << friendRequests << "|" << (int) isUnfinishedShare() << "|" << (store != nullptr ? store->getCloudName() : String());
+         << friendRequests << "|" << (int) isUnfinishedShare() << "|" << (store != nullptr ? store->getCloudName() : String())
+         << "|" << ctx.pushTrackNames;
     if (menu != menuState)
     {
         menuState = menu;
@@ -609,6 +613,8 @@ void CloudController::updateStatus()
                                                                   "yours: keep working on it, or choose Cloud > Disconnect This Song.")
                              : isLinked() && isUnfinishedShare() ? String ("Sharing didn't finish. Cloud > Push uploads the rest; files already sent aren't sent again.")
                              : songRole == "viewer" ? String ("You can pull new versions of this song but not push: the owner shared it view-only.")
+                             : ctx.isPushLimited() ? "The owner lets you push " + ctx.pushTrackNames + ". Change anything you like here; "
+                                                     "a push sends only that, on top of the newest revision."
                              : waitingText.isNotEmpty() ? waitingText : String ("Click for the project's history"));
 }
 
@@ -644,7 +650,8 @@ void CloudController::addMenuItems (PopupMenu& m)
         m.addItem (shareId, "Share \"" + store->getCloudName() + "\"...", signedIn);
     const bool viewer = songRole == "viewer";
     m.addItem (pushId, viewer ? String ("Push (you can only view this song)")
-                              : linked && isUnfinishedShare() ? "Push (finish sharing)..." : "Push...",
+                              : linked && isUnfinishedShare() ? "Push (finish sharing)..."
+                              : ctx.isPushLimited() ? "Push " + ctx.pushTrackNames + "..." : String ("Push..."),
                linked && signedIn && idle && ! viewer && ! lostAccess);
     m.addItem (pullId, waitingHead.isNotEmpty() ? "Pull (new revision waiting)" : "Pull", linked && signedIn && idle && ! lostAccess);
     m.addItem (historyId, "History...", linked);
@@ -810,6 +817,7 @@ void CloudController::forgetAccount()
     revisionsKept = 0;
     friendRequests = 0;
     songRole = songProjectName = {};
+    setPushTracks ({});
     lostAccess = false;
     oldServer = false;
     waitingHead = waitingText = {};
@@ -942,6 +950,7 @@ void CloudController::uploadSong()
                         return;
                     }
                     me->songRole = "owner";
+                    me->setPushTracks ({});
                     me->hooks.setStatus ("\"" + name + "\" is in the cloud (r1). Share it from Cloud > Projects.");
                     me->updateStatus();
                     me->refreshWindows();
@@ -992,6 +1001,17 @@ void CloudController::push()
     {
         alert ("Can't push", "The owner shared \"" + store->getCloudName() + "\" with you view-only: you can pull new versions, "
                              "but not push. Ask them to make you an editor.");
+        return;
+    }
+    if (ctx.isPushLimited())
+    {
+        ensureReady ([this]
+        {
+            askForText ("Push " + ctx.pushTrackNames,
+                        "Only " + ctx.pushTrackNames + " goes up, on top of the newest revision. Anything else you've "
+                        "changed stays on this computer.\n\nDescribe what you changed (your collaborators see this in History):",
+                        {}, [this] (const String& message) { pushYourTracks (message.trim(), 0); });
+        });
         return;
     }
     ensureReady ([this]
@@ -1049,6 +1069,63 @@ void CloudController::doPush (const String& parent, const String& message)
         }
         const auto& r = outcome->revision;
         hooks.setStatus ("Pushed " + r.label() + ": " + r.summary.upToFirstOccurrenceOf ("\n", false, false));
+        waitingHead = waitingText = {};
+        updateStatus();
+        if (history != nullptr)
+            if (auto* w = dynamic_cast<HistoryWindow*> (history.getComponent()))
+                w->refresh();
+    });
+}
+
+void CloudController::setPushTracks (const var& tracks)
+{
+    std::set<int> ids;
+    StringArray names;
+    if (auto* list = tracks.getArray())
+        for (auto& t : *list)
+        {
+            ids.insert ((int) t["id"]);
+            names.add (t["name"].toString().isNotEmpty() ? t["name"].toString() : "track " + t["id"].toString());
+        }
+    String text;
+    for (int i = 0; i < names.size(); ++i)
+        text << (i == 0 ? "" : i == names.size() - 1 ? " and " : ", ") << names[i];
+    if (ids == ctx.pushTracks && text == ctx.pushTrackNames)
+        return;
+    ctx.pushTracks = ids;
+    ctx.pushTrackNames = text;
+    if (ctx.pushTracksChanged)
+        ctx.pushTracksChanged();
+}
+
+void CloudController::pushYourTracks (const String& message, int attempt)
+{
+    auto snapshot = std::make_shared<cloud::Snapshot> (cloud::Snapshot::capture (ctx.edit));
+    auto outcome = std::make_shared<cloud::PushOutcome>();
+    auto c = client;
+    auto s = store;
+    auto progress = progressReporter();
+    const auto tracks = ctx.pushTracks;
+
+    run ("Pushing " + ctx.pushTrackNames, [c, s, snapshot, tracks, message, outcome, progress]
+    {
+        *outcome = cloud::pushTracks (*c, *s, *snapshot, tracks, message, progress);
+    },
+    [this, outcome, message, attempt]
+    {
+        // Someone pushed while we were: get theirs and put yours on top again (a few times).
+        if (outcome->conflict && attempt < 3)
+        {
+            pushYourTracks (message, attempt + 1);
+            return;
+        }
+        if (outcome->result.failed())
+        {
+            alert ("Couldn't push " + ctx.pushTrackNames, outcome->result.getErrorMessage());
+            return;
+        }
+        const auto& r = outcome->revision;
+        hooks.setStatus ("Pushed " + ctx.pushTrackNames + " as " + r.label() + ". What else you changed is still here, not in the cloud.");
         waitingHead = waitingText = {};
         updateStatus();
         if (history != nullptr)
@@ -1211,6 +1288,7 @@ void CloudController::openCloudSong (const var& song)
         {
             self->hooks.openProject (file);
             self->projectChanged();
+            self->setPushTracks (p["tracks"]);   // yours to push, right away (the poll confirms it)
             self->pull();
             return;
         }
@@ -1239,7 +1317,7 @@ void CloudController::openCloudSong (const var& song)
             else
                 *result = Result::fail ("\"" + name + "\" has no revisions yet. Ask its owner to push one.");
         },
-        [weak, songStore, outcome, project, result, projectFile, dest, name]
+        [weak, songStore, outcome, project, result, projectFile, dest, name, p]
         {
             auto* me = weak.get();
             if (me == nullptr)
@@ -1255,6 +1333,7 @@ void CloudController::openCloudSong (const var& song)
             songStore->setBase (outcome->head);
             me->hooks.openProject (projectFile);
             me->projectChanged();
+            me->setPushTracks (p["tracks"]);   // yours to push, right away (the poll confirms it)
             me->hooks.setStatus ("Opened \"" + name + "\" from the cloud, in " + dest.getFullPathName());
         });
     });
@@ -1455,12 +1534,14 @@ void CloudController::poll()
             {
                 self->songRole = (*song)["role"].toString();
                 self->songProjectName = (*song)["projectName"].toString();
+                self->setPushTracks ((*song)["tracks"]);
                 self->lostAccess = false;
             }
             else if (self->isOldServer (*songErr))
             {
                 self->oldServer = true;
                 self->songRole = {};
+                self->setPushTracks ({});
             }
             else if (songErr->status == 404 && err->status == 404)
             {

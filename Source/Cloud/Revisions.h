@@ -94,7 +94,7 @@ private:
 struct Snapshot
 {
     var project;
-    struct Audio { var clip; File file; };
+    struct Audio { var clip; File file; int trackId = -1; };   // trackId: -1 for returns and the master
     std::vector<Audio> audio;
     String hash;            // set by finish()
     MemoryBlock bytes;      // the JSON that hash is of
@@ -121,8 +121,21 @@ Result createCloudProject (Client&, LocalStore&, const String& name);
 /** Creates a song in one of your cloud projects and links this folder to it (no revision yet). */
 Result createCloudSong (Client&, LocalStore&, const String& name, const String& projectId);
 
-/** Pushes the snapshot as a new revision on top of parent ("" for the first). */
-PushOutcome push (Client&, LocalStore&, Snapshot&, const String& parent, const String& message, const Progress&);
+/** Pushes the snapshot as a new revision on top of parent ("" for the first). keepBlobs: files
+    the revision also uses that are already in the cloud (not uploaded again). */
+PushOutcome push (Client&, LocalStore&, Snapshot&, const String& parent, const String& message, const Progress&,
+                  const StringArray& keepBlobs = {});
+
+/** For someone the owner lets push only some tracks: gets the newest revision, puts these
+    tracks from `local` into it (everything else stays exactly as the newest revision has it),
+    and pushes that. What else you changed stays on this computer. A conflict means someone
+    pushed in between: capture again and retry. */
+PushOutcome pushTracks (Client&, LocalStore&, Snapshot& local, const std::set<int>& trackIds,
+                        const String& message, const Progress&);
+
+/** The project `base` with these tracks taken from `local` (same ids, same places). Fails if a
+    track isn't in one of them. Used by pushTracks; separate so it can be tested. */
+Result mergeTracks (const var& base, const var& local, const std::set<int>& trackIds, var& merged);
 
 struct PullOutcome
 {

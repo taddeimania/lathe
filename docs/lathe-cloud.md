@@ -14,19 +14,10 @@ Lathe can share a project with collaborators through Lathe Cloud. It works like 
 - **Cloud > Put This Song in the Cloud** uploads the open song (r1) into one of your projects, or a new one.
 - **Cloud > Projects** lists your projects and their songs, and songs shared with you on their own. Select one to see who has it. **Open** downloads a song, audio included, into `Documents/Lathe/Projects/<name>`.
 - Share a whole **project** (friends get every song in it, including ones added later) or a single **song**. Each person **can edit** (pull and push) or **can view** (pull only; they can still change their own copy, but can't push).
+- **Share only some tracks.** In **Cloud > Projects**, Share > a friend > **Can push only some tracks...** (the song has to be open, and pushed at least once). Tick the tracks they may push. They clone the whole song and can change anything on their computer, but a push sends only those tracks, put on top of the newest revision; everything else they changed stays on their computer. Lathe Cloud refuses any other change, so it holds whatever version of Lathe they use. Change the tracks later from the person's menu in the song's people list (**Pushes Guitar**), or make them a full editor.
+- What they see: a bar under the transport says "In “Song” you push Guitar. Everything else you change stays on this computer." Their tracks say **Yours** and are outlined in the arrangement and the mixer; the rest are dimmed (still playable and editable). **Cloud > Push Guitar...** pushes. Someone who can also edit the whole project isn't limited.
 - Only the owner manages a project or song: share, change someone's access, **Stop Sharing** (with one person or everyone), **Rename** (shares stay), **Move to Project** (a song; people who had it only through its old project, or shared on its own, lose it), and **Delete from Cloud**. Anyone can **Leave**.
 - When you lose access to something or become a viewer, Lathe tells you. Your copy on your computer is never touched: you just can't pull or push it anymore. **Cloud > Disconnect This Song** stops it asking.
-
-**Invite links**
-- **Cloud > Invite Someone by Link** makes a link (getlathe.app/join.html#...) to send however you like. Choose what it's for: just being friends, or the open song (if it's yours), to edit or view only. Song invites need a paid plan, like sharing.
-- Whoever opens it types their email. Without an account, Lathe Cloud makes one and emails a temporary password. The invite waits under that email and is claimed when they next sign in: you become friends, they get the song, and Lathe offers to open it. If your plan has no room for another free editor, they join as a viewer and are told so.
-- Someone already in Lathe can paste the link into **Cloud > Join with an Invite Link** instead.
-- A link works for 14 days, for up to 10 people. You can have 20 open at once.
-
-**Listening links**
-- **Cloud > Share a Listening Link** renders the song's mix as it sounds now (start to end, like File > Export Mix), uploads it (FLAC, lossless) and gives you a link (getlathe.app/listen.html#...). Anyone with it can play the mix in a browser, without Lathe or an account. Owners and editors can share; viewers can't.
-- Listeners can leave a note at a moment in the song, with their name. It arrives as a song note ("At 1:15: ..." from "Sam (listening link)"), and the owner gets a notice.
-- A song has one link. **Share the Latest Mix** after changes updates what it plays; the link stays the same. **Stop Sharing** ends it, and deleting the song does too.
 
 **Notes and conversations**
 - Leave a note on a track at a moment in the song: right-click the lane (or a clip) and choose **Add Note Here**, or **Track > Add Note at Start Marker** (Cmd/Ctrl+Alt+N). It shows as a speech bubble on the lane; the number is how many messages are in the thread.

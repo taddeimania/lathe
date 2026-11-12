@@ -97,6 +97,9 @@ private:
     std::unique_ptr<PluginBrowserWindow> browserWindow;
     std::unique_ptr<CloudController> cloud;
     std::unique_ptr<UpdateNotice> updateNotice;
+    /** Over the arrangement on a song shared so you push only some tracks: which ones. */
+    Label pushBanner;
+    void showPushBanner();
     std::unique_ptr<NotesController> notes;
     std::shared_ptr<assistant::Service> aiAssistant;   // AI assistant (MCP) connection
     std::unique_ptr<Divider> divider;
