@@ -7,6 +7,7 @@ Source/
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/Mp3Writer.*    MP3 export through LAME (fetched by CMake, cmake/lame/config.h)
   Cloud/Milestones.*    the opt-in, anonymous one-time milestones (asked once, MilestonesPanel in UI/Dialogs.cpp)
+  Cloud/CrashReports.*  crash reports: written on a crash, sent next launch only if the person says so (CrashPanel in UI/Dialogs.cpp)
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
   Host/                 "Run separately": RemotePlugin (Lathe's side, an AudioPluginInstance), HostMain (LatheHost,

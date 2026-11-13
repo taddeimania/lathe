@@ -1,6 +1,7 @@
 #include "Bench/Benchmark.h"
 #include "UI/MainComponent.h"
 #include "Cloud/Milestones.h"
+#include "Cloud/CrashReports.h"
 #include "Devices/Device.h"
 
 #include <iostream>
@@ -139,6 +140,9 @@ public:
         // Lathe has a settings file already, so it never asks there (Cloud/Milestones.h).
         const bool neverRunBefore = screenshotsDir == File() && ! options.getDefaultFile().existsAsFile();
         properties.setStorageParameters (options);
+        // From now on a crash leaves a short report next to the settings, sent only if the person
+        // says so next time (Cloud/CrashReports.h).
+        crashes::install (options.getDefaultFile().getSiblingFile ("Crashes"));
         if (neverRunBefore)
             milestones::markNeverRunBefore (*properties.getUserSettings());
         if (screenshotsDir != File())

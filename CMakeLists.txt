@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.12.9 LANGUAGES C CXX)
+project(Lathe VERSION 0.12.10 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -159,6 +159,7 @@ target_sources(Lathe PRIVATE
     Source/Engine/Engine.cpp
     Source/Engine/Mp3Writer.cpp
     Source/Cloud/Milestones.cpp
+    Source/Cloud/CrashReports.cpp
     Source/Engine/RenderPool.cpp
     Source/Engine/ClipJoin.cpp
     Source/UI/Theme.cpp
@@ -377,6 +378,7 @@ if(LATHE_BUILD_TESTS)
         Source/Engine/Engine.cpp
         Source/Engine/Mp3Writer.cpp
         Source/Cloud/Milestones.cpp
+        Source/Cloud/CrashReports.cpp
         Source/Engine/RenderPool.cpp
         Source/Engine/ClipJoin.cpp
         Source/Patcher/Updater.cpp

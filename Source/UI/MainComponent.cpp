@@ -9,6 +9,7 @@
 #include "../Demo/DemoSong.h"
 #include "../Demo/Welcome.h"
 #include "../Cloud/Milestones.h"
+#include "../Cloud/CrashReports.h"
 
 #include <iostream>
 
@@ -98,6 +99,29 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     transport.onOpenSettings = [this] { showSettingsDialog (ctx); };
 
     engine.onStatus = [this] (const String& m) { setStatus (m); };
+
+    // Crash-loop guard (Engine::loadGuardFile): a plug-in that crashed Lathe while loading runs
+    // separately from now on, so the song opens next time instead of crashing again.
+    if (! forScreenshots)
+    {
+        engine.loadGuardFile = settings.getFile().getSiblingFile ("Loading plug-in.txt");
+        for (auto& id : StringArray::fromLines (settings.getValue ("runSeparately")))
+            if (id.isNotEmpty())
+                engine.runSeparately.insert (id);
+        if (const auto crashed = engine.takeCrashedLoad(); crashed.isNotEmpty())
+        {
+            const auto id = crashed.upToFirstOccurrenceOf ("\n", false, false);
+            const auto name = crashed.fromFirstOccurrenceOf ("\n", false, false);
+            engine.runSeparately.insert (id);
+            StringArray ids;
+            for (auto& i : engine.runSeparately)
+                ids.add (i);
+            settings.setValue ("runSeparately", ids.joinIntoString ("\n"));
+            settings.saveIfNeeded();
+            crashedPluginNote = name + " crashed Lathe while it was loading last time, so it now runs separately: "
+                              "if it crashes again, only it stops. (Right-click it to change this.)";
+        }
+    }
     engine.onDeviceChanged = [this] { refreshAll(); };
     engine.onRecordingFinished = [this] { refreshAll(); milestones::reach (settings, "recorded"); };
 
@@ -274,6 +298,11 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::startup (const String& commandLine)
 {
+    if (crashedPluginNote.isNotEmpty())
+    {
+        Component::SafePointer<MainComponent> safe (this);
+        Timer::callAfterDelay (2500, [safe] { if (safe != nullptr) safe->setStatus (safe->crashedPluginNote); });
+    }
     // Anonymous milestones: asked once, on a brand-new install only (Main.cpp sets askMilestones
     // when there was no settings file), after the window is up. Never after an update.
     // Nothing is sent unless they say yes (Cloud/Milestones.h).
@@ -287,6 +316,16 @@ void MainComponent::startup (const String& commandLine)
             {
                 if (safe != nullptr && milestones::shouldAsk (safe->settings))
                     showMilestonesDialog (safe->settings);
+            });
+        }
+        else
+        {
+            // Crashed last time? Ask before sending the report (or follow Settings > Privacy).
+            Component::SafePointer<MainComponent> safe (this);
+            Timer::callAfterDelay (1500, [safe]
+            {
+                if (safe != nullptr)
+                    handleCrashReports (safe->settings);
             });
         }
     }
@@ -793,10 +832,13 @@ void MainComponent::writeAutosave()
 void MainComponent::reloadMissingPlugins()
 {
     int reloaded = 0;
-    for (auto* list : { &edit.tracks, &edit.buses })
+    std::vector<std::shared_ptr<Track>> master { edit.master };
+    for (auto* list : { &edit.tracks, &edit.buses, &master })
     {
         for (auto& t : *list)
         {
+            if (t == nullptr)
+                continue;
             for (auto& slot : t->plugins)
             {
                 if (slot->instance != nullptr)

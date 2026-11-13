@@ -12,6 +12,7 @@
 #include "Cloud/Merge.h"
 #include "Cloud/Packing.h"
 #include "Cloud/Milestones.h"
+#include "Cloud/CrashReports.h"
 #include "Assistant/AssistantServer.h"
 #include "Assistant/AssistantTools.h"
 #include "Assistant/MixAnalysis.h"
@@ -253,6 +254,42 @@ int main (int argc, char** argv)
     }
     if (argc >= 3 && String (argv[1]) == "--dump")    // LatheTests --dump <folder> [threads]
         return lathe::bench::dump (File::getCurrentWorkingDirectory().getChildFile (argv[2]), argc >= 4 ? String (argv[3]).getIntValue() : 1, std::cout);
+    if (argc >= 4 && String (argv[1]) == "--crash-on-load")   // the crash-loop guard test's child: loads a plug-in that crashes
+    {
+        PropertiesFile::Options o;
+        PropertiesFile p (File (argv[3]).getSiblingFile ("child.settings"), o);
+        PluginHost h (p);
+        AudioPool pl;
+        Engine e (h, pl, p);
+        e.loadGuardFile = File (argv[3]);
+        // FlakyFixture, with settings it can't take: it crashes while Lathe loads them.
+        VST3PluginFormat vst3;
+        OwnedArray<PluginDescription> found;
+        vst3.findAllTypesForFile (found, argv[2]);
+        if (found.isEmpty())
+            return 3;
+        if (auto xml = found[0]->createXml())
+            xml->writeTo (File (argv[3]).getSiblingFile ("crasher.xml"));
+        // Settings it can't take, made the way a collaborator's Lathe would save them.
+        String error;
+        auto maker = vst3.createInstanceFromDescription (*found[0], 48000.0, 512, error);
+        if (maker == nullptr)
+            return 4;
+        maker->prepareToPlay (48000.0, 512);
+        maker->getParameters()[0]->setValueNotifyingHost (0.78f);
+        {
+            AudioBuffer<float> buf (2, 512);
+            buf.clear();
+            MidiBuffer midi;
+            maker->processBlock (buf, midi);   // VST3 hands parameter changes over while processing
+        }
+        MemoryBlock theirs;
+        maker->getStateInformation (theirs);
+        File (argv[3]).getSiblingFile ("theirs.bin").replaceWithData (theirs.getData(), theirs.getSize());
+        e.makeSlot (*found[0], theirs, error, false);
+        std::cerr << "loaded without crashing: " << error << std::endl;
+        return 0;   // not reached: the plug-in crashes while loading
+    }
     if (argc >= 2 && String (argv[1]) == "--bench")   // LatheTests --bench [out.csv] [1,full]
     {
         const File csv = File::getCurrentWorkingDirectory().getChildFile (argc >= 3 ? argv[2] : "lathe-bench.csv");
@@ -1031,6 +1068,221 @@ int main (int argc, char** argv)
         for (auto& n : milestones::names())
             check (milestones::describe (n).isNotEmpty(), "described: " + n);
         milestones::setSenderForTests ({});
+    }
+
+    std::cout << "Missing plug-ins everywhere (a collaborator doesn't have them)" << std::endl;
+    {
+        auto missing = [] (const String& name, bool instrument)
+        {
+            auto slot = std::make_shared<PluginSlot>();
+            slot->description.name = name;
+            slot->description.manufacturerName = "Someone Else";
+            slot->description.pluginFormatName = "VST3";
+            slot->description.fileOrIdentifier = "/Library/Audio/Plug-Ins/VST3/" + name + ".vst3";
+            slot->description.isInstrument = instrument;
+            const char bytes[] = "their settings, from their computer";
+            slot->savedState.append (bytes, sizeof (bytes));
+            return slot;
+        };
+        Edit m;
+        m.tempo = 120.0;
+        m.sampleRate = 48000.0;
+        engine.setEdit (&m);
+        auto keys = m.addTrack (TrackKind::midi, "Keys");
+        keys->plugins.push_back (missing ("Serum 2", true));
+        {
+            Clip c;
+            c.id = m.newId();
+            c.kind = ClipKind::midi;
+            c.start = 0.0;
+            c.length = 8.0;
+            c.notes = { { 60, 0.0, 2.0, 0.9f }, { 64, 2.0, 2.0, 0.9f } };
+            keys->clips.push_back (c);
+        }
+        auto gtr = m.addTrack (TrackKind::audio, "Guitar");
+        gtr->plugins.push_back (missing ("Amp Room", false));
+        gtr->plugins.push_back (missing ("Tape Thing", false));
+        auto ret = m.addTrack (TrackKind::bus, "Verb");
+        ret->plugins.push_back (missing ("Valhalla Room", false));
+        m.master->plugins.push_back (missing ("Mastering Chain", false));
+        engine.rebuild();
+
+        // Play: run the audio callback for a while.
+        {
+            AudioBuffer<float> out (2, 512);
+            engine.play();
+            for (int i = 0; i < 40; ++i)
+            {
+                out.clear();
+                float* chans[] = { out.getWritePointer (0), out.getWritePointer (1) };
+                engine.audioDeviceIOCallbackWithContext (nullptr, 0, chans, 2, 512, {});
+            }
+            engine.stop();
+            check (true, "plays with a missing instrument, effects, return and master plug-in");
+        }
+
+        // Export mix and stems.
+        {
+            Engine::ExportSettings s;
+            s.mix = true; s.stems = true; s.startBeat = 0.0; s.endBeat = 8.0; s.tailSeconds = 0.5;
+            s.folder = dir.getChildFile ("Missing export");
+            s.baseName = "Song";
+            StringArray files;
+            const auto r = engine.exportAudio (s, [] (double) { return true; }, files);
+            check (r.wasOk() && ! files.isEmpty(), "exports the mix and stems with missing plug-ins (" + r.getErrorMessage() + ")");
+        }
+
+        // Save and open again: every missing plug-in keeps its settings, byte for byte.
+        {
+            const auto saved = m.toVar (false);
+            Edit again;
+            again.loadFrom (saved, dir, [] (const PluginDescription& d, const MemoryBlock& state, bool separate)
+            {
+                auto slot = std::make_shared<PluginSlot>();
+                slot->description = d;
+                slot->savedState = state;
+                slot->separate = separate;
+                return slot;
+            });
+            check (JSON::toString (again.toVar (false)) == JSON::toString (saved), "a song with missing plug-ins saves back exactly as it came");
+        }
+
+        // The engine's own loading: not installed is a placeholder with the settings, never a crash.
+        {
+            String error;
+            auto slot = engine.makeSlot (keys->plugins[0]->description, keys->plugins[0]->savedState, error, false);
+            check (slot != nullptr && slot->isMissing() && slot->savedState == keys->plugins[0]->savedState && error.contains ("isn't installed"),
+                   "loading a plug-in that isn't installed gives a placeholder that keeps its settings");
+            auto again = engine.makeSlot (keys->plugins[0]->description, keys->plugins[0]->savedState, error, true);
+            check (again != nullptr && again->isMissing() && again->savedState == keys->plugins[0]->savedState, "...also when it was set to run separately");
+            auto remade = engine.remakeSlot (*slot, true, error);
+            check (remade->isMissing() && remade->savedState == slot->savedState, "switching Run Separately on a missing plug-in keeps its settings");
+        }
+
+        // The AI assistant, on every missing plug-in.
+        {
+            assistant::Tools tools (m, engine);
+            String status;
+            auto args = [] (std::initializer_list<std::pair<const char*, var>> kv)
+            {
+                auto* o = new DynamicObject();
+                for (auto& p : kv) o->setProperty (p.first, p.second);
+                return var (o);
+            };
+            auto text = [] (const var& r) { return r["content"][0]["text"].toString(); };
+            const auto session = JSON::parse (text (tools.call ("describe_session", args ({}), status)));
+            check (session["tracks"][0]["plugins"][0]["role"].toString().startsWith ("missing"), "describe_session says it's missing");
+            for (auto* t : { "Keys", "Guitar", "Verb", "Master" })
+                tools.call ("describe_track", args ({ { "track", t } }), status);
+            auto r = tools.call ("get_plugin_params", args ({ { "track", "Keys" }, { "plugin", "Serum 2" } }), status);
+            check ((bool) r["isError"] && text (r).contains ("isn't installed"), "get_plugin_params says it can't read a missing plug-in");
+            r = tools.call ("set_plugin_params", args ({ { "track", "Guitar" }, { "plugin", "Amp Room" },
+                                                         { "changes", JSON::parse (R"([{"param":"Gain","value":0.5}])") } }), status);
+            check ((bool) r["isError"] && text (r).contains ("isn't installed"), "set_plugin_params refuses a missing plug-in");
+            auto change = [&] (const String& json) { return tools.call ("edit_session", JSON::parse (R"({"changes":)" + json + "}"), status); };
+            change (R"([{"action":"set_plugin_on","track":"Guitar","plugin":"Amp Room","on":false}])");
+            change (R"([{"action":"move_plugin","track":"Guitar","plugin":"Tape Thing","position":1}])");
+            change (R"([{"action":"set_plugin_on","track":"Master","plugin":"Mastering Chain","on":false}])");
+            r = change (R"([{"action":"remove_plugin","track":"Verb","plugin":"Valhalla Room"}])");
+            check (! (bool) r["isError"] && ret->plugins.empty(), "bypassing, moving and removing missing plug-ins work");
+            tools.findProblems();
+        }
+
+        // What changed, for a push: comparing versions with missing plug-ins in both.
+        {
+            Edit before;
+            before.loadFrom (m.toVar (false), dir, [] (const PluginDescription& d, const MemoryBlock& st, bool)
+            { auto slot = std::make_shared<PluginSlot>(); slot->description = d; slot->savedState = st; return slot; });
+            keys->plugins[0]->bypassed = true;
+            const auto summary = cloud::summariseChanges (before.toVar (false), m.toVar (false));
+            check (summary.isNotEmpty(), "summarising changes with missing plug-ins works: " + summary.replace ("\n", " | "));
+        }
+
+        // Crash-loop guard: a plug-in that crashed Lathe while loading is named next time, once.
+        {
+            const auto guard = dir.getChildFile ("Loading plug-in.txt");
+            engine.loadGuardFile = guard;
+            String error;
+            engine.makeSlot (keys->plugins[0]->description, {}, error, false);
+            check (! guard.exists(), "loading a missing plug-in leaves no guard behind");
+            guard.replaceWithText ("VST3-Serum 2-abc\nSerum 2");      // as if Lathe crashed mid-load
+            check (engine.takeCrashedLoad() == "VST3-Serum 2-abc\nSerum 2" && ! guard.exists() && engine.takeCrashedLoad().isEmpty(),
+                   "the plug-in that was loading when Lathe crashed is reported once");
+            engine.loadGuardFile = File();
+
+            // The real thing: a plug-in that crashes as Lathe loads a collaborator's settings into it
+            // (in a child process, standing in for Lathe).
+            const auto fixtures = File (SystemStats::getEnvironmentVariable ("LATHE_TEST_VST3_DIR", {}));
+            const auto crasher = fixtures.getChildFile ("FlakyFixture.vst3");
+            if (crasher.exists())
+            {
+                const auto childGuard = dir.getChildFile ("child guard.txt");
+                ChildProcess child;
+                child.start (StringArray { File::getSpecialLocation (File::currentExecutableFile).getFullPathName(),
+                                           "--crash-on-load", crasher.getFullPathName(), childGuard.getFullPathName() });
+                child.waitForProcessToFinish (60000);
+                const auto crashed = childGuard.loadFileAsString();
+                check (crashed.contains ("FlakyFixture"),
+                       "a plug-in that crashes while loading leaves the guard behind, naming it");
+
+                // Next start: it's moved out of Lathe's process, so the song opens instead of crashing again.
+                engine.loadGuardFile = childGuard;
+                const auto id = engine.takeCrashedLoad().upToFirstOccurrenceOf ("\n", false, false);
+                engine.runSeparately.insert (id);
+                PluginDescription d;
+                if (auto xml = parseXML (childGuard.getSiblingFile ("crasher.xml")))
+                    d.loadFromXml (*xml);
+                String error;
+                MemoryBlock theirs;
+                childGuard.getSiblingFile ("theirs.bin").loadFileAsData (theirs);
+                auto slot = engine.makeSlot (d, theirs, error, false);
+                check (slot != nullptr && slot->isMissing() && slot->separate && slot->savedState == theirs,
+                       "next time it loads separately: it crashes there, Lathe carries on, and the settings are kept (" + error.substring (0, 100) + ")");
+                auto ok = engine.makeSlot (d, {}, error, false);
+                check (ok != nullptr && ! ok->isMissing() && ok->separate, "...and with settings it can take, it runs (separately)");
+                engine.runSeparately.clear();
+                engine.loadGuardFile = File();
+            }
+        }
+        engine.setEdit (&edit);
+        engine.rebuild();
+    }
+
+    std::cout << "Crash reports (asked before sending)" << std::endl;
+    {
+        const auto here = crashes::captureForTests();
+        check (here.startsWith ("Lathe ") && here.contains ("LatheTests + 0x"), "a report names each step as <file> + <offset>");
+        const auto home = File::getSpecialLocation (File::userHomeDirectory).getFullPathName();
+        const auto cleaned = crashes::scrub ("loaded " + home + "/Music/My Band/song.lathe\nfrom /Users/mara/Desktop/x\nC:\\Users\\dev\\AppData\\y");
+        check (! cleaned.contains (home) && ! cleaned.contains ("mara") && ! cleaned.contains ("dev\\AppData") && ! cleaned.contains ("My Band"),
+               "home folders and other people's paths are taken out: " + cleaned.replace ("\n", " | "));
+        check (crashes::compose ("x", StringArray::fromTokens (String::repeatedString ("a", 300), "", ""), 1.0).length() < 17 * 1024
+                   && crashes::compose ("x", [] { StringArray a; for (int i = 0; i < 2000; ++i) a.add (String::repeatedString ("f", 40)); return a; }(), 1).length() <= 16 * 1024,
+               "a report is at most 16 KB");
+
+        const auto folder = dir.getChildFile ("Crashes");
+        folder.createDirectory();
+        folder.getChildFile ("crash-200.txt").replaceWithText ("Lathe 0.12.9 crashed: SIGSEGV\nfrom " + home + "/x");
+        folder.getChildFile ("crash-100.txt").replaceWithText ("Lathe 0.12.9 crashed: SIGABRT");
+        folder.getChildFile ("notes.txt").replaceWithText ("not a report");
+        auto waiting = crashes::pending (folder);
+        check (waiting.size() == 2 && waiting[0].getFileName() == "crash-100.txt", "pending reports, oldest first, nothing else");
+
+        Array<var> sent;
+        crashes::setSenderForTests ([&] (const var& v) { sent.add (v); });
+        crashes::send (waiting[1]);
+        check (sent.size() == 1 && sent[0]["report"].toString().contains ("SIGSEGV") && ! sent[0]["report"].toString().contains (home)
+                   && sent[0].getDynamicObject()->getProperties().size() == 3 && sent[0]["version"].toString().isNotEmpty(),
+               "sending sends version, system and the cleaned report: nothing else");
+        crashes::dismiss (waiting[0]);
+        check (crashes::pending (folder).isEmpty() && sent.size() == 1, "sent and dismissed reports are deleted; dismissed ones aren't sent");
+        crashes::setSenderForTests ({});
+
+        PropertiesFile::Options po;
+        PropertiesFile p (dir.getChildFile ("crash.settings"), po);
+        check (crashes::choice (p) == crashes::Choice::ask, "asks by default");
+        crashes::setChoice (p, crashes::Choice::never);
+        check (crashes::choice (p) == crashes::Choice::never, "remembers never");
     }
 
     std::cout << "Export formats" << std::endl;
@@ -2817,7 +3069,8 @@ int main (int argc, char** argv)
     {
         namespace up = lathe::updater;
         check (up::compareVersions ("v0.10.0", "0.9.2") > 0 && up::compareVersions ("0.2.0", "v0.2.0") == 0
-                 && up::compareVersions ("0.2.0", "0.2.1") < 0, "version comparison");
+                 && up::compareVersions ("0.2.0", "0.2.1") < 0
+                 && up::compareVersions ("v0.12.10", "0.12.9") > 0, "version comparison (0.12.10 is newer than 0.12.9)");
 
         const auto json = JSON::parse (R"({"tag_name":"v0.3.0","body":"What's new","html_url":"https://example/release",
             "assets":[{"name":"Lathe-0.3.0-Windows.zip","browser_download_url":"https://example/w","size":10,"digest":"sha256:ABCD"},

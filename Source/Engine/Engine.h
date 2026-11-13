@@ -150,6 +150,17 @@ public:
         Lathe's own devices always run inside. A plug-in that won't start separately is loaded
         the usual way, with `error` saying so. */
     std::shared_ptr<PluginSlot> makeSlot (const PluginDescription&, const MemoryBlock& state, String& error, bool separate = false);
+
+    /** Crash-loop guard. While a plug-in loads inside Lathe, its id is written to this file and
+        removed once it's loaded. If Lathe crashes during the load (a plug-in that can't take
+        settings saved on another computer, say), the file is still there next time:
+        takeCrashedLoad() returns the plug-in, and the caller adds it to `runSeparately`, so the
+        song opens instead of crashing again. Empty file: no guard (tests, benchmarks). */
+    File loadGuardFile;
+    /** Plug-ins (identifier strings) that always run separately, whatever the song says. */
+    std::set<String> runSeparately;
+    /** The plug-in that was loading when Lathe last crashed, if any (and clears the guard). */
+    String takeCrashedLoad();
     /** Turns "Run separately" on or off: a new slot with the same settings, the other way. */
     std::shared_ptr<PluginSlot> remakeSlot (PluginSlot& slot, bool separate, String& error);
     void prepareSlot (PluginSlot&);

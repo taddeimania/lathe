@@ -584,6 +584,15 @@ void setRunSeparately (AppContext& ctx, Track& t, const std::shared_ptr<PluginSl
         return;
     String error;
     slot->window.reset();
+    if (! separate)
+    {
+        // Their choice now, even for one Lathe moved out after it crashed on loading.
+        ctx.engine.runSeparately.erase (slot->description.createIdentifierString());
+        StringArray ids;
+        for (auto& i : ctx.engine.runSeparately)
+            ids.add (i);
+        ctx.settings.setValue ("runSeparately", ids.joinIntoString ("\n"));
+    }
     auto fresh = ctx.engine.remakeSlot (*slot, separate, error);
     if (fresh->instance == nullptr && slot->instance != nullptr)
     {

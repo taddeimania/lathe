@@ -577,6 +577,15 @@ void Engine::prepareSlot (PluginSlot& slot)
     slot.preparedBlock = bs;
 }
 
+String Engine::takeCrashedLoad()
+{
+    if (loadGuardFile == File() || ! loadGuardFile.existsAsFile())
+        return {};
+    const auto text = loadGuardFile.loadFileAsString().replace ("\r\n", "\n").trim();
+    loadGuardFile.deleteFile();
+    return text;   // "<identifier>\n<name>"
+}
+
 std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, const MemoryBlock& state, String& error, bool separate)
 {
     auto slot = std::make_shared<PluginSlot>();
@@ -584,6 +593,9 @@ std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, co
 
     const double sr = deviceRate.load() > 0 ? deviceRate.load() : 48000.0;
     const int bs = deviceBlock.load() > 0 ? deviceBlock.load() : 512;
+
+    if (auto r = host.resolve (saved); r && ! separate && ! devices::isBuiltIn (*r) && runSeparately.count (r->createIdentifierString()) > 0)
+        separate = true;   // it crashed Lathe while loading before: keep it out of Lathe's process
 
     if (auto resolved = host.resolve (saved); resolved && separate && ! devices::isBuiltIn (*resolved))
     {
@@ -615,6 +627,10 @@ std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, co
 
     if (auto resolved = host.resolve (saved))
     {
+        // If this crashes, the file stays behind and the next start knows which plug-in it was.
+        const bool guarded = loadGuardFile != File() && ! devices::isBuiltIn (*resolved);
+        if (guarded)
+            loadGuardFile.replaceWithText (resolved->createIdentifierString() + "\n" + resolved->name, false, false, "\n");
         String createError;
         slot->instance = host.create (*resolved, sr, bs, createError);
         if (error.isEmpty())
@@ -627,6 +643,8 @@ std::shared_ptr<PluginSlot> Engine::makeSlot (const PluginDescription& saved, co
                 slot->instance->setStateInformation (state.getData(), (int) state.getSize());
             prepareSlot (*slot);
         }
+        if (guarded)
+            loadGuardFile.deleteFile();
     }
 
     if (slot->instance == nullptr)

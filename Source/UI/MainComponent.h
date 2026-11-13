@@ -75,6 +75,7 @@ private:
     void loadProjectFile (const File& file, const File& readFrom);
     Edit::PluginFactory makePluginFactory (StringArray& missing);
     void reloadMissingPlugins();
+    String crashedPluginNote;   // a plug-in that crashed Lathe while loading, moved out (Engine::loadGuardFile)
     void ensureBuiltInTemplates();
     Array<File> templateFiles();
     void deleteTemplate (const File&);

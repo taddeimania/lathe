@@ -11,6 +11,8 @@ void showSettingsDialog (AppContext&);
 
 /** Asks, once, on a new install, whether Lathe may send anonymous one-time milestones (Cloud/Milestones.h). */
 void showMilestonesDialog (PropertiesFile&);
+/** If Lathe crashed last time: sends, drops or asks about the reports (Cloud/CrashReports.h). */
+void handleCrashReports (PropertiesFile&);
 /** That window, drawn at 2x, for Lathe --screenshots (the privacy page shows it). */
 Image milestonesDialogImage();
 

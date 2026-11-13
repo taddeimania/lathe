@@ -1,5 +1,6 @@
 #include "Dialogs.h"
 #include "../Cloud/Milestones.h"
+#include "../Cloud/CrashReports.h"
 #include "BinaryData.h"
 
 namespace lathe
@@ -137,10 +138,20 @@ public:
         whatsSent.setColour (HyperlinkButton::textColourId, theme::accent);
         addAndMakeVisible (whatsSent);
 
+        crashLabel = makeNote (*this, labels, "Crash reports");
+        crashBox.addItem ("Ask each time", 1);
+        crashBox.addItem ("Always send", 2);
+        crashBox.addItem ("Never send", 3);
+        crashBox.setSelectedId (1 + (int) crashes::choice (ctx.settings), dontSendNotification);
+        crashBox.onChange = [this] { crashes::setChoice (ctx.settings, (crashes::Choice) (crashBox.getSelectedId() - 1)); };
+        addAndMakeVisible (crashBox);
+        crashNote = makeNote (*this, labels, "If Lathe crashes, the next time it opens it asks before sending the report: "
+                                             "where in Lathe it stopped, its version and your system. Nothing from your songs.");
+
         ctx.engine.deviceManager.addChangeListener (this);
         updateNotes();
         startTimer (500);
-        setSize (640, 1000);
+        setSize (640, 1076);
     }
 
     ~SettingsPanel() override
@@ -215,6 +226,12 @@ public:
         whatsSent.setBounds (p.removeFromLeft (160));
         r.removeFromTop (2);
         privacyNote->setBounds (r.removeFromTop (34));
+        r.removeFromTop (8);
+        auto c = r.removeFromTop (24);
+        crashLabel->setBounds (c.removeFromLeft (120));
+        crashBox.setBounds (c.removeFromLeft (160));
+        r.removeFromTop (2);
+        crashNote->setBounds (r.removeFromTop (34));
     }
 
 private:
@@ -225,7 +242,8 @@ private:
     AudioDeviceSelectorComponent devices;
     OwnedArray<Label> labels;
     Label *audioHeading {}, *offsetNote {}, *pluginHeading {}, *pluginNote {}, *startupHeading {}, *rateLabel {};
-    Label *processingHeading {}, *coresLabel {}, *coresNote {}, *privacyHeading {}, *privacyNote {};
+    Label *processingHeading {}, *coresLabel {}, *coresNote {}, *privacyHeading {}, *privacyNote {}, *crashLabel {}, *crashNote {};
+    ComboBox crashBox;
     ToggleButton shareMilestones;
     HyperlinkButton whatsSent;
     Slider offset;
@@ -330,6 +348,89 @@ private:
     Label heading, intro, never, later;
     HyperlinkButton whatsSent;
     TextButton dontShare { "Don't share" }, share { "Share milestones" };
+};
+
+//==============================================================================
+/** "Lathe quit unexpectedly last time": asks before sending crash reports, and shows them. */
+class CrashPanel : public Component
+{
+public:
+    CrashPanel (PropertiesFile& s, Array<File> r) : settings (s), reports (std::move (r))
+    {
+        heading.setText (reports.size() == 1 ? "Lathe quit unexpectedly last time."
+                                             : "Lathe quit unexpectedly " + String (reports.size()) + " times.",
+                         dontSendNotification);
+        heading.setFont (theme::font (17.0f, true));
+        addAndMakeVisible (heading);
+        intro.setText ("Sending the report helps me find what went wrong and fix it. It's the text below: where in "
+                       "Lathe's code it stopped, Lathe's version and your system. Nothing from your songs, no names, "
+                       "no account.", dontSendNotification);
+        intro.setFont (theme::font (13.0f));
+        intro.setJustificationType (Justification::topLeft);
+        addAndMakeVisible (intro);
+
+        String all;
+        for (auto& f : reports)
+            all << crashes::reportText (f) << "\n";
+        report.setMultiLine (true);
+        report.setReadOnly (true);
+        report.setScrollbarsShown (true);
+        report.setFont (Font (FontOptions (Font::getDefaultMonospacedFontName(), 11.5f, Font::plain)));
+        report.setText (all.trimEnd(), false);
+        addAndMakeVisible (report);
+
+        remember.setButtonText ("Remember my answer");
+        addAndMakeVisible (remember);
+        whatsSent.setButtonText ("What's sent, and what I do with it");
+        whatsSent.setURL (URL (crashes::explainUrl));
+        whatsSent.setFont (theme::font (12.5f), false, Justification::centredLeft);
+        whatsSent.setColour (HyperlinkButton::textColourId, theme::accent);
+        addAndMakeVisible (whatsSent);
+        dontSend.onClick = [this] { answer (false); };
+        sendIt.onClick = [this] { answer (true); };
+        addAndMakeVisible (dontSend);
+        addAndMakeVisible (sendIt);
+        setSize (560, 470);
+    }
+
+    // Closed without an answer: the reports stay, and Lathe asks again next time.
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (22, 18);
+        heading.setBounds (r.removeFromTop (26));
+        r.removeFromTop (6);
+        intro.setBounds (r.removeFromTop (54));
+        auto buttons = r.removeFromBottom (30);
+        r.removeFromBottom (8);
+        auto under = r.removeFromBottom (24);
+        remember.setBounds (under.removeFromLeft (200));
+        whatsSent.setBounds (under.removeFromRight (240));
+        r.removeFromBottom (6);
+        report.setBounds (r);
+        sendIt.setBounds (buttons.removeFromRight (160));
+        buttons.removeFromRight (10);
+        dontSend.setBounds (buttons.removeFromRight (160));
+    }
+
+private:
+    void answer (bool yes)
+    {
+        for (auto& f : reports)
+            yes ? crashes::send (f) : crashes::dismiss (f);
+        if (remember.getToggleState())
+            crashes::setChoice (settings, yes ? crashes::Choice::always : crashes::Choice::never);
+        if (auto* w = findParentComponentOfClass<DialogWindow>())
+            w->exitModalState (0);
+    }
+
+    PropertiesFile& settings;
+    Array<File> reports;
+    Label heading, intro;
+    TextEditor report;
+    ToggleButton remember;
+    HyperlinkButton whatsSent;
+    TextButton dontSend { "Don't send" }, sendIt { "Send report" };
 };
 
 //==============================================================================
@@ -788,6 +889,27 @@ void launch (Component* content, const String& title, bool resizable)
 void showSettingsDialog (AppContext& ctx)
 {
     launch (new SettingsPanel (ctx), "Audio / MIDI Settings", true);
+}
+
+void handleCrashReports (PropertiesFile& settings)
+{
+    const auto reports = crashes::pending (crashes::defaultFolder());
+    if (reports.isEmpty())
+        return;
+    switch (crashes::choice (settings))
+    {
+        case crashes::Choice::always: for (auto& f : reports) crashes::send (f);    return;
+        case crashes::Choice::never:  for (auto& f : reports) crashes::dismiss (f); return;
+        case crashes::Choice::ask:    break;
+    }
+    DialogWindow::LaunchOptions o;
+    o.content.setOwned (new CrashPanel (settings, reports));
+    o.dialogTitle = "Crash report";
+    o.dialogBackgroundColour = theme::panel;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+    o.launchAsync();
 }
 
 void showMilestonesDialog (PropertiesFile& settings)

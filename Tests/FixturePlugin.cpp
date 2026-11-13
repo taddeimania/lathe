@@ -3,7 +3,9 @@
 //   LATHE_FIXTURE_CRASH  crashes as soon as the host creates it
 //   LATHE_FIXTURE_HANG   never finishes being created
 //   LATHE_FIXTURE_FLAKY  for "Run separately": halves the audio (Gain), keeps its settings in
-//                        its state, and crashes in processBlock once "Crash" is switched on
+//                        its state, and crashes in processBlock once "Crash" is switched on,
+//                        or while loading settings with Gain at 0.78 (settings it can't take,
+//                        like ones saved by another version on someone else's computer)
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -56,6 +58,8 @@ public:
     }
     void setStateInformation (const void* data, int size) override
     {
+        if (size >= 4 && std::abs (juce::MemoryInputStream (data, (size_t) size, false).readFloat() - 0.78f) < 0.004f)
+            std::abort();
         if (size >= 4)
             *gain = juce::MemoryInputStream (data, (size_t) size, false).readFloat();
     }

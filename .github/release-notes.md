@@ -3,6 +3,20 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.10
+
+- **Crash reports, only if you say so.** If Lathe crashes, the next time it opens it shows you a short
+  report (Lathe's version, your system, and where in Lathe it stopped; nothing from your songs) and
+  asks whether to send it. Settings > Privacy can make that always or never.
+  [What's in a report](https://getlathe.app/privacy.html#crashes).
+
+- **A plug-in that crashes Lathe while a song opens won't do it twice.** Some plug-ins can't take
+  settings saved by another version or on someone else's computer. Lathe now remembers which one
+  was loading when it crashed and runs it separately from then on, so the song opens.
+- Fixed: a missing plug-in on the master didn't load after a plug-in scan found it.
+
+Crash reports need the updated Lathe Cloud server (lathe-backend: `terraform apply`).
+
 ## New in 0.12.9
 
 - **Notes stay on the right track.** Each track now has a permanent tag that notes point at, so a
