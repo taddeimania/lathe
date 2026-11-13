@@ -147,6 +147,10 @@ struct CueMix
 struct Track
 {
     int id = 0;
+    /** A permanent tag, made when the track is made and never changed or reused. Notes point at
+        it: the number (id) can be renumbered when two people add tracks at once, or reused after
+        a track is deleted. Tracks from before tags read as "id-<number>". */
+    String uid;
     TrackKind kind = TrackKind::audio;
     String name;
     Colour colour;
@@ -254,6 +258,13 @@ public:
     bool isEffectivelyMuted (const Track&) const;
     bool isEffectivelySoloed (const Track&) const;
     std::shared_ptr<Track> findTrack (int trackId) const;
+    std::shared_ptr<Track> findTrackByUid (const String& uid) const;
+    /** The track a note is on, or null if it isn't in this copy of the song. Notes with a tag go
+        by the tag; older ones by number, but only onto a track from before tags (a newer track
+        with the same number isn't the one they were left on). */
+    std::shared_ptr<Track> trackForNote (const SongNote&) const;
+    /** A new tag: "t-" and 16 random hex digits. */
+    static String newTrackUid();
 
     // --- cue (monitor) mixes
     /** New cue mix starting as a copy of the main mix's levels and pans. */

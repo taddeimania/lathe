@@ -269,13 +269,18 @@ Result write (const File& folder, Songs& out)
         Edit e;
         build (e, plainDir, {});
         int vocalId = -1;
+        String vocalUid;
         for (auto& t : e.tracks)
             if (t->name == "Vocal")
+            {
                 vocalId = t->id;
+                vocalUid = t->uid;
+            }
 
         SongNote n;
         n.id = "demo-note-1";
         n.track = vocalId;
+        n.trackUid = vocalUid;
         n.trackName = "Vocal";
         n.beat = 32.0;   // bar 9
         n.author = "Dev@example.com";

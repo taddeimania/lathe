@@ -97,6 +97,8 @@ public:
     bool isUnfinishedShare() const;
     bool isSignedIn() const        { return client != nullptr && client->isSignedIn(); }
     bool isBusy() const noexcept   { return busy; }
+    /** A newer revision is on the server than the one open (Pull would get it). */
+    bool hasNewerRevision() const noexcept   { return waitingHead.isNotEmpty(); }
     /** What's running ("Uploading  45%"), for the quit warning. */
     String getActivity() const     { return activity; }
     /** Stops what's running at the next safe point (between files or upload parts). */

@@ -2528,6 +2528,13 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
                 const auto name = String (number[tap.trackId]).paddedLeft ('0', 2) + " " + tap.name;
                 o.file = s.folder.getChildFile (File::createLegalFileName (s.baseName + " - " + name) + extension);
             }
+            // Never write over a file that's already there (an earlier export in a folder you
+            // chose): "Song (2).wav" instead.
+            {
+                const auto wanted = o.file;
+                for (int n = 2; o.file.exists(); ++n)
+                    o.file = wanted.getSiblingFile (wanted.getFileNameWithoutExtension() + " (" + String (n) + ")" + wanted.getFileExtension());
+            }
             o.writer = makeWriter (o.file);
             if (o.writer == nullptr)
                 return Result::fail ("Couldn't write " + o.file.getFullPathName());

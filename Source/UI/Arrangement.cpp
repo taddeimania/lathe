@@ -1110,9 +1110,12 @@ private:
         {
             if (! ctx.notes->isShownOnTracks (n))
                 continue;
+            const auto onTrack = ctx.edit.trackForNote (n);   // by the track's tag, not its number
+            if (onTrack == nullptr)
+                continue;
             for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
             {
-                if (ctx.edit.tracks[(size_t) i]->id != n.track || ! owner.isTrackShown (i))
+                if (ctx.edit.tracks[(size_t) i] != onTrack || ! owner.isTrackShown (i))
                     continue;
                 NoteMark m;
                 m.id = n.id;
@@ -1477,7 +1480,8 @@ void ArrangementView::reveal (int trackId, double beat)
         if (top < scrollY || top + theme::trackHeight > scrollY + lanes->getHeight())
             vbar.setCurrentRangeStart (jmax (0, top - theme::trackHeight));
     }
-    ctx.selectTrack (trackId);
+    if (trackId >= 0)
+        ctx.selectTrack (trackId);
     ctx.edit.insertMarker = beat;
     if (! ctx.engine.isPlaying())
         ctx.engine.seekTo (beat);

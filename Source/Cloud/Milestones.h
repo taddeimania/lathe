@@ -17,7 +17,7 @@ namespace lathe::milestones
 // computer from another. The server adds 1 to that day's count and keeps nothing else, so
 // comparing the counts ("200 opened Lathe, 60 recorded") shows where new people get stuck.
 // Offline: it isn't sent, and isn't tried again. Turning it off stops it at once.
-// What's sent is described for people at getlathe.app/privacy#app; keep the two the same.
+// What's sent is described for people at getlathe.app/privacy.html#app; keep the two the same.
 //==============================================================================
 
 /** In the order a new person reaches them. */
@@ -53,7 +53,7 @@ void setChoice (PropertiesFile&, bool share, bool fromWelcome);
 void reach (PropertiesFile&, const String& name);
 
 /** Where people can read exactly what's sent. */
-inline const char* explainUrl = "https://getlathe.app/privacy#app";
+inline const char* explainUrl = "https://getlathe.app/privacy.html#app";
 
 /** Sends `name` once if they said yes (no check on which one: reach() is for everyone else). */
 void sendOnce (PropertiesFile&, const String& name);

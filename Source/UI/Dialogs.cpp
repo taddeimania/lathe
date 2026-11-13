@@ -476,27 +476,33 @@ public:
         tail.setValue (ctx.settings.getDoubleValue ("exportTail", 2.0), dontSendNotification);
         addAndMakeVisible (tail);
 
+        // Where the files go: by default a new dated folder in the song's Exports folder; or a
+        // folder you choose (Desktop, a shared drive...), which Lathe remembers for next time.
         edit.ensureWorkDir();
-        folder = edit.getExportsDir().getChildFile (edit.getName() + " " + Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M"));
-        folderLabel.setText (folder.getFullPathName(), dontSendNotification);
-        folderLabel.setColour (Label::textColourId, theme::textDim);
         folderLabel.setMinimumHorizontalScale (0.6f);
         addAndMakeVisible (folderLabel);
+        folderHint.setFont (theme::font (11.5f));
+        folderHint.setColour (Label::textColourId, theme::textDim);
+        addAndMakeVisible (folderHint);
+        const File remembered (ctx.settings.getValue ("exportFolder"));
+        setFolder (File::isAbsolutePath (remembered.getFullPathName()) && remembered.isDirectory() ? remembered : File());
 
         chooseFolder.onClick = [this]
         {
-            chooser = std::make_unique<FileChooser> ("Export to folder", folder.getParentDirectory());
+            const auto start = folder.isDirectory() ? folder : File::getSpecialLocation (File::userDesktopDirectory);
+            chooser = std::make_unique<FileChooser> ("Export to folder", start);
             chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
                                   [this] (const FileChooser& fc)
             {
                 if (fc.getResult() != File())
-                {
-                    folder = fc.getResult();
-                    folderLabel.setText (folder.getFullPathName(), dontSendNotification);
-                }
+                    setFolder (fc.getResult());
             });
         };
         addAndMakeVisible (chooseFolder);
+        useExports.setFont (theme::font (11.5f), false, Justification::centredRight);
+        useExports.setColour (HyperlinkButton::textColourId, theme::accent);
+        useExports.onClick = [this] { setFolder (File()); };
+        addChildComponent (useExports);
 
         for (auto* l : { &tracksLabel, &rangeLabel, &bitsLabel, &tailLabel, &folderTitle })
         {
@@ -512,7 +518,7 @@ public:
         addAndMakeVisible (exportButton);
         addAndMakeVisible (cancelButton);
 
-        setSize (520, 546);
+        setSize (520, 556);
         updateTrackList();
     }
 
@@ -570,6 +576,11 @@ public:
         chooseFolder.setBounds (f.removeFromRight (90));
         f.removeFromRight (6);
         folderLabel.setBounds (f);
+        auto fh = r.removeFromTop (20);
+        fh.removeFromLeft (90);
+        if (useExports.isVisible())
+            useExports.setBounds (fh.removeFromRight (190));
+        folderHint.setBounds (fh);
 
         auto buttons = getLocalBounds().reduced (16).removeFromBottom (30);
         exportButton.setBounds (buttons.removeFromRight (110));
@@ -610,7 +621,8 @@ private:
         else
             s.bitDepth = bits.getSelectedId();
         s.tailSeconds = tail.getValue();
-        s.folder = folder;
+        s.folder = chosenFolder.isDirectory() ? chosenFolder
+                                              : edit.getExportsDir().getChildFile (edit.getName() + " " + Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M"));
         s.baseName = edit.getName();
         s.trackIds = chosen;
         if (range.getSelectedId() == 2)
@@ -628,6 +640,7 @@ private:
         ctx.settings.setValue ("exportStems", s.stems);
         ctx.settings.setValue ("exportFormat", Engine::formatName (s.format));
         ctx.settings.setValue ("exportTail", s.tailSeconds);
+        ctx.settings.setValue ("exportFolder", chosenFolder.isDirectory() ? chosenFolder.getFullPathName() : String());
 
         auto* thread = new ExportThread (ctx.engine, s, ctx.settings);
         close();
@@ -732,9 +745,30 @@ private:
     ComboBox range, format, bits;
     Slider tail;
     Label rangeLabel { {}, "Range" }, bitsLabel { {}, "Format" }, tailLabel { {}, "Tail" }, folderTitle { {}, "Folder" };
-    Label folderLabel, formatHint;
+    Label folderLabel, formatHint, folderHint;
     TextButton chooseFolder { "Choose..." }, exportButton { "Export" }, cancelButton { "Cancel" };
-    File folder;
+    HyperlinkButton useExports { "Use the song's Exports folder", {} };
+    File folder;          // what the label shows
+    File chosenFolder;    // a folder you picked; File() = a new one in the song's Exports folder
+
+    void setFolder (const File& chosen)
+    {
+        chosenFolder = chosen;
+        if (chosen.isDirectory())
+        {
+            folder = chosen;
+            folderLabel.setText (chosen.getFullPathName(), dontSendNotification);
+            folderHint.setText ("Straight into this folder. Files already there aren't replaced.", dontSendNotification);
+        }
+        else
+        {
+            folder = ctx.edit.getExportsDir();
+            folderLabel.setText (ctx.edit.getExportsDir().getFullPathName(), dontSendNotification);
+            folderHint.setText ("In the song's Exports folder, in a new folder for each export.", dontSendNotification);
+        }
+        useExports.setVisible (chosen.isDirectory());
+        resized();
+    }
     std::unique_ptr<FileChooser> chooser;
 };
 

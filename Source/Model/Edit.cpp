@@ -72,6 +72,7 @@ void Edit::reset()
 
     master = std::make_shared<Track>();
     master->id = newId();
+    master->uid = newTrackUid();
     master->kind = TrackKind::master;
     master->name = "Master";
     master->colour = Colour (0xff9a9a9a);
@@ -99,6 +100,7 @@ std::shared_ptr<Track> Edit::addTrack (TrackKind kind, const String& name)
 {
     auto t = std::make_shared<Track>();
     t->id = newId();
+    t->uid = newTrackUid();
     t->kind = kind;
     t->colour = nextColour();
 
@@ -432,6 +434,36 @@ void Edit::copyMainMixToCue (CueMix& cue)
             l->pan = t->pan.load();
             l->mute = t->mute.load();
         }
+}
+
+String Edit::newTrackUid()
+{
+    auto& r = Random::getSystemRandom();
+    return "t-" + String::toHexString (r.nextInt64()).paddedLeft ('0', 16).getLastCharacters (16);
+}
+
+std::shared_ptr<Track> Edit::findTrackByUid (const String& uid) const
+{
+    if (uid.isEmpty())
+        return {};
+    if (master != nullptr && master->uid == uid)
+        return master;
+    for (auto& t : tracks) if (t->uid == uid) return t;
+    for (auto& t : buses)  if (t->uid == uid) return t;
+    return {};
+}
+
+std::shared_ptr<Track> Edit::trackForNote (const SongNote& n) const
+{
+    if (n.isSongNote())
+        return {};
+    if (n.trackUid.isNotEmpty())
+        if (auto t = findTrackByUid (n.trackUid))
+            return t;
+    // No tag on the note, or no track with it: a Lathe from before tags may have saved the song
+    // and dropped the tags. Go by number then, but only onto a track with no tag of its own.
+    auto t = findTrack (n.track);
+    return t != nullptr && t->uid.startsWith ("id-") ? t : nullptr;
 }
 
 std::shared_ptr<Track> Edit::findTrack (int trackId) const
@@ -1260,6 +1292,7 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
 {
     DynamicObject::Ptr o = new DynamicObject();
     o->setProperty ("id", t.id);
+    o->setProperty ("uid", t.uid);
     o->setProperty ("kind", trackKindToString (t.kind));
     o->setProperty ("name", t.name);
     o->setProperty ("colour", t.colour.toString());
@@ -1352,6 +1385,9 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
 {
     auto t = std::make_shared<Track>();
     t->id = (int) v["id"];
+    t->uid = v["uid"].toString();
+    if (t->uid.isEmpty() || t->uid.length() > 40 || ! t->uid.containsOnly ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"))
+        t->uid = "id-" + String (t->id);   // from before tags: the same in everyone's copy
     t->kind = trackKindFromString (v["kind"].toString());
     t->name = v["name"].toString();
     t->colour = v["colour"].isString() ? Colour::fromString (v["colour"].toString()) : nextColour();
@@ -1632,6 +1668,17 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
                 maxId = jmax (maxId, c.id);
         }
     lastId = maxId;
+
+    // Tags are unique in a song (a track brought in twice, or a hand-edited file, could repeat one).
+    {
+        std::set<String> uids;
+        for (auto* list : { &tracks, &buses })
+            for (auto& t : *list)
+                if (! uids.insert (t->uid).second)
+                    t->uid = newTrackUid();
+        if (master != nullptr && ! uids.insert (master->uid).second)
+            master->uid = newTrackUid();
+    }
     colourIndex = (int) (tracks.size() + buses.size());
 
     clearUndo();

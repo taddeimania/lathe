@@ -2110,7 +2110,8 @@ private:
         set (out, "files", list);
         set (out, "render_seconds", rounded ((Time::getMillisecondCounterHiRes() - started) / 1000.0, 0.1));
         finish (toolText (JSON::toString (out, true, 4)),
-                "AI assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to Exports/" + settings.folder.getFileName());
+                "AI assistant: exported " + String (files.size()) + (files.size() == 1 ? " file" : " files") + " to "
+                + (settings.folder.getParentDirectory().getFileName() == "Exports" ? "Exports/" + settings.folder.getFileName() : settings.folder.getFullPathName()));
     }
 
     /** Peak, true peak and integrated loudness of the mix, so the assistant can hear it in numbers. */
@@ -2218,6 +2219,17 @@ std::shared_ptr<Tools::Job> Tools::startExport (const var& args, var& immediate)
     edit.ensureWorkDir();
     s.baseName = edit.getName();
     s.folder = edit.getExportsDir().getChildFile (edit.getName() + " " + Time::getCurrentTime().formatted ("%Y-%m-%d %H.%M.%S"));
+    if (const auto asked = args["folder"].toString().trim(); asked.isNotEmpty())
+    {
+        // A folder the person named (their Desktop, a shared drive...). Files already there are kept.
+        const auto expanded = asked.startsWith ("~") ? File::getSpecialLocation (File::userHomeDirectory).getFullPathName() + asked.substring (1) : asked;
+        if (! File::isAbsolutePath (expanded))
+        {
+            immediate = toolText ("folder must be a full path, like ~/Desktop/Mixes.", true);
+            return {};
+        }
+        s.folder = File (expanded);
+    }
     if (! s.folder.createDirectory())
     {
         immediate = toolText ("Couldn't make " + s.folder.getFullPathName(), true);

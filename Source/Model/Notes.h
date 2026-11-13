@@ -19,6 +19,7 @@ struct SongNote
     String id;
     int track = -1;              // the track's id; -1 for a note about the whole song
     String trackName;            // what the track was called when the note was left
+    String trackUid;             // the track's permanent tag (Edit::trackForNote); "" from older Lathes
     double beat = 0.0;
     String text, author, authorId;
     int64 createdAt = 0, updatedAt = 0;
@@ -44,6 +45,8 @@ struct SongNote
         o->setProperty ("id", id);
         o->setProperty ("track", track >= 0 ? var (track) : var());
         o->setProperty ("trackName", trackName);
+        if (trackUid.isNotEmpty())
+            o->setProperty ("trackUid", trackUid);
         o->setProperty ("beat", track >= 0 ? var (beat) : var());
         o->setProperty ("text", text);
         o->setProperty ("author", author);
@@ -74,6 +77,7 @@ struct SongNote
         n.id = v["id"].toString();
         n.track = v["track"].isVoid() ? -1 : (int) v["track"];
         n.trackName = v["trackName"].toString();
+        n.trackUid = v["trackUid"].toString();
         n.beat = v["beat"].isVoid() ? 0.0 : (double) v["beat"];
         n.text = v["text"].toString();
         n.author = v["author"].toString();

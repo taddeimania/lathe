@@ -190,6 +190,10 @@ void NotesController::loadState()
     const auto data = JSON::parse (f);
     if (data["song"].toString() != songId)
         return;   // a copy of a different song
+    seenTracks.clear();
+    if (auto* list = data["seenTracks"].getArray())
+        for (auto& v : *list)
+            seenTracks.insert (v.toString());
     if (auto* list = data["notes"].getArray())
         for (auto& v : *list)
             notes.push_back (SongNote::fromVar (v));
@@ -212,6 +216,10 @@ void NotesController::saveState()
         ops.add (op);
     o->setProperty ("notes", list);
     o->setProperty ("outbox", ops);
+    Array<var> tracksSeen;
+    for (auto& uid : seenTracks)
+        tracksSeen.add (uid);
+    o->setProperty ("seenTracks", tracksSeen);
     f.getParentDirectory().createDirectory();
     f.replaceWithText (JSON::toString (var (o.get())));
 }
@@ -273,6 +281,7 @@ void NotesController::timerCallback()
 
     if (! isCloud())
         return;
+    rememberTracks();
     if (! ctx.edit.localNotes.empty() && ! uploading)
         uploadLocalNotes();
     if (! outbox.empty() && ! flushing && --flushCountdown <= 0)
@@ -282,6 +291,16 @@ void NotesController::timerCallback()
         pollCountdown = 60;   // once a minute
         refresh();
     }
+}
+
+void NotesController::rememberTracks()
+{
+    bool added = false;
+    for (auto* list : { &ctx.edit.tracks, &ctx.edit.buses })
+        for (auto& t : *list)
+            added |= seenTracks.insert (t->uid).second;
+    if (added)
+        saveState();
 }
 
 void NotesController::refresh()
@@ -375,6 +394,7 @@ void NotesController::optimistic (const var& op)
         n.text = body["text"].toString();
         n.track = body["track"].isVoid() ? -1 : (int) body["track"];
         n.trackName = body["trackName"].toString();
+        n.trackUid = body["trackUid"].toString();
         n.beat = body["beat"].isVoid() ? 0.0 : (double) body["beat"];
         n.author = getMe();
         n.createdAt = n.updatedAt = now;
@@ -585,6 +605,8 @@ void NotesController::uploadLocalNotes()
         {
             body->setProperty ("track", local.track);
             body->setProperty ("trackName", local.trackName);
+            if (local.trackUid.isNotEmpty())
+                body->setProperty ("trackUid", local.trackUid);
             body->setProperty ("beat", local.beat);
         }
         const auto tempId = "pending-" + local.id;
@@ -608,11 +630,17 @@ void NotesController::uploadLocalNotes()
 //==============================================================================
 void NotesController::add (int trackId, const String& trackName, double beat, const String& text, std::function<void (bool)> done)
 {
+    // The note goes on the track's permanent tag as well as its number (Edit::trackForNote).
+    String trackUid;
+    if (trackId >= 0)
+        if (auto t = ctx.edit.findTrack (trackId))
+            trackUid = t->uid;
     if (! isCloud())
     {
         SongNote n;
         n.id = newLocalId();
         n.track = trackId;
+        n.trackUid = trackUid;
         n.trackName = trackName;
         n.beat = trackId >= 0 ? jmax (0.0, beat) : 0.0;
         n.text = text;
@@ -629,6 +657,8 @@ void NotesController::add (int trackId, const String& trackName, double beat, co
     {
         body->setProperty ("track", trackId);
         body->setProperty ("trackName", trackName);
+        if (trackUid.isNotEmpty())
+            body->setProperty ("trackUid", trackUid);
         body->setProperty ("beat", jmax (0.0, beat));
     }
     enqueue (makeOp ("add", "pending-" + newLocalId(), var (body.get())));
@@ -728,14 +758,23 @@ String NotesController::describeWhere (const SongNote& n) const
 {
     if (n.isSongNote())
         return "Song note";
-    String name = n.trackName;
-    bool gone = true;
-    if (auto t = ctx.edit.findTrack (n.track))
-    {
-        name = t->name;
-        gone = false;
-    }
-    return (name.isNotEmpty() ? name : String ("A track")) + (gone ? " (track not here)" : String()) + ", " + describePosition (n.beat);
+    if (auto t = ctx.edit.trackForNote (n))
+        return t->name + ", " + describePosition (n.beat);
+    const auto name = n.trackName.isNotEmpty() ? n.trackName : String ("A track");
+    return name + " (" + whyTrackMissing (n) + "), " + describePosition (n.beat);
+}
+
+String NotesController::whyTrackMissing (const SongNote& n) const
+{
+    if (n.isSongNote() || ctx.edit.trackForNote (n) != nullptr)
+        return {};
+    if (n.trackUid.isEmpty())
+        return "track not here";             // from an older Lathe: only its number to go by
+    if (! isCloud() || seenTracks.count (n.trackUid) > 0)
+        return "deleted";                     // it was here, and isn't any more
+    if (cloud.hasNewerRevision())
+        return "not pulled yet";              // most likely in the revision waiting for you
+    return "not pushed yet";                  // only on their computer so far
 }
 
 //==============================================================================
@@ -1213,7 +1252,10 @@ private:
             const auto& all = nc.getNotes();
             const auto n = all[(size_t) order[(size_t) row]];
             if (! n.isSongNote() && nc.reveal)
-                nc.reveal (n.track, n.beat);
+                if (auto t = nc.ctx.edit.trackForNote (n))
+                    nc.reveal (t->id, n.beat);
+                else
+                    nc.reveal (-1, n.beat);       // not in this copy: just go to the time
             auto area = list.getRowPosition (row, true);
             nc.showThread (n.id, list.localAreaToGlobal (area));
         }

@@ -65,8 +65,12 @@ public:
 
     /** "bar 33 (1:04)" */
     String describePosition (double beat) const;
-    /** "Bass, bar 33 (1:04)" or "Song note". The track's current name if it still exists. */
+    /** "Bass, bar 33 (1:04)" or "Song note". The track's current name if it's in this copy;
+        if not, the name it had and why it isn't here: "not pulled yet" (a newer revision is
+        waiting), "not pushed yet" (it's only on their computer so far) or "deleted". */
     String describeWhere (const SongNote&) const;
+    /** Why a note's track isn't in this copy ("" if it is, or for a song note). */
+    String whyTrackMissing (const SongNote&) const;
 
     /** Called when a note on a track is picked in the Notes window: show that spot. */
     std::function<void (int trackId, double beat)> reveal;
@@ -106,6 +110,8 @@ private:
     bool flushing = false;
     int flushCountdown = 0;
     var seen;                     // {noteId: last activity seen}
+    std::set<String> seenTracks;  // tags of every track this song has had here (so a gone one is "deleted")
+    void rememberTracks();
     int pollCountdown = 0;
     bool uploading = false;
     Component::SafePointer<DocumentWindow> window;

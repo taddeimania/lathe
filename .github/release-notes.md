@@ -3,12 +3,27 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.9
+
+- **Notes stay on the right track.** Each track now has a permanent tag that notes point at, so a
+  note can't end up on the wrong track when two of you add tracks at the same time, or when a track
+  is deleted and a new one takes its place.
+- **A note on a track you don't have says why.** Notes are live but tracks are pushed and pulled, so
+  a note can be on a track that isn't in your copy. The Notes window now says "not pulled yet",
+  "not pushed yet" or "deleted" instead of "track not here".
+
+- **Export to a folder of your choice, and Lathe remembers it.** In File > Export, Choose... a folder
+  (your Desktop, a shared drive) and the files go straight into it, next time too. Use the song's
+  Exports folder switches back. Exporting again never replaces a file: it's saved as "Song (2)".
+
+Needs the updated Lathe Cloud server (lathe-backend: `terraform apply`).
+
 ## New in 0.12.8
 
 - **One question on a new install.** The first time Lathe opens after you install it, it asks whether
   it may share a few anonymous milestones, like the first time you record something, so we can see
   where new people get stuck. Nothing is sent unless you say yes, and updating Lathe never asks.
-  Change it any time in Settings, under Privacy. Exactly what's sent: getlathe.app/privacy#app.
+  Change it any time in Settings, under Privacy. Exactly what's sent: [getlathe.app/privacy](https://getlathe.app/privacy.html#app).
 
 ## New in 0.12.7
 

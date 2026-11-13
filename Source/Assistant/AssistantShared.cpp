@@ -468,6 +468,9 @@ var toolDefinitions()
                                                            "(both lossy: for sharing, not for mastering or further editing)") },
                                { "bit_depth", prop ("integer", "wav, aiff, flac: 16, 24 (default) or 32 (float, wav only)") },
                                { "kbps", prop ("integer", "mp3: 320 (default), 256, 192 or 128. ogg: 128 to 320, on average") },
+                               { "folder", prop ("string", "Optional: a full path to export into (e.g. ~/Desktop/Mixes), only when the "
+                                                           "person asks for a place. Default: a new folder in the song's Exports folder. "
+                                                           "Files already there are never replaced.") },
                                { "tail_seconds", prop ("number", "Time after the end for reverb and delay tails, 0 to 30 (default 2)") } }),
                      false));
     tools.add (tool ("analyze_mix", "Listen to the mix",

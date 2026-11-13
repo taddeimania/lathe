@@ -9,6 +9,7 @@
 #include "Patcher/Updater.h"
 #include "Cloud/ProjectDiff.h"
 #include "Cloud/Revisions.h"
+#include "Cloud/Merge.h"
 #include "Cloud/Packing.h"
 #include "Cloud/Milestones.h"
 #include "Assistant/AssistantServer.h"
@@ -1112,6 +1113,21 @@ int main (int argc, char** argv)
             }
         }
 
+        // A folder you chose and export to again: the earlier files are kept.
+        {
+            Engine::ExportSettings s;
+            s.mix = true; s.stems = false; s.startBeat = 0.0; s.endBeat = 2.0; s.tailSeconds = 0.0;
+            s.folder = dir.getChildFile ("Chosen folder");
+            s.folder.createDirectory();
+            s.baseName = "Song";
+            StringArray first, second;
+            engine.exportAudio (s, [] (double) { return true; }, first);
+            engine.exportAudio (s, [] (double) { return true; }, second);
+            check (first.size() == 1 && second.size() == 1 && File (first[0]).existsAsFile() && File (second[0]).existsAsFile()
+                       && File (second[0]).getFileName() == "Song (2).wav",
+                   "exporting into the same folder again doesn't replace the earlier file (" + (second.isEmpty() ? String() : File (second[0]).getFileName()) + ")");
+        }
+
         check (Engine::formatName (F::flac) == "flac", "formatName");
         auto parsed = F::wav;
         check (Engine::parseFormat ("AIF", parsed) && parsed == F::aiff, "parseFormat takes aif");
@@ -1208,6 +1224,68 @@ int main (int argc, char** argv)
                    && back.localNotes[0].replies.size() == 1 && back.localNotes[1].isSongNote(),
                "notes and their replies survive save and load");
         check (! e.toVar (true).hasProperty ("notes"), "templates don't carry notes");
+
+        // Notes stay on the right track: by the track's permanent tag, not its number.
+        auto noPlugins = [] (const PluginDescription&, const MemoryBlock&, bool) { return std::make_shared<PluginSlot>(); };
+        auto keys = e.addTrack (TrackKind::midi, "Keys");
+        check (bass->uid.startsWith ("t-") && bass->uid.length() == 18 && bass->uid != keys->uid, "every new track gets its own tag");
+        Edit again;
+        again.loadFrom (e.toVar (false), File(), noPlugins);
+        check (again.findTrack (bass->id)->uid == bass->uid, "the tag is saved with the song");
+
+        auto legacy = e.toVar (false);
+        for (auto& t : *legacy["tracks"].getArray())
+            t.getDynamicObject()->removeProperty ("uid");
+        Edit old;
+        old.loadFrom (legacy, File(), noPlugins);
+        check (old.findTrack (bass->id)->uid == "id-" + String (bass->id), "a track from before tags reads as id-<number>, the same everywhere");
+        SongNote olderNote;
+        olderNote.track = bass->id;
+        check (old.trackForNote (olderNote) == old.findTrack (bass->id), "an older note (no tag) still finds its older track");
+        SongNote taggedNote;
+        taggedNote.track = bass->id;
+        taggedNote.trackUid = bass->uid;
+        check (old.trackForNote (taggedNote) == old.findTrack (bass->id),
+               "a tagged note still finds its track after an older Lathe saved the song without tags");
+
+        // A deleted track's number used again: the old note must not land on the new track.
+        auto dup = e.toVar (false);
+        dup["tracks"].getArray()->getReference (1).getDynamicObject()->setProperty ("uid", bass->uid);
+        Edit twice;
+        twice.loadFrom (dup, File(), noPlugins);
+        check (twice.tracks[0]->uid != twice.tracks[1]->uid, "a repeated tag is replaced when the song loads");
+        Edit reuse;
+        reuse.loadFrom (legacy, File(), noPlugins);
+        const int oldKeysId = keys->id;
+        reuse.tracks.erase (reuse.tracks.begin() + 1);              // Keys deleted
+        Edit reopened;
+        reopened.loadFrom (reuse.toVar (false), File(), noPlugins);
+        auto newer = reopened.addTrack (TrackKind::audio, "Synth");  // takes the freed number
+        SongNote onOldKeys;
+        onOldKeys.track = oldKeysId;
+        check (newer->id == oldKeysId && reopened.trackForNote (onOldKeys) == nullptr,
+               "a note on a deleted track doesn't move onto a new track that reuses its number");
+
+        // Two people add a track at once: both get the same number, and merging renumbers yours.
+        Edit start;
+        start.addTrack (TrackKind::audio, "Drums");
+        const auto base = start.toVar (false);
+        Edit mine, theirsEdit;
+        mine.loadFrom (base, File(), noPlugins);
+        theirsEdit.loadFrom (base, File(), noPlugins);
+        auto myVocal = mine.addTrack (TrackKind::audio, "Vocal");
+        auto theirGuitar = theirsEdit.addTrack (TrackKind::audio, "Guitar");
+        check (myVocal->id == theirGuitar->id && myVocal->uid != theirGuitar->uid, "same number, different tags");
+        SongNote mineNote, theirNote;
+        mineNote.track = myVocal->id;     mineNote.trackUid = myVocal->uid;
+        theirNote.track = theirGuitar->id; theirNote.trackUid = theirGuitar->uid;
+        check (mine.trackForNote (theirNote) == nullptr, "their note isn't shown on your track with the same number before you pull");
+        const auto merged = cloud::mergeProjects (base, mine.toVar (false), theirsEdit.toVar (false));
+        Edit after;
+        after.loadFrom (merged.project, File(), noPlugins);
+        auto v = after.trackForNote (mineNote), g = after.trackForNote (theirNote);
+        check (v != nullptr && v->name == "Vocal" && v->id != myVocal->id, "after the merge your note follows your renumbered track");
+        check (g != nullptr && g->name == "Guitar", "and their note is on their track");
         const auto snap = cloud::Snapshot::capture (e);
         check (! snap.project.hasProperty ("notes"), "cloud revisions never carry notes (they live on the server)");
     }
