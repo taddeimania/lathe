@@ -318,11 +318,30 @@ public:
         range.setSelectedId (edit.loopEnabled ? 2 : 1, dontSendNotification);
         addAndMakeVisible (range);
 
-        bits.addItem ("16-bit", 16);
-        bits.addItem ("24-bit", 24);
-        bits.addItem ("32-bit float", 32);
-        bits.setSelectedId (ctx.settings.getIntValue ("exportBits", 24), dontSendNotification);
+        using F = Engine::ExportSettings::Format;
+        format.addItem ("WAV", 1 + (int) F::wav);
+        format.addItem ("AIFF", 1 + (int) F::aiff);
+        format.addItem ("FLAC", 1 + (int) F::flac);
+        format.addItem ("MP3", 1 + (int) F::mp3);
+        format.addItem ("Ogg Vorbis", 1 + (int) F::ogg);
+        auto saved = F::wav;
+        Engine::parseFormat (ctx.settings.getValue ("exportFormat", "wav"), saved);
+        format.setSelectedId (1 + (int) saved, dontSendNotification);
+        format.onChange = [this] { updateQuality(); };
+        addAndMakeVisible (format);
+        // Bit depth or bit rate, whichever the format has. The ids are the numbers themselves.
+        bits.onChange = [this]
+        {
+            if (lossy())
+                ctx.settings.setValue ("exportKbps", bits.getSelectedId());
+            else
+                ctx.settings.setValue ("exportBits", bits.getSelectedId());
+        };
         addAndMakeVisible (bits);
+        formatHint.setFont (theme::font (11.5f));
+        formatHint.setColour (Label::textColourId, theme::textDim);
+        addAndMakeVisible (formatHint);
+        updateQuality();
 
         tail.setSliderStyle (Slider::LinearHorizontal);
         tail.setTextBoxStyle (Slider::TextBoxRight, false, 60, 20);
@@ -367,7 +386,7 @@ public:
         addAndMakeVisible (exportButton);
         addAndMakeVisible (cancelButton);
 
-        setSize (520, 520);
+        setSize (520, 546);
         updateTrackList();
     }
 
@@ -407,7 +426,17 @@ public:
         stems.setBounds (r.removeFromTop (26));
         r.removeFromTop (12);
         row (rangeLabel, range);
-        row (bitsLabel, bits);
+        {
+            auto line = r.removeFromTop (26);
+            bitsLabel.setBounds (line.removeFromLeft (90));
+            format.setBounds (line.removeFromLeft (130));
+            line.removeFromLeft (8);
+            bits.setBounds (line.removeFromLeft (130));
+            auto hint = r.removeFromTop (20);
+            hint.removeFromLeft (90);
+            formatHint.setBounds (hint);
+            r.removeFromTop (8);
+        }
         row (tailLabel, tail);
 
         auto f = r.removeFromTop (26);
@@ -449,7 +478,11 @@ private:
         Engine::ExportSettings s;
         s.mix = mix.getToggleState();
         s.stems = stems.getToggleState();
-        s.bitDepth = bits.getSelectedId();
+        s.format = chosenFormat();
+        if (lossy())
+            s.kbps = bits.getSelectedId();
+        else
+            s.bitDepth = bits.getSelectedId();
         s.tailSeconds = tail.getValue();
         s.folder = folder;
         s.baseName = edit.getName();
@@ -467,12 +500,57 @@ private:
 
         ctx.settings.setValue ("exportMix", s.mix);
         ctx.settings.setValue ("exportStems", s.stems);
-        ctx.settings.setValue ("exportBits", s.bitDepth);
+        ctx.settings.setValue ("exportFormat", Engine::formatName (s.format));
         ctx.settings.setValue ("exportTail", s.tailSeconds);
 
         auto* thread = new ExportThread (ctx.engine, s);
         close();
         thread->launchThread();
+    }
+
+    Engine::ExportSettings::Format chosenFormat() const
+    {
+        return (Engine::ExportSettings::Format) jlimit (0, 4, format.getSelectedId() - 1);
+    }
+
+    bool lossy() const
+    {
+        using F = Engine::ExportSettings::Format;
+        return chosenFormat() == F::mp3 || chosenFormat() == F::ogg;
+    }
+
+    /** Fills the second box with the bit depths or bit rates the chosen format has. */
+    void updateQuality()
+    {
+        using F = Engine::ExportSettings::Format;
+        const auto f = chosenFormat();
+        bits.clear (dontSendNotification);
+        if (f == F::mp3 || f == F::ogg)
+        {
+            for (auto kbps : { 320, 256, 192, 128 })
+                bits.addItem (String (kbps) + " kbps", kbps);
+            const auto want = ctx.settings.getIntValue ("exportKbps", 320);
+            bits.setSelectedId (bits.indexOfItemId (want) >= 0 ? want : 320, dontSendNotification);
+        }
+        else
+        {
+            bits.addItem ("16-bit", 16);
+            bits.addItem ("24-bit", 24);
+            if (f == F::wav)
+                bits.addItem ("32-bit float", 32);
+            const auto want = ctx.settings.getIntValue ("exportBits", 24);
+            bits.setSelectedId (bits.indexOfItemId (want) >= 0 ? want : 24, dontSendNotification);
+        }
+
+        switch (f)
+        {
+            case F::wav:  formatHint.setText ("Uncompressed. Opens anywhere; the one to keep or send for mastering.", dontSendNotification); break;
+            case F::aiff: formatHint.setText ("Uncompressed, like WAV, for apps or people that ask for AIFF.", dontSendNotification); break;
+            case F::flac: formatHint.setText ("Lossless: sounds the same as WAV at about half the size.", dontSendNotification); break;
+            case F::mp3:  formatHint.setText ("Small and plays everywhere, but some detail is lost. For sharing.", dontSendNotification); break;
+            case F::ogg:  formatHint.setText ("Small, and better than MP3 at the same size. Fewer players open it.", dontSendNotification); break;
+        }
+        updateTrackList();
     }
 
     /** Empty when exporting everything. */
@@ -512,7 +590,8 @@ private:
             trackHint.setText ("Only the ticked tracks play, even if muted. Returns pass on what those tracks send them; "
                                "tick a return to get its own file.", dontSendNotification);
         mix.setButtonText (tracks == 0 ? String ("Master mix (one stereo file)")
-                                       : "Mix of the ticked tracks: \"" + Engine::exportMixName (ctx.edit.getName(), ctx.edit, ids) + ".wav\"");
+                                       : "Mix of the ticked tracks: \"" + Engine::exportMixName (ctx.edit.getName(), ctx.edit, ids) + "."
+                                         + Engine::formatName (chosenFormat()) + "\"");
         stems.setButtonText ("A file for each ticked track and return (post-fader)");
     }
 
@@ -524,10 +603,10 @@ private:
     TextButton tickAll { "All" }, tickNone { "None" };
     Label tracksLabel { {}, "Tracks" }, trackHint;
     ToggleButton mix, stems;
-    ComboBox range, bits;
+    ComboBox range, format, bits;
     Slider tail;
     Label rangeLabel { {}, "Range" }, bitsLabel { {}, "Format" }, tailLabel { {}, "Tail" }, folderTitle { {}, "Folder" };
-    Label folderLabel;
+    Label folderLabel, formatHint;
     TextButton chooseFolder { "Choose..." }, exportButton { "Export" }, cancelButton { "Cancel" };
     File folder;
     std::unique_ptr<FileChooser> chooser;

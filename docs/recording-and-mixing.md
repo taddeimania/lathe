@@ -74,8 +74,20 @@ Hear what a change did. Compare keeps up to three versions that play in step, an
 - **Now**: change the mix, then press **Update Now**. It covers the same bars as Before.
 - **Reference**: a finished track you'd like yours to sit next to. Choose it or drop the file on the window. Lathe remembers it for the song on this computer; it isn't part of the song or shared.
 
+While a version renders (or the reference loads), its button turns into **Cancel**, and Escape does the same. Whatever that version was before stays as it was. If the AI assistant started it, it's told you cancelled.
+
 Click a version, or press 1, 2 or 3, to hear it; Space plays and stops while the window is in front. **Match loudness** (on by default) plays them all at the loudness of the quietest, so the louder one doesn't win just for being louder. Below, each is measured: loudness, true peak, crest, width, correlation and the balance across seven bands, with Now's difference from Before, and a line on the biggest differences. Versions render over the loop if it's on, else the whole song.
 
 ## Export
 
-**File > Export Mix / Stems** (Cmd/Ctrl+Shift+E). You can export the whole song or the loop region, as 16-bit, 24-bit, or 32-bit float WAV, with a tail. Stems are post-fader, one per track and return, and they line up sample-for-sample with the mix. Silent stems are skipped. Files go to `<project>/Exports/<name> <date>/` unless you choose another folder.
+**File > Export Mix / Stems** (Cmd/Ctrl+Shift+E). You can export the whole song or the loop region, with a tail, in any of these formats:
+
+| Format | Options | Use it for |
+|---|---|---|
+| WAV | 16-bit, 24-bit, 32-bit float | Anything: mastering, another DAW, archiving. The safe default. |
+| AIFF | 16-bit, 24-bit | The same audio as WAV, for apps or people that ask for AIFF. |
+| FLAC | 16-bit, 24-bit | Lossless: identical to WAV when decoded, at about half the size. Not every app opens it. |
+| MP3 | 320, 256, 192, 128 kbps (constant) | Sending a mix to listen to. Some detail is lost, so don't master or edit from it. Tagged with the file's name; plays back gaplessly. |
+| Ogg Vorbis | 320, 256, 192, 128 kbps (on average) | Like MP3, and sounds better at the same size, but fewer players open it. |
+
+There's no AAC (.m4a): its encoders are either patent-licensed or tied to one platform. MP3 stops at 48 kHz, so a song at 88.2 or 96 kHz becomes a 44.1 or 48 kHz MP3. Stems are post-fader, one per track and return, and they line up sample-for-sample with the mix. Silent stems are skipped. Files go to `<project>/Exports/<name> <date>/` unless you choose another folder.

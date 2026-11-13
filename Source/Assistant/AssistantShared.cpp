@@ -456,7 +456,7 @@ var toolDefinitions()
                      schema ({ { "name", prop ("string", "Save as a new project with this name") } }),
                      false));
     tools.add (tool ("export_audio", "Export audio",
-                     "Renders the song to WAV files, like File > Export: the mix, and stems (a file per track and return) if "
+                     "Renders the song to audio files (WAV unless another format is asked for), like File > Export: the mix, and stems (a file per track and return) if "
                      "asked. From the start to the end of the last clip unless bars are given. Lathe stops playing first. "
                      "Files go in the project's Exports folder; the reply lists them with each one's length and, for the mix, "
                      "its peak, true peak and integrated loudness (LUFS), so you can check the level.",
@@ -464,7 +464,10 @@ var toolDefinitions()
                                { "to_bar", prop ("number", "Where it ends (the bar it stops at)") },
                                { "mix", prop ("boolean", "The stereo mix (default true)") },
                                { "stems", prop ("boolean", "A file per track and return (default false)") },
-                               { "bit_depth", prop ("integer", "16, 24 (default) or 32 (float)") },
+                               { "format", prop ("string", "wav (default), aiff, flac (lossless, about half the size), mp3 or ogg "
+                                                           "(both lossy: for sharing, not for mastering or further editing)") },
+                               { "bit_depth", prop ("integer", "wav, aiff, flac: 16, 24 (default) or 32 (float, wav only)") },
+                               { "kbps", prop ("integer", "mp3: 320 (default), 256, 192 or 128. ogg: 128 to 320, on average") },
                                { "tail_seconds", prop ("number", "Time after the end for reverb and delay tails, 0 to 30 (default 2)") } }),
                      false));
     tools.add (tool ("analyze_mix", "Listen to the mix",

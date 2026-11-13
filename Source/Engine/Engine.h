@@ -161,7 +161,12 @@ public:
         bool mix = true, stems = true;
         double startBeat = 0.0, endBeat = 0.0;
         double tailSeconds = 2.0;
+        /** wav: 16, 24 or 32-bit float. aiff and flac: 16 or 24 (32 is written as 24).
+            mp3 and ogg are lossy: `kbps` sets the size (mp3 constant, ogg about that on average). */
+        enum class Format { wav, aiff, flac, mp3, ogg };
+        Format format = Format::wav;
         int bitDepth = 24;               // 16, 24 or 32 (float)
+        int kbps = 320;                  // mp3: 320, 256, 192 or 128. ogg: 128 to 320
         File folder;
         String baseName;
         /** Empty: everything, as you hear it. Otherwise the ids of the tracks to export:
@@ -192,6 +197,11 @@ public:
                           const std::function<Result (const std::vector<RenderTap>&, int64 lengthSamples)>& prepare,
                           const RenderListener& listen);
     bool isExporting() const noexcept   { return exporting.load(); }
+    /** "wav", "aiff", "flac", "mp3", "ogg": the file extension (no dot), and the name the
+        assistant and settings use. */
+    static String formatName (ExportSettings::Format);
+    /** The other way; false if `name` isn't one (case doesn't matter, "aif" means aiff). */
+    static bool parseFormat (const String& name, ExportSettings::Format& out);
     /** The mix file name for an export of some tracks: "Song - Drums + Bass", "Song (5 tracks)". */
     static String exportMixName (const String& baseName, const Edit&, const std::set<int>& trackIds);
 

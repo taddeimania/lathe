@@ -5,6 +5,7 @@ Source/
   Model/Edit.*          project model, clip split/trim/clear, undo (with step labels and who), JSON, monitor (cue) mixes
   Model/ChannelEq.*     the built-in channel EQ: settings, biquads, response curve
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
+  Engine/Mp3Writer.*    MP3 export through LAME (fetched by CMake, cmake/lame/config.h)
   Engine/PluginHost.*   VST3 loading, background scan through LatheScanner, skipped list, plug-in menu
   Scanner/              LatheScanner: describes one plug-in in its own process
   Host/                 "Run separately": RemotePlugin (Lathe's side, an AudioPluginInstance), HostMain (LatheHost,

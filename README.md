@@ -56,6 +56,8 @@ The engine renders tracks on several cores (docs/multicore.md). `ctest` also run
 
 The sound engines of Multi Synth, Resonator, Grains and Random Notes are Émilie Gillet's open-source DSP (MIT licence), vendored in `ThirdParty/mutable/` with a few portability changes. Its README lists the source, the licence and every change.
 
+MP3 export uses [LAME](https://lame.sourceforge.io) 3.100 (LGPL), which CMake fetches at a fixed commit and builds as a static library; `cmake/lame/config.h` replaces the one LAME's own build would generate. FLAC and Ogg Vorbis come with JUCE.
+
 ## Documentation
 
 The user guide and the code map are in [docs/](docs/README.md): getting started, recording and mixing, keys, Lathe Cloud, the AI assistant, the built-in devices and plug-in browser, updating, project files, and where things live in the source.

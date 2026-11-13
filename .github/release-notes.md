@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.7
+
+- **Export to FLAC, MP3, AIFF or Ogg Vorbis**, not just WAV. Pick the format and its bit depth or
+  bit rate in File > Export. MP3s are tagged with the song's name and play back gaplessly. Your AI
+  assistant can export in any of them too.
+- **Compare: Mark Before and Update Now can be cancelled.** While one is measuring, its button reads
+  Cancel (or press Escape), and that side stays as it was.
+
 ## New in 0.12.6
 
 - **Your AI assistant can EQ.** It can set any band of a track's channel EQ, so when it hears two

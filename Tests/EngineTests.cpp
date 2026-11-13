@@ -962,6 +962,92 @@ int main (int argc, char** argv)
         }
     }
 
+    std::cout << "Export formats" << std::endl;
+    {
+        using F = Engine::ExportSettings::Format;
+        struct Case { F format; int bits, kbps; const char* ext; bool lossy; };
+        for (auto c : { Case { F::wav, 32, 0, ".wav", false }, Case { F::aiff, 24, 0, ".aiff", false },
+                        Case { F::flac, 24, 0, ".flac", false }, Case { F::flac, 32, 0, ".flac", false },
+                        Case { F::mp3, 24, 320, ".mp3", true }, Case { F::mp3, 24, 128, ".mp3", true },
+                        Case { F::ogg, 24, 192, ".ogg", true } })
+        {
+            const auto what = Engine::formatName (c.format) + " " + String (c.lossy ? c.kbps : c.bits);
+            Engine::ExportSettings s;
+            s.mix = true;
+            s.stems = false;
+            s.startBeat = 0.0;
+            s.endBeat = 2.0;
+            s.tailSeconds = 0.5;
+            s.format = c.format;
+            s.bitDepth = c.bits;
+            s.kbps = c.kbps;
+            s.folder = dir.getChildFile ("Exports " + what);
+            s.baseName = "Song";
+            StringArray files;
+            auto result = engine.exportAudio (s, [] (double) { return true; }, files);
+            check (result.wasOk() && files.size() == 1, what + ": export succeeded " + result.getErrorMessage());
+            if (files.size() != 1)
+                continue;
+            const File f (files[0]);
+            check (f.getFileName() == String ("Song") + c.ext, what + ": named " + f.getFileName());
+
+            AudioFormatManager fm;
+            fm.registerBasicFormats();
+            std::unique_ptr<AudioFormatReader> r (fm.createReaderFor (f));
+            check (r != nullptr && r->sampleRate == 48000.0 && r->numChannels == 2, what + ": reads back as 48 kHz stereo");
+            if (r == nullptr)
+                continue;
+            if (! c.lossy)
+                check ((int) r->bitsPerSample == (c.format == F::wav ? c.bits : jmin (24, c.bits)), what + ": bit depth "
+                       + String (r->bitsPerSample) + (c.format == F::flac && c.bits == 32 ? " (FLAC tops out at 24)" : ""));
+
+            AudioBuffer<float> b (2, (int) r->lengthInSamples);
+            r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+            int p = -1;
+            float loudest = 0.0f;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                if (std::abs (b.getSample (0, i)) > loudest) { loudest = std::abs (b.getSample (0, i)); p = i; }
+            if (c.lossy)
+            {
+                // Lossy codecs smear an impulse and MP3 decoders add a short delay, so: near, and about as loud.
+                check (r->lengthInSamples >= 72000, what + ": at least as long as the render (" + String (r->lengthInSamples) + ")");
+                check (p >= 12900 && p <= 13000 + 2400 && loudest > 0.5f, what + ": the impulse is there (at " + String (p) + ", " + String (loudest, 2) + ")");
+            }
+            else
+            {
+                check (r->lengthInSamples == 72000, what + ": exact length");
+                check (p == 13000, what + ": impulse at 13000, sample for sample (got " + String (p) + ")");
+            }
+
+            if (c.format == F::mp3)
+            {
+                MemoryBlock data;
+                f.loadFileAsData (data);
+                const auto* bytes = static_cast<const char*> (data.getData());
+                check (data.getSize() > 10 && String (bytes, 3) == "ID3", what + ": starts with an ID3 tag");
+                // The Info frame (LAME's header for CBR) is filled in at the end with the number of frames.
+                int at = -1;
+                for (size_t i = 0; i + 16 < jmin ((size_t) 4096, data.getSize()); ++i)
+                    if (std::memcmp (bytes + i, "Info", 4) == 0) { at = (int) i; break; }
+                const auto frames = at < 0 ? 0 : ((uint8) bytes[at + 8] << 24 | (uint8) bytes[at + 9] << 16 | (uint8) bytes[at + 10] << 8 | (uint8) bytes[at + 11]);
+                check (at > 0 && frames > 50, what + ": its Info frame counts the frames (" + String ((int) frames) + ")");
+                auto has = [&] (const char* needle, size_t n)
+                {
+                    const auto* end = bytes + jmin ((size_t) 4096, data.getSize());
+                    return std::search (bytes, end, needle, needle + n) != end;
+                };
+                check (has ("TIT2", 4) && (has ("S\0o\0n\0g", 7) || has ("\0S\0o\0n\0g", 8)), what + ": the title is tagged (UTF-16)");
+                if (c.kbps == 128)
+                    check (data.getSize() < 30000, what + ": 1.5 s at 128 kbps is about 24 kB (" + String ((int) data.getSize()) + " bytes)");
+            }
+        }
+
+        check (Engine::formatName (F::flac) == "flac", "formatName");
+        auto parsed = F::wav;
+        check (Engine::parseFormat ("AIF", parsed) && parsed == F::aiff, "parseFormat takes aif");
+        check (! Engine::parseFormat ("aac", parsed), "parseFormat refuses aac");
+    }
+
     std::cout << "Export some tracks" << std::endl;
     {
         // Mute the first track and solo the second: an export of just the first still plays it.
@@ -3937,6 +4023,24 @@ int main (int argc, char** argv)
             cmp.setMatchLoudness (false);
             check (cmp.gainFor (Compare::before) == 0.0f, "and off plays them as they are");
             cmp.setMatchLoudness (true);
+
+            // Cancelling (the version's button turns into Cancel while it renders, or Escape).
+            {
+                const auto nowAudio = cmp.get (Compare::now).audio;
+                e.master->volumeDb = -3.0f;
+                engine.rebuild();
+                auto cancelJob = tools.startLongTool ("compare_mix", args2 ({}), immediate);
+                const bool wasBusy = cmp.isBusy() && cmp.busySlot() == Compare::now;
+                cmp.cancel();
+                const bool cancelFinished = cancelJob != nullptr && waitJob (cancelJob);
+                check (wasBusy && cancelFinished && (bool) cancelJob->result["isError"]
+                           && text (cancelJob->result).contains ("cancelled") && ! cmp.isBusy()
+                           && cmp.get (Compare::now).audio == nowAudio,
+                       "cancelling Update Now keeps the Now there was, and tells the assistant ("
+                           + (cancelFinished ? text (cancelJob->result) : String ("didn't finish")) + ")");
+                e.master->volumeDb = -6.0f;
+                engine.rebuild();
+            }
 
             // A reference at another sample rate, remembered for the song.
             const auto oldFile = e.projectFile;

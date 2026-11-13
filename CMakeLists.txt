@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.12.6 LANGUAGES C CXX)
+project(Lathe VERSION 0.12.7 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,6 +38,38 @@ else()
         PATCH_COMMAND  ${CMAKE_COMMAND} -DPATCH=${CMAKE_CURRENT_SOURCE_DIR}/cmake/juce-8.0.9-coreaudio-listener.patch
                        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyPatch.cmake)
     FetchContent_MakeAvailable(JUCE)
+endif()
+
+# --- LAME (MP3 export) --------------------------------------------------------------
+# JUCE reads MP3s but can't write them. LAME (LGPL) is fetched and built here as a small static
+# library; cmake/lame/config.h stands in for the config.h LAME's autoconf build would make.
+# To use your own copy: -DLATHE_LAME_DIR=/path/to/lame   (the folder that holds libmp3lame/)
+set(LATHE_LAME_DIR "" CACHE PATH "Optional local LAME source")
+if(NOT LATHE_LAME_DIR)
+    include(FetchContent)
+    FetchContent_Declare(lame
+        GIT_REPOSITORY https://github.com/lameproject/lame.git
+        GIT_TAG        1f5cc9487284d5950343aa5d4f70de433468070a   # 3.100.1
+        SOURCE_SUBDIR  no-cmake-here)   # LAME has no CMakeLists; only fetch it
+    FetchContent_MakeAvailable(lame)
+    set(LATHE_LAME_DIR ${lame_SOURCE_DIR})
+endif()
+file(GLOB LATHE_LAME_SOURCES ${LATHE_LAME_DIR}/libmp3lame/*.c)
+list(FILTER LATHE_LAME_SOURCES EXCLUDE REGEX "mpglib_interface\\.c$")
+add_library(lathe_lame STATIC ${LATHE_LAME_SOURCES})
+target_compile_definitions(lathe_lame PRIVATE HAVE_CONFIG_H)
+target_include_directories(lathe_lame
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/lame ${LATHE_LAME_DIR}/libmp3lame
+    PUBLIC  ${LATHE_LAME_DIR}/include)
+set_target_properties(lathe_lame PROPERTIES POSITION_INDEPENDENT_CODE ON C_VISIBILITY_PRESET hidden)
+if(MSVC)
+    target_compile_options(lathe_lame PRIVATE /W0)
+    target_compile_definitions(lathe_lame PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(lathe_lame PRIVATE -w)
+    if(NOT WIN32)
+        target_link_libraries(lathe_lame PRIVATE m)
+    endif()
 endif()
 
 # --- ASIO (Windows) -------------------------------------------------------------
@@ -125,6 +157,7 @@ target_sources(Lathe PRIVATE
     Source/Engine/AudioPool.cpp
     Source/Engine/PluginHost.cpp
     Source/Engine/Engine.cpp
+    Source/Engine/Mp3Writer.cpp
     Source/Engine/RenderPool.cpp
     Source/Engine/ClipJoin.cpp
     Source/UI/Theme.cpp
@@ -341,6 +374,7 @@ if(LATHE_BUILD_TESTS)
         Source/Engine/PluginHost.cpp
         ${LATHE_DEVICE_SOURCES}
         Source/Engine/Engine.cpp
+        Source/Engine/Mp3Writer.cpp
         Source/Engine/RenderPool.cpp
         Source/Engine/ClipJoin.cpp
         Source/Patcher/Updater.cpp
@@ -358,10 +392,12 @@ if(LATHE_BUILD_TESTS)
     target_include_directories(LatheTests PRIVATE Source)
     target_compile_definitions(LatheTests PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=1 JUCE_LOAD_CURL_SYMBOLS_LAZILY=1 JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=0
-        JUCE_MODAL_LOOPS_PERMITTED=1 LATHE_CLOUD_DEV_OVERRIDES=1)
+        JUCE_MODAL_LOOPS_PERMITTED=1 LATHE_CLOUD_DEV_OVERRIDES=1
+        JUCE_USE_MP3AUDIOFORMAT=1 JUCE_USE_FLAC=1 JUCE_USE_OGGVORBIS=1)
     target_link_libraries(LatheTests PRIVATE
         LatheData
         LatheMutable
+        lathe_lame
         juce::juce_audio_utils juce::juce_audio_processors juce::juce_gui_extra juce::juce_cryptography juce::juce_dsp
         juce::juce_recommended_config_flags)
     if(MSVC)
@@ -424,6 +460,7 @@ target_link_libraries(Lathe
     PRIVATE
         LatheData
         LatheMutable
+        lathe_lame
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_audio_devices

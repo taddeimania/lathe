@@ -65,7 +65,12 @@ public:
         for this song. */
     Result loadReference (const File&, std::function<void (Result)> done = {});
     void clear (Slot);
+    /** Stops the render or read that's running (from the window or the assistant). What the
+        slot had before stays as it was, and `done` hears "cancelled". */
+    void cancel();
     bool isBusy() const noexcept        { return job != nullptr; }
+    /** Which version is being made, while busy. */
+    Slot busySlot() const noexcept;
     String busyText() const             { return busyWhat; }
     double getProgress() const noexcept { return progress.load(); }
     /** Call when a project has been opened: forgets Before and Now, and loads the reference

@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "Mp3Writer.h"
 #include "RenderPool.h"
 #include "../Host/RemotePlugin.h"
 #include "../Devices/Device.h"
@@ -2419,6 +2420,36 @@ String Engine::exportMixName (const String& base, const Edit& edit, const std::s
     return base + " (" + String (names.size()) + " tracks)";
 }
 
+String Engine::formatName (ExportSettings::Format f)
+{
+    using F = ExportSettings::Format;
+    switch (f)
+    {
+        case F::aiff: return "aiff";
+        case F::flac: return "flac";
+        case F::mp3:  return "mp3";
+        case F::ogg:  return "ogg";
+        case F::wav:  break;
+    }
+    return "wav";
+}
+
+bool Engine::parseFormat (const String& name, ExportSettings::Format& out)
+{
+    using F = ExportSettings::Format;
+    const auto n = name.trim().trimCharactersAtStart (".").toLowerCase();
+    for (auto f : { F::wav, F::aiff, F::flac, F::mp3, F::ogg })
+        if (n == formatName (f))
+        {
+            out = f;
+            return true;
+        }
+    if (n == "aif")  { out = F::aiff; return true; }
+    if (n == "wave") { out = F::wav;  return true; }
+    if (n == "vorbis" || n == "ogg vorbis") { out = F::ogg; return true; }
+    return false;
+}
+
 Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (double)>& progress, StringArray& written)
 {
     struct Output
@@ -2437,12 +2468,42 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
         std::unique_ptr<OutputStream> stream (f.createOutputStream());
         if (stream == nullptr)
             return {};
+        using F = ExportSettings::Format;
+        auto options = AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2);
+        // Only WAV keeps 32-bit float; AIFF and FLAC top out at 24.
+        const auto bits = s.format == F::wav ? s.bitDepth : jmin (24, s.bitDepth);
+        switch (s.format)
+        {
+            case F::mp3:
+                return makeMp3Writer (std::move (stream), sr, 2, s.kbps, f.getFileNameWithoutExtension());
+            case F::ogg:
+            {
+                // JUCE's Vorbis qualities run 0-10 (64 to 500 kbps on average); these match the bit rates.
+                const auto quality = s.kbps >= 320 ? 9 : s.kbps >= 256 ? 8 : s.kbps >= 224 ? 7
+                                   : s.kbps >= 192 ? 6 : s.kbps >= 160 ? 5 : 4;
+                OggVorbisAudioFormat ogg;
+                return ogg.createWriterFor (stream, options.withBitsPerSample (32).withQualityOptionIndex (quality));
+            }
+            case F::flac:
+            {
+                FlacAudioFormat flac;
+                return flac.createWriterFor (stream, options.withBitsPerSample (bits).withQualityOptionIndex (5));
+            }
+            case F::aiff:
+            {
+                AiffAudioFormat aiff;
+                return aiff.createWriterFor (stream, options.withBitsPerSample (bits));
+            }
+            case F::wav:
+                break;
+        }
         WavAudioFormat wav;
-        auto options = AudioFormatWriterOptions().withSampleRate (sr).withNumChannels (2).withBitsPerSample (s.bitDepth);
-        if (s.bitDepth == 32)
+        options = options.withBitsPerSample (bits);
+        if (bits == 32)
             options = options.withSampleFormat (AudioFormatWriterOptions::SampleFormat::floatingPoint);
         return wav.createWriterFor (stream, options);
     };
+    const auto extension = "." + formatName (s.format);
 
     auto prepare = [&] (const std::vector<RenderTap>& taps, int64) -> Result
     {
@@ -2460,12 +2521,12 @@ Result Engine::exportAudio (const ExportSettings& s, const std::function<bool (d
             if (tap.isMix)
             {
                 const auto name = s.trackIds.empty() ? s.baseName : exportMixName (s.baseName, *edit, s.trackIds);
-                o.file = s.folder.getChildFile (File::createLegalFileName (name) + ".wav");
+                o.file = s.folder.getChildFile (File::createLegalFileName (name) + extension);
             }
             else
             {
                 const auto name = String (number[tap.trackId]).paddedLeft ('0', 2) + " " + tap.name;
-                o.file = s.folder.getChildFile (File::createLegalFileName (s.baseName + " - " + name) + ".wav");
+                o.file = s.folder.getChildFile (File::createLegalFileName (s.baseName + " - " + name) + extension);
             }
             o.writer = makeWriter (o.file);
             if (o.writer == nullptr)

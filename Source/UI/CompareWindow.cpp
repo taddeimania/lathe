@@ -35,13 +35,13 @@ public:
         }
         actions[Compare::before].setButtonText ("Mark Before");
         actions[Compare::before].setTooltip ("Render the mix as it is now, to compare your next changes against");
-        actions[Compare::before].onClick = [this] { renderSlot (Compare::before); };
+        actions[Compare::before].onClick = [this] { if (! cancelIfBusy (Compare::before)) renderSlot (Compare::before); };
         actions[Compare::now].setButtonText ("Update Now");
         actions[Compare::now].setTooltip ("Render the mix as it is now (over the same bars as Before)");
-        actions[Compare::now].onClick = [this] { renderSlot (Compare::now); };
+        actions[Compare::now].onClick = [this] { if (! cancelIfBusy (Compare::now)) renderSlot (Compare::now); };
         actions[Compare::reference].setButtonText ("Choose File...");
         actions[Compare::reference].setTooltip ("A finished track to compare against. You can also drop an audio file on this window");
-        actions[Compare::reference].onClick = [this] { chooseReference(); };
+        actions[Compare::reference].onClick = [this] { if (! cancelIfBusy (Compare::reference)) chooseReference(); };
 
         playButton.onClick = [this] { togglePlay(); };
         playButton.setTooltip ("Play or stop the comparison (Space)");
@@ -143,7 +143,7 @@ public:
             g.setFont (theme::font (12.5f));
             g.setColour (theme::textDim);
             String line1, line2;
-            if (cmp.isBusy() && busySlot == s)
+            if (cmp.isBusy() && (int) cmp.busySlot() == s)
                 line1 = cmp.busyText() + "... " + String (roundToInt (cmp.getProgress() * 100.0)) + "%";
             else if (! v.has())
                 line1 = s == Compare::reference ? "Choose a finished track you like"
@@ -216,6 +216,11 @@ public:
             togglePlay();
             return true;
         }
+        if (k == KeyPress::escapeKey && cmp.isBusy())
+        {
+            cmp.cancel();
+            return true;
+        }
         return false;
     }
 
@@ -235,7 +240,14 @@ private:
     ToggleButton match;
     Label hint, summary;
     Rectangle<int> bar, table;
-    int busySlot = -1;
+    /** A version's button while it's being made: Cancel. True if it cancelled. */
+    bool cancelIfBusy (Compare::Slot s)
+    {
+        if (! cmp.isBusy() || cmp.busySlot() != s)
+            return false;
+        cmp.cancel();
+        return true;
+    }
     std::unique_ptr<FileChooser> chooser;
 
     void timerCallback() override
@@ -256,14 +268,18 @@ private:
         for (int s = 0; s < Compare::numSlots; ++s)
             any = any || cmp.get ((Compare::Slot) s).has();
         playButton.setEnabled (any);
-        for (auto& b : actions)
-            b.setEnabled (! cmp.isBusy());
-        if (cmp.get (Compare::reference).has())
-            actions[Compare::reference].setButtonText ("Change File...");
-        else
-            actions[Compare::reference].setButtonText ("Choose File...");
-        if (! cmp.isBusy())
-            busySlot = -1;
+        // While a version is being made, its button cancels it (so does Escape); the others wait.
+        actions[Compare::before].setButtonText ("Mark Before");
+        actions[Compare::now].setButtonText ("Update Now");
+        actions[Compare::reference].setButtonText (cmp.get (Compare::reference).has() ? "Change File..." : "Choose File...");
+        for (int s = 0; s < Compare::numSlots; ++s)
+        {
+            auto& b = actions[(size_t) s];
+            const bool making = cmp.isBusy() && (int) cmp.busySlot() == s;
+            if (making)
+                b.setButtonText ("Cancel");
+            b.setEnabled (! cmp.isBusy() || making);
+        }
 
         auto text = cmp.summary();
         if (text.isEmpty())
@@ -284,7 +300,6 @@ private:
 
     void renderSlot (Compare::Slot s)
     {
-        busySlot = (int) s;
         auto r = cmp.render (s, [this, s] (Result res)
         {
             if (res.failed() && status)
@@ -296,7 +311,6 @@ private:
         });
         if (r.failed())
         {
-            busySlot = -1;
             if (status) status ("Compare: " + r.getErrorMessage());
         }
         repaint();
@@ -304,14 +318,12 @@ private:
 
     void loadReference (const File& f)
     {
-        busySlot = Compare::reference;
         auto r = cmp.loadReference (f, [this] (Result res)
         {
             if (status) status (res.failed() ? "Compare: " + res.getErrorMessage() : "Compare: the reference is ready");
         });
         if (r.failed())
         {
-            busySlot = -1;
             if (status) status ("Compare: " + r.getErrorMessage());
         }
         repaint();

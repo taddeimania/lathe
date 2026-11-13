@@ -71,6 +71,7 @@ public:
     Result result = Result::ok();
     Version version;
     std::atomic<bool> finished { false };
+    std::atomic<bool> cancelled { false };
 
     void run() override
     {
@@ -305,7 +306,10 @@ void Compare::timerCallback()
     auto finished = std::move (job);
     finished->stopThread (1000);
     busyWhat.clear();
-    if (finished->result.wasOk() && finished->version.has())
+    if (finished->cancelled.load())
+        finished->result = Result::fail ("Cancelled. " + slotName (finished->slot)
+                                         + (versions[(size_t) finished->slot].has() ? " is as it was." : " wasn't made."));
+    else if (finished->result.wasOk() && finished->version.has())
     {
         auto v = std::move (finished->version);
         v.madeAt = Time::currentTimeMillis();
@@ -318,6 +322,20 @@ void Compare::timerCallback()
     sendChangeMessage();
     if (done)
         done (finished->result);
+}
+
+void Compare::cancel()
+{
+    if (job == nullptr)
+        return;
+    job->cancelled = true;
+    job->signalThreadShouldExit();   // the render and the file reading both check this
+    sendChangeMessage();
+}
+
+Compare::Slot Compare::busySlot() const noexcept
+{
+    return job != nullptr ? job->slot : now;
 }
 
 void Compare::clear (Slot s)

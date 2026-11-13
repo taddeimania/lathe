@@ -1,4 +1,5 @@
 #include "AssistantTools.h"
+#include "../Engine/Mp3Writer.h"
 #include "AssistantShared.h"
 #include "../Devices/Device.h"
 #include "../Devices/Master/Loudness.h"
@@ -2178,13 +2179,32 @@ std::shared_ptr<Tools::Job> Tools::startExport (const var& args, var& immediate)
         immediate = toolText ("Nothing to export: mix and stems are both off.", true);
         return {};
     }
+    using F = Engine::ExportSettings::Format;
+    if (args.hasProperty ("format") && ! Engine::parseFormat (args["format"].toString(), s.format))
+    {
+        immediate = toolText ("format is wav, aiff, flac, mp3 or ogg.", true);
+        return {};
+    }
     const int bits = (int) args.getProperty ("bit_depth", 24);
     if (bits != 16 && bits != 24 && bits != 32)
     {
         immediate = toolText ("bit_depth is 16, 24 or 32 (32-bit float).", true);
         return {};
     }
+    if (bits == 32 && (s.format == F::aiff || s.format == F::flac))
+    {
+        immediate = toolText ("AIFF and FLAC go up to 24-bit; only WAV has 32-bit float.", true);
+        return {};
+    }
     s.bitDepth = bits;
+    const int kbps = (int) args.getProperty ("kbps", 320);
+    const bool mp3Rate = std::find (mp3BitRates.begin(), mp3BitRates.end(), kbps) != mp3BitRates.end();
+    if ((s.format == F::mp3 && ! mp3Rate) || (s.format == F::ogg && (kbps < 128 || kbps > 320)))
+    {
+        immediate = toolText (s.format == F::mp3 ? "kbps for mp3 is 320, 256, 192 or 128." : "kbps for ogg is 128 to 320.", true);
+        return {};
+    }
+    s.kbps = kbps;
     s.tailSeconds = jlimit (0.0, 30.0, (double) args.getProperty ("tail_seconds", 2.0));
     s.startBeat = args.hasProperty ("from_bar") ? toBeats ((double) args["from_bar"]) : 0.0;
     s.endBeat = args.hasProperty ("to_bar") ? toBeats ((double) args["to_bar"]) : edit.getEndBeat();
@@ -2303,7 +2323,10 @@ std::shared_ptr<Tools::Job> Tools::startCompare (const var& args, var& immediate
     auto say = showStatus;
     const auto started = compare->render (slot, [job, cmp, markBefore, say] (Result r)
     {
-        if (r.failed())
+        if (r.failed() && r.getErrorMessage().startsWith ("Cancelled"))
+            job->result = toolText ("The person cancelled this in Compare. " + r.getErrorMessage()
+                                    + " Ask before rendering it again.", true);
+        else if (r.failed())
             job->result = toolText ("Couldn't render the mix: " + r.getErrorMessage(), true);
         else
         {
