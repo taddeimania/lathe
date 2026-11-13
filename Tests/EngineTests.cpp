@@ -1251,7 +1251,9 @@ int main (int argc, char** argv)
     std::cout << "Crash reports (asked before sending)" << std::endl;
     {
         const auto here = crashes::captureForTests();
-        check (here.startsWith ("Lathe ") && here.contains ("LatheTests + 0x"), "a report names each step as <file> + <offset>");
+        // The module's file name: LatheTests on macOS and Linux, LatheTests.exe on Windows.
+        check (here.startsWith ("Lathe ") && (here.contains ("LatheTests + 0x") || here.contains ("LatheTests.exe + 0x")),
+               "a report names each step as <file> + <offset>");
         const auto home = File::getSpecialLocation (File::userHomeDirectory).getFullPathName();
         const auto cleaned = crashes::scrub ("loaded " + home + "/Music/My Band/song.lathe\nfrom /Users/mara/Desktop/x\nC:\\Users\\dev\\AppData\\y");
         check (! cleaned.contains (home) && ! cleaned.contains ("mara") && ! cleaned.contains ("dev\\AppData") && ! cleaned.contains ("My Band"),
