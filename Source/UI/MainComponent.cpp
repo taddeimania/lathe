@@ -8,6 +8,7 @@
 #include "../Devices/Device.h"
 #include "../Demo/DemoSong.h"
 #include "../Demo/Welcome.h"
+#include "../Cloud/Milestones.h"
 
 #include <iostream>
 
@@ -98,7 +99,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
     engine.onStatus = [this] (const String& m) { setStatus (m); };
     engine.onDeviceChanged = [this] { refreshAll(); };
-    engine.onRecordingFinished = [this] { refreshAll(); };
+    engine.onRecordingFinished = [this] { refreshAll(); milestones::reach (settings, "recorded"); };
 
     host.onScanProgress = [this] { statusRight.setText (host.getScanStatus(), dontSendNotification); };
     host.onScanFinished = [this]
@@ -273,6 +274,23 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::startup (const String& commandLine)
 {
+    // Anonymous milestones: asked once, on a brand-new install only (Main.cpp sets askMilestones
+    // when there was no settings file), after the window is up. Never after an update.
+    // Nothing is sent unless they say yes (Cloud/Milestones.h).
+    if (! forScreenshots)
+    {
+        milestones::startup (settings, settings.getBoolValue ("askMilestones", false));
+        if (milestones::shouldAsk (settings))
+        {
+            Component::SafePointer<MainComponent> safe (this);
+            Timer::callAfterDelay (1200, [safe]
+            {
+                if (safe != nullptr && milestones::shouldAsk (safe->settings))
+                    showMilestonesDialog (safe->settings);
+            });
+        }
+    }
+
     const auto arg = commandLine.unquoted().trim();
     if (arg.isNotEmpty() && File::isAbsolutePath (arg) && File (arg).existsAsFile())
     {
@@ -878,6 +896,13 @@ void MainComponent::timerCallback()
 
     if (++ticks % 30 == 0)
     {
+        if (milestones::choice (settings) == milestones::Choice::yes)
+        {
+            if (engine.isPlaying())
+                milestones::reach (settings, "played");
+            if (auto* d = engine.deviceManager.getCurrentAudioDevice(); d != nullptr && d->getActiveInputChannels().countNumberOfSetBits() > 0)
+                milestones::reach (settings, "interface");
+        }
         showAssistantBar();   // goes away a little after the assistant's last step
         if (statusTime != 0 && Time::getMillisecondCounter() - statusTime > 12000)
         {
@@ -1767,8 +1792,10 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
     {
         StringArray written;
         bool ok = true;
+        File outDir;
     };
     auto run = std::make_shared<Run>();
+    run->outDir = outDir;
     auto shot = [outDir, run] (Component& c, const String& name)
     {
         if (saveShot (c, outDir.getChildFile (name)))
@@ -1948,6 +1975,16 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                                     shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-compare.jpg");
                                 else if (dynamic_cast<UndoHistoryWindow*> (w) != nullptr)
                                     shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-undo-history.jpg");
+                            }
+                            {
+                                // The one-time question about anonymous milestones (privacy page).
+                                const auto f = run->outDir.getChildFile ("welcome-milestones.jpg");
+                                f.deleteFile();
+                                FileOutputStream out (f);
+                                JPEGImageFormat jpeg;
+                                jpeg.setQuality (0.9f);
+                                if (out.openedOk() && jpeg.writeImageToStream (milestonesDialogImage(), out))
+                                    run->written.add (f.getFileName());
                             }
                             CompareWindow::closeIfOpen();
                             UndoHistoryWindow::closeIfOpen();

@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.8
+
+- **One question on a new install.** The first time Lathe opens after you install it, it asks whether
+  it may share a few anonymous milestones, like the first time you record something, so we can see
+  where new people get stuck. Nothing is sent unless you say yes, and updating Lathe never asks.
+  Change it any time in Settings, under Privacy. Exactly what's sent: getlathe.app/privacy#app.
+
 ## New in 0.12.7
 
 - **Export to FLAC, MP3, AIFF or Ogg Vorbis**, not just WAV. Pick the format and its bit depth or

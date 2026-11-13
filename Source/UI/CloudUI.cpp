@@ -1,4 +1,5 @@
 #include "CloudUI.h"
+#include "../Cloud/Milestones.h"
 #include "../Cloud/ProjectDiff.h"
 #include "CloudUIHelpers.h"
 
@@ -962,6 +963,8 @@ void CloudController::closeAccountWindows()
 void CloudController::accountChanged()
 {
     accountActive = isSignedIn();
+    if (accountActive)
+        milestones::reach (settings, "signed_in");
     forgetAccount();
     closeAccountWindows();
     pollAccount();                              // plan and friend requests now, not in two minutes
@@ -1200,6 +1203,7 @@ void CloudController::doPush (const String& parent, const String& message)
             return;
         }
         const auto& r = outcome->revision;
+        milestones::reach (settings, "pushed");
         hooks.setStatus ("Pushed " + r.label() + ": " + r.summary.upToFirstOccurrenceOf ("\n", false, false));
         waitingHead = waitingText = {};
         updateStatus();
@@ -1257,6 +1261,7 @@ void CloudController::pushYourTracks (const String& message, int attempt)
             return;
         }
         const auto& r = outcome->revision;
+        milestones::reach (settings, "pushed");
         hooks.setStatus ("Pushed " + ctx.pushTrackNames + " as " + r.label() + ". What else you changed is still here, not in the cloud.");
         waitingHead = waitingText = {};
         updateStatus();

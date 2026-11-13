@@ -1,5 +1,6 @@
 #include "Bench/Benchmark.h"
 #include "UI/MainComponent.h"
+#include "Cloud/Milestones.h"
 #include "Devices/Device.h"
 
 #include <iostream>
@@ -133,7 +134,13 @@ public:
             screenshotSettings.createDirectory();
             options.folderName = screenshotSettings.getFullPathName();   // absolute: wins over the usual place
         }
+        // No settings file yet: Lathe has never run on this computer (as this user). That's the
+        // only time it asks about anonymous milestones; an update or a reinstall over an old
+        // Lathe has a settings file already, so it never asks there (Cloud/Milestones.h).
+        const bool neverRunBefore = screenshotsDir == File() && ! options.getDefaultFile().existsAsFile();
         properties.setStorageParameters (options);
+        if (neverRunBefore)
+            milestones::markNeverRunBefore (*properties.getUserSettings());
         if (screenshotsDir != File())
         {
             properties.getUserSettings()->setValue ("autoUpdateCheck", false);

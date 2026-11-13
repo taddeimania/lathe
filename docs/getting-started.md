@@ -9,3 +9,7 @@
    - **8-Input Tracking**: eight mono tracks on inputs 1–8, a MIDI track, and two returns. Monitoring is **Off** on these tracks, so you hear yourself through your interface's direct monitoring with zero latency.
 
 Set up a session the way you like it (tracks, inputs, plug-ins, sends), then use **File > Save as Template**. In Settings you can choose to open the last project or start from your default template on launch.
+
+## The question on first launch
+
+The first time you open Lathe after installing it, it asks whether it may share a few anonymous milestones, like the first time you record something, so we can see where new people get stuck. Each is sent once, with Lathe's version and Mac, Windows or Linux, and nothing else: no ID, name, song or track. **Don't share** (or closing the window) sends nothing, and Lathe doesn't ask again. Updating Lathe never shows the question; it only appears when Lathe has no settings yet. Change it any time in Settings, under **Privacy**. The full list, the exact message and what's kept are on [getlathe.app/privacy](https://getlathe.app/privacy#app); the code is `Source/Cloud/Milestones.cpp`.

@@ -1,4 +1,6 @@
 #include "Dialogs.h"
+#include "../Cloud/Milestones.h"
+#include "BinaryData.h"
 
 namespace lathe
 {
@@ -121,10 +123,24 @@ public:
         templateBox.setTooltip ("Default template");
         addAndMakeVisible (templateBox);
 
+        privacyHeading = makeHeading (*this, labels, "Privacy");
+        shareMilestones.setButtonText ("Share anonymous milestones");
+        shareMilestones.setToggleState (milestones::choice (ctx.settings) == milestones::Choice::yes, dontSendNotification);
+        shareMilestones.onClick = [this] { milestones::setChoice (ctx.settings, shareMilestones.getToggleState(), false); };
+        addAndMakeVisible (shareMilestones);
+        privacyNote = makeNote (*this, labels, "Off unless you turn it on. When it's on, Lathe sends a count the first time you "
+                                               "do a few things (open it, record, export...), once each, with no ID, songs or "
+                                               "names. Turn it off and nothing more is sent.");
+        whatsSent.setButtonText ("Exactly what's sent");
+        whatsSent.setURL (URL (milestones::explainUrl));
+        whatsSent.setFont (theme::font (12.0f), false, Justification::centredLeft);
+        whatsSent.setColour (HyperlinkButton::textColourId, theme::accent);
+        addAndMakeVisible (whatsSent);
+
         ctx.engine.deviceManager.addChangeListener (this);
         updateNotes();
         startTimer (500);
-        setSize (640, 900);
+        setSize (640, 1000);
     }
 
     ~SettingsPanel() override
@@ -191,6 +207,14 @@ public:
         startup.setBounds (s.removeFromLeft (330));
         s.removeFromLeft (8);
         templateBox.setBounds (s.removeFromLeft (180));
+        r.removeFromTop (14);
+
+        privacyHeading->setBounds (r.removeFromTop (22));
+        auto p = r.removeFromTop (24);
+        shareMilestones.setBounds (p.removeFromLeft (240));
+        whatsSent.setBounds (p.removeFromLeft (160));
+        r.removeFromTop (2);
+        privacyNote->setBounds (r.removeFromTop (34));
     }
 
 private:
@@ -201,7 +225,9 @@ private:
     AudioDeviceSelectorComponent devices;
     OwnedArray<Label> labels;
     Label *audioHeading {}, *offsetNote {}, *pluginHeading {}, *pluginNote {}, *startupHeading {}, *rateLabel {};
-    Label *processingHeading {}, *coresLabel {}, *coresNote {};
+    Label *processingHeading {}, *coresLabel {}, *coresNote {}, *privacyHeading {}, *privacyNote {};
+    ToggleButton shareMilestones;
+    HyperlinkButton whatsSent;
     Slider offset;
     TextEditor folders;
     TextButton scan { "Scan for new plug-ins" }, rescan { "Clear list and rescan all" }, retry { "Retry skipped plug-ins" };
@@ -209,11 +235,109 @@ private:
 };
 
 //==============================================================================
+/** "Thanks for installing Lathe!": the one time Lathe asks whether it may send anonymous
+    milestones (new installs only). It says what's never sent; the full list is on the privacy
+    page, so it can be kept up to date there. The two answers look the same, nothing is sent
+    until "Share" is pressed, and closing the window is a no. */
+class MilestonesPanel : public Component
+{
+public:
+    explicit MilestonesPanel (PropertiesFile& s) : settings (s)
+    {
+        logo = ImageCache::getFromMemory (BinaryData::iconsmall_png, BinaryData::iconsmall_pngSize);
+
+        heading.setText ("Thanks for installing Lathe!", dontSendNotification);
+        heading.setFont (theme::font (19.0f, true));
+        addAndMakeVisible (heading);
+
+        intro.setText ("While we're in the early stages, Lathe can report a few anonymous milestones, like the first time "
+                       "you record something. It shows us where new people get stuck, so we know what to make better.",
+                       dontSendNotification);
+        never.setText ("It never sends your name, email, songs, recordings, track names, or anything that tells your "
+                       "computer apart from anyone else's. Nothing is sent unless you choose Share.", dontSendNotification);
+        for (auto* l : { &intro, &never, &later })
+        {
+            l->setFont (theme::font (13.0f));
+            l->setJustificationType (Justification::topLeft);
+            l->setMinimumHorizontalScale (1.0f);
+            addAndMakeVisible (l);
+        }
+        later.setText ("You can change your mind any time in Settings, under Privacy.", dontSendNotification);
+        later.setColour (Label::textColourId, theme::textDim);
+        later.setFont (theme::font (12.0f));
+
+        whatsSent.setButtonText ("Exactly what's sent, and what we do with it");
+        whatsSent.setURL (URL (milestones::explainUrl));
+        whatsSent.setFont (theme::font (13.0f), false, Justification::centredLeft);
+        whatsSent.setColour (HyperlinkButton::textColourId, theme::accent);
+        addAndMakeVisible (whatsSent);
+
+        dontShare.onClick = [this] { answer (false); };
+        share.onClick = [this] { answer (true); };
+        addAndMakeVisible (dontShare);
+        addAndMakeVisible (share);
+        setSize (520, 308);
+    }
+
+    ~MilestonesPanel() override
+    {
+        // Closed without an answer: that's a no, and it won't ask again.
+        if (! answered)
+            milestones::setChoice (settings, false, true);
+    }
+
+    void paint (Graphics& g) override
+    {
+        if (logo.isValid())
+            g.drawImage (logo, logoArea.toFloat(), RectanglePlacement::centred);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (24, 22);
+        auto top = r.removeFromTop (40);
+        logoArea = top.removeFromLeft (40);
+        top.removeFromLeft (6);
+        heading.setBounds (top);
+        r.removeFromTop (14);
+        intro.setBounds (r.removeFromTop (54));
+        r.removeFromTop (8);
+        never.setBounds (r.removeFromTop (40));
+        r.removeFromTop (6);
+        whatsSent.setBounds (r.removeFromTop (22).withWidth (300).withTrimmedLeft (4));
+
+        auto buttons = r.removeFromBottom (30);
+        r.removeFromBottom (6);
+        later.setBounds (r.removeFromBottom (20));
+        share.setBounds (buttons.removeFromRight (170));
+        buttons.removeFromRight (10);
+        dontShare.setBounds (buttons.removeFromRight (170));
+    }
+
+private:
+    void answer (bool yes)
+    {
+        answered = true;
+        milestones::setChoice (settings, yes, true);
+        if (auto* w = findParentComponentOfClass<DialogWindow>())
+            w->exitModalState (0);
+    }
+
+    PropertiesFile& settings;
+    bool answered = false;
+    Image logo;
+    Rectangle<int> logoArea;
+    Label heading, intro, never, later;
+    HyperlinkButton whatsSent;
+    TextButton dontShare { "Don't share" }, share { "Share milestones" };
+};
+
+//==============================================================================
 class ExportThread : public ThreadWithProgressWindow
 {
 public:
-    ExportThread (Engine& e, Engine::ExportSettings s)
-        : ThreadWithProgressWindow ("Exporting...", true, true, 10000, "Cancel"), engine (e), settings (std::move (s)) {}
+    ExportThread (Engine& e, Engine::ExportSettings s, PropertiesFile& p)
+        : ThreadWithProgressWindow ("Exporting...", true, true, 10000, "Cancel"), engine (e), settings (std::move (s)), appSettings (p) {}
 
     void run() override
     {
@@ -232,6 +356,7 @@ public:
 
         if (! cancelled && r.wasOk())
         {
+            milestones::reach (appSettings, "exported");
             auto options = MessageBoxOptions()
                                .withIconType (MessageBoxIconType::InfoIcon)
                                .withTitle ("Export finished")
@@ -255,6 +380,7 @@ public:
 private:
     Engine& engine;
     Engine::ExportSettings settings;
+    PropertiesFile& appSettings;
     Result result { Result::ok() };
     StringArray files;
 };
@@ -503,7 +629,7 @@ private:
         ctx.settings.setValue ("exportFormat", Engine::formatName (s.format));
         ctx.settings.setValue ("exportTail", s.tailSeconds);
 
-        auto* thread = new ExportThread (ctx.engine, s);
+        auto* thread = new ExportThread (ctx.engine, s, ctx.settings);
         close();
         thread->launchThread();
     }
@@ -628,6 +754,39 @@ void launch (Component* content, const String& title, bool resizable)
 void showSettingsDialog (AppContext& ctx)
 {
     launch (new SettingsPanel (ctx), "Audio / MIDI Settings", true);
+}
+
+void showMilestonesDialog (PropertiesFile& settings)
+{
+    DialogWindow::LaunchOptions o;
+    o.content.setOwned (new MilestonesPanel (settings));
+    o.dialogTitle = "Welcome to Lathe";
+    o.dialogBackgroundColour = theme::panel;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+    o.launchAsync();
+}
+
+Image milestonesDialogImage()
+{
+    // A throwaway settings file: the panel saves "no" when it closes unanswered.
+    const auto file = File::createTempFile (".settings");
+    {
+        PropertiesFile scratch (file, PropertiesFile::Options());
+        MilestonesPanel panel (scratch);
+        const auto image = [&]
+        {
+            Image img (Image::RGB, panel.getWidth() * 2, panel.getHeight() * 2, true);
+            Graphics g (img);
+            g.addTransform (AffineTransform::scale (2.0f));
+            g.fillAll (theme::panel);
+            panel.paintEntireComponent (g, true);
+            return img;
+        }();
+        file.deleteFile();
+        return image;
+    }
 }
 
 void showExportDialog (AppContext& ctx, const std::set<int>& onlyTracks)

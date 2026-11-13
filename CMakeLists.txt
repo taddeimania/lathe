@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.12.7 LANGUAGES C CXX)
+project(Lathe VERSION 0.12.8 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -107,7 +107,7 @@ juce_add_gui_app(Lathe
 juce_add_binary_data(LatheData
     HEADER_NAME BinaryData.h
     NAMESPACE   BinaryData
-    SOURCES     Resources/Welcome.lathe)
+    SOURCES     Resources/Welcome.lathe Resources/icon-small.png)
 
 # Émilie Gillet's open-source DSP (MIT licence): the cores of Multi Synth, Resonator,
 # Grains and Random Notes. Only the DSP, vendored as-is apart from the portability changes
@@ -158,6 +158,7 @@ target_sources(Lathe PRIVATE
     Source/Engine/PluginHost.cpp
     Source/Engine/Engine.cpp
     Source/Engine/Mp3Writer.cpp
+    Source/Cloud/Milestones.cpp
     Source/Engine/RenderPool.cpp
     Source/Engine/ClipJoin.cpp
     Source/UI/Theme.cpp
@@ -375,6 +376,7 @@ if(LATHE_BUILD_TESTS)
         ${LATHE_DEVICE_SOURCES}
         Source/Engine/Engine.cpp
         Source/Engine/Mp3Writer.cpp
+        Source/Cloud/Milestones.cpp
         Source/Engine/RenderPool.cpp
         Source/Engine/ClipJoin.cpp
         Source/Patcher/Updater.cpp

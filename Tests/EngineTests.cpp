@@ -10,6 +10,7 @@
 #include "Cloud/ProjectDiff.h"
 #include "Cloud/Revisions.h"
 #include "Cloud/Packing.h"
+#include "Cloud/Milestones.h"
 #include "Assistant/AssistantServer.h"
 #include "Assistant/AssistantTools.h"
 #include "Assistant/MixAnalysis.h"
@@ -960,6 +961,75 @@ int main (int argc, char** argv)
                 check (p == 13000, "exported mix is latency-compensated: impulse at 13000 (got " + String (p) + ")");
             }
         }
+    }
+
+    std::cout << "Milestones (anonymous, opt-in)" << std::endl;
+    {
+        PropertiesFile::Options po;
+        po.applicationName = "milestones-test";
+        po.filenameSuffix = ".settings";
+        po.folderName = dir.getChildFile ("milestones").getFullPathName();
+        dir.getChildFile ("milestones").createDirectory();
+        PropertiesFile p (dir.getChildFile ("milestones/m.settings"), po);
+        Array<var> sent;
+        milestones::setSenderForTests ([&] (const var& v) { sent.add (v); });
+
+        milestones::startup (p, true);
+        milestones::reach (p, "recorded");
+        check (milestones::choice (p) == milestones::Choice::notAsked && sent.isEmpty(), "nothing is sent before they're asked");
+
+        milestones::setChoice (p, true, true);
+        check (sent.size() == 1 && sent[0]["milestone"] == "launched" && sent[0]["cohort"] == "new", "yes in the welcome window sends launched, as a new install");
+        auto* o = sent[0].getDynamicObject();
+        check (o != nullptr && o->getProperties().size() == 5 && sent[0]["kind"] == "app" && sent[0]["version"].toString().isNotEmpty()
+               && StringArray { "macos", "windows", "linux" }.contains (sent[0]["system"].toString()),
+               "the message is kind, milestone, cohort, system and version: nothing else");
+        milestones::reach (p, "recorded");
+        milestones::reach (p, "recorded");
+        milestones::reach (p, "not_a_milestone");
+        check (sent.size() == 2 && sent[1]["milestone"] == "recorded", "each milestone is sent once, and only the listed ones");
+        milestones::reach (p, "came_back");
+        check (sent.size() == 2, "came_back isn't sent by asking; startup decides");
+        milestones::startup (p, false);
+        check (sent.size() == 2, "not on the first day");
+        p.setValue ("firstLaunchDay", (Time::getCurrentTime() - RelativeTime::days (8)).formatted ("%Y-%m-%d"));
+        milestones::startup (p, false);
+        check (sent.size() == 3 && sent[2]["milestone"] == "came_back", "came_back a week or more later");
+
+        milestones::setChoice (p, false, false);
+        milestones::reach (p, "exported");
+        check (sent.size() == 3, "turned off: nothing more is sent");
+
+        PropertiesFile q (dir.getChildFile ("milestones/q.settings"), po);
+        sent.clear();
+        milestones::startup (q, false);
+        milestones::setChoice (q, true, true);
+        check (sent.size() == 1 && sent[0]["cohort"] == "existing", "an install from before milestones counts as existing");
+        PropertiesFile r (dir.getChildFile ("milestones/r.settings"), po);
+        sent.clear();
+        milestones::startup (r, true);
+        milestones::setChoice (r, false, true);
+        milestones::reach (r, "launched");
+        check (sent.isEmpty() && milestones::choice (r) == milestones::Choice::no, "no means nothing at all");
+        milestones::setChoice (r, true, false);
+        check (sent.size() == 1 && sent[0]["cohort"] == "existing", "turned on later in Settings: existing, since its early steps went unseen");
+        // Only a Lathe that has never run here asks. An updated one (settings from before) never does.
+        PropertiesFile upd (dir.getChildFile ("milestones/updated.settings"), po);
+        upd.setValue ("lastProject", "/somewhere/song.lathe");
+        upd.setValue ("welcomeSongShown", true);
+        milestones::startup (upd, false);
+        check (! milestones::shouldAsk (upd), "after an update, the question never shows");
+        PropertiesFile fresh (dir.getChildFile ("milestones/fresh.settings"), po);
+        milestones::markNeverRunBefore (fresh);
+        milestones::startup (fresh, true);
+        check (milestones::shouldAsk (fresh), "a brand-new install is asked");
+        milestones::setChoice (fresh, false, true);
+        check (! milestones::shouldAsk (fresh), "and only until it answers");
+
+        check (milestones::names().size() == 8, "eight milestones (the privacy page lists the same eight)");
+        for (auto& n : milestones::names())
+            check (milestones::describe (n).isNotEmpty(), "described: " + n);
+        milestones::setSenderForTests ({});
     }
 
     std::cout << "Export formats" << std::endl;
