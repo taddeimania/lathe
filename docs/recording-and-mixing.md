@@ -80,7 +80,7 @@ Click a version, or press 1, 2 or 3, to hear it; Space plays and stops while the
 
 ## Export
 
-**File > Export Mix / Stems** (Cmd/Ctrl+Shift+E). You can export the whole song or the loop region, with a tail, in any of these formats:
+**File > Export Audio** (Cmd/Ctrl+Shift+E). You can export the whole song or the loop region, with a tail, in any of these formats:
 
 | Format | Options | Use it for |
 |---|---|---|

@@ -74,7 +74,7 @@ private:
     DragNumber tempo { 20.0, 400.0, 2, 0.5 };
     DragNumber sigNum { 1.0, 32.0, 0, 0.2 }, sigDen { 1.0, 32.0, 0, 0.2 };
     Label position, time;
-    TextButton arrangeButton { "Arrange" }, mixButton { "Mix" }, notesButton { "Notes" };
+    TextButton arrangeButton { "Arrange" }, mixButton { "Mix" }, notesButton { "Comments" };
     Label cpu;
     TextButton deviceButton;
     int refreshCounter = 0;

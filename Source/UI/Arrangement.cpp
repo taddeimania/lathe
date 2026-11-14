@@ -397,6 +397,9 @@ public:
         g.fillAll (theme::panel);
 
         const int loopH = 9;
+        // The loop strip, a shade darker so it reads as its own lane.
+        g.setColour (theme::window);
+        g.fillRect (0, 0, getWidth(), loopLane);
         // loop brace: a solid bar when on, a thin bracket when off
         {
             const float x1 = owner.beatToX (edit.loopStart), x2 = owner.beatToX (edit.loopEnd);
@@ -449,23 +452,27 @@ public:
         g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
     }
 
+    // The loop strip only changes the loop when it's dragged. A plain click anywhere on the ruler,
+    // strip included, places the start marker, so a click a little too high costs nothing.
+    void mouseMove (const MouseEvent& e) override
+    {
+        switch (e.y < loopLane ? hitLoop ((float) e.x) : LoopDrag::none)
+        {
+            case LoopDrag::start: case LoopDrag::end: setMouseCursor (MouseCursor::LeftRightResizeCursor); break;
+            case LoopDrag::move:   setMouseCursor (MouseCursor::DraggingHandCursor); break;
+            case LoopDrag::create: setMouseCursor (MouseCursor::IBeamCursor); break;
+            case LoopDrag::none:   setMouseCursor (MouseCursor::NormalCursor); break;
+        }
+    }
+
     void mouseDown (const MouseEvent& e) override
     {
         auto& edit = owner.ctx.edit;
         const double beat = owner.snap (owner.xToBeat ((float) e.x), e.mods.isAltDown());
 
-        if (e.y < 10)
+        if (e.y < loopLane)
         {
-            const float x1 = owner.beatToX (edit.loopStart), x2 = owner.beatToX (edit.loopEnd);
-            const float mx = (float) e.x;
-            if (std::abs (mx - x1) < 6.0f)       loopDrag = LoopDrag::start;
-            else if (std::abs (mx - x2) < 6.0f)  loopDrag = LoopDrag::end;
-            else if (mx > x1 && mx < x2)         loopDrag = LoopDrag::move;
-            else
-            {
-                loopDrag = LoopDrag::end;
-                edit.loopStart = edit.loopEnd = beat;
-            }
+            loopDrag = hitLoop ((float) e.x);
             grabStart = edit.loopStart;
             grabEnd = edit.loopEnd;
             grabBeat = beat;
@@ -482,6 +489,16 @@ public:
         const double beat = owner.snap (owner.xToBeat ((float) e.x), e.mods.isAltDown());
         const double minLen = owner.gridStep();
 
+        if (loopDrag != LoopDrag::none && ! e.mouseWasDraggedSinceMouseDown())
+            return;   // not a drag yet: it may still be a click
+
+        if (loopDrag == LoopDrag::create)
+        {
+            // Drawing a new loop from where the drag started.
+            loopDrag = LoopDrag::end;
+            grabStart = grabEnd = grabBeat;
+        }
+
         switch (loopDrag)
         {
             case LoopDrag::start: edit.loopStart = jlimit (0.0, edit.loopEnd - minLen, beat); break;
@@ -497,14 +514,22 @@ public:
                 break;
             }
             case LoopDrag::none:
+            case LoopDrag::create:
                 placeMarker (e);
                 return;
         }
         owner.repaint();
     }
 
-    void mouseUp (const MouseEvent&) override
+    void mouseUp (const MouseEvent& e) override
     {
+        if (loopDrag != LoopDrag::none && ! e.mouseWasDraggedSinceMouseDown())
+        {
+            // A click in the loop strip: the start marker goes there, the loop stays as it was.
+            loopDrag = LoopDrag::none;
+            placeMarker (e);
+            return;
+        }
         if (loopDrag != LoopDrag::none)
         {
             auto& edit = owner.ctx.edit;
@@ -518,7 +543,7 @@ public:
 
     void mouseDoubleClick (const MouseEvent& e) override
     {
-        if (e.y < 10)
+        if (e.y < loopLane)
         {
             owner.ctx.edit.loopEnabled = ! owner.ctx.edit.loopEnabled;
             owner.ctx.edit.changed();
@@ -535,7 +560,20 @@ private:
         owner.repaint();
     }
 
-    enum class LoopDrag { none, start, end, move };
+    enum class LoopDrag { none, start, end, move, create };
+
+    /** What a drag from x in the loop strip would do. */
+    LoopDrag hitLoop (float x) const
+    {
+        auto& edit = owner.ctx.edit;
+        const float x1 = owner.beatToX (edit.loopStart), x2 = owner.beatToX (edit.loopEnd);
+        if (std::abs (x - x1) < 6.0f) return LoopDrag::start;
+        if (std::abs (x - x2) < 6.0f) return LoopDrag::end;
+        if (x > x1 && x < x2)         return LoopDrag::move;
+        return LoopDrag::create;
+    }
+
+    static constexpr int loopLane = 10;
     ArrangementView& owner;
     LoopDrag loopDrag = LoopDrag::none;
     double grabStart = 0, grabEnd = 0, grabBeat = 0;
@@ -1180,7 +1218,7 @@ private:
         PopupMenu m;
         if (ctx.notes != nullptr)
         {
-            m.addItem (10, "Add Note Here...");
+            m.addItem (10, "Add Comment Here...");
             m.addSeparator();
         }
         m.addItem (1, "Add audio track");
@@ -1230,7 +1268,7 @@ private:
         m.addItem (2, "Duplicate");
         m.addItem (22, "Join " + String (jmax (2, numSelected)) + " Clips", numSelected > 1);
         if (ctx.notes != nullptr)
-            m.addItem (30, "Add Note Here...");
+            m.addItem (30, "Add Comment Here...");
         m.addItem (3, "Split at start marker", ctx.edit.insertMarker > c->start && ctx.edit.insertMarker < c->end());
         if (c->kind == ClipKind::audio)
         {
@@ -1292,7 +1330,7 @@ private:
         std::set<std::pair<int, int>> baseSelection;      // marquee with Cmd/Ctrl or Shift adds to this
     };
     Rectangle<float> marquee;
-    double clickBeat = 0.0;               // where the last click was (for "Add Note Here")
+    double clickBeat = 0.0;               // where the last click was (for "Add Comment Here")
     Rectangle<int> clickScreen;
 
     ArrangementView& owner;

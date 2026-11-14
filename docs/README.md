@@ -8,7 +8,7 @@ How to use Lathe, and how it's put together. Start with **Getting started**.
 | [Recording and mixing](recording-and-mixing.md) | Recording, track groups, routing, monitor mixes, the channel EQ, export |
 | [Keys](keys.md) | Keyboard and mouse shortcuts, the piano roll |
 | [Performance](performance.md) | Processing cores, buffer size, the CPU meter, and the benchmark |
-| [Sharing projects with Lathe Cloud](lathe-cloud.md) | The Cloud menu: sharing, push and pull, history, notes |
+| [Sharing projects with Lathe Cloud](lathe-cloud.md) | The Cloud menu: sharing, push and pull, history, comments |
 | [AI assistant (MCP)](ai-assistant.md) | Letting your AI assistant read and build the session, control playback, and measure CPU use |
 | [Built-in devices and the plug-in browser](plugin-browser.md) | Lathe's own synths, drums, effects and Random Notes, and finding installed plug-ins |
 | [Updating Lathe](updating.md) | Lathe Patcher and the automatic update check |

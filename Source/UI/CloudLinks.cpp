@@ -406,8 +406,8 @@ void CloudController::shareListeningLink()
 
     auto* d = new LinkDialog ("Share a listening link", false);
     const auto songId = store->getProjectId();
-    const String about = "Anyone with the link can play this song's mix in a browser and leave notes at a time in it. "
-                         "They don't need Lathe or an account. Their notes show up in Notes, here and for everyone on the song.";
+    const String about = "Anyone with the link can play this song's mix in a browser and leave comments at a time in it. "
+                         "They don't need Lathe or an account. Their comments show up in Comments, here and for everyone on the song.";
     d->setMessage (about + "\n\nLathe renders the mix as it sounds now and uploads it.");
     d->setMain ("Share the Mix");
 

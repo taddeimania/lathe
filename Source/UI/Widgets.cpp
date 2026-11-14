@@ -742,6 +742,39 @@ void showGroupBus (AppContext& ctx, std::shared_ptr<TrackGroup> group)
                     + " plays through it. Add plug-ins here to process the whole group.");
 }
 
+namespace
+{
+/** Colour > Other...: a full colour picker beside the header, applied as it's dragged. */
+class ColourPicker : public Component, private ChangeListener
+{
+public:
+    ColourPicker (Colour start, std::function<void (Colour)> f) : onPick (std::move (f))
+    {
+        selector.setCurrentColour (start, dontSendNotification);
+        selector.setColour (ColourSelector::backgroundColourId, theme::panel);
+        selector.addChangeListener (this);
+        addAndMakeVisible (selector);
+        setSize (280, 300);
+    }
+    ~ColourPicker() override  { selector.removeChangeListener (this); }
+    void resized() override   { selector.setBounds (getLocalBounds()); }
+
+    static void show (Component& anchor, Colour start, std::function<void (Colour)> f)
+    {
+        CallOutBox::launchAsynchronously (std::make_unique<ColourPicker> (start, std::move (f)),
+                                          anchor.getScreenBounds(), nullptr);
+    }
+
+private:
+    void changeListenerCallback (ChangeBroadcaster*) override  { onPick (selector.getCurrentColour().withAlpha (1.0f)); }
+
+    ColourSelector selector { ColourSelector::showColourAtTop | ColourSelector::editableColour | ColourSelector::showColourspace };
+    std::function<void (Colour)> onPick;
+};
+
+constexpr int kOtherColour = 99;
+} // namespace
+
 void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGroup> group)
 {
     static const char* colourNames[] = { "Clay", "Ochre", "Moss", "Jade", "Steel", "Iris", "Rose", "Stone" };
@@ -749,6 +782,8 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
     auto& palette = getTrackPalette();
     for (int i = 0; i < palette.size(); ++i)
         colours.addColouredItem (100 + i, colourNames[i % 8], palette[i], true, group->colour == palette[i]);
+    colours.addSeparator();
+    colours.addItem (kOtherColour, "Other...", true, ! palette.contains (group->colour));
 
     PopupMenu m;
     m.addItem (1, "Rename group...");
@@ -778,7 +813,9 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
         if (safeAnchor == nullptr || r == 0)
             return;
         auto& edit = context->edit;
-        if (r == 1)        renameGroup (*context, group);
+        if (r == kOtherColour)
+            ColourPicker::show (*safeAnchor, group->colour, [context, group] (Colour c) { group->colour = c; context->edit.touched(); });
+        else if (r == 1)   renameGroup (*context, group);
         else if (r == 2)   edit.toggleGroupArm (group->id);
         else if (r == 3)   { group->collapsed = ! group->collapsed; edit.changed(); }
         else if (r == 4)   edit.ungroup (group->id);
@@ -818,6 +855,8 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
     auto& palette = getTrackPalette();
     for (int i = 0; i < palette.size(); ++i)
         colours.addColouredItem (100 + i, colourNames[i % 8], palette[i], true, track->colour == palette[i]);
+    colours.addSeparator();
+    colours.addItem (kOtherColour, "Other...", true, ! palette.contains (track->colour));
 
     PopupMenu groupMenu;
     if (track->holdsClips())
@@ -875,7 +914,11 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
             return -1;
         };
 
-        if (r == 1)
+        if (r == kOtherColour)
+        {
+            ColourPicker::show (*safeAnchor, track->colour, [context, track] (Colour c) { track->colour = c; context->edit.touched(); });
+        }
+        else if (r == 1)
         {
             renameTrack (*context, track);
         }

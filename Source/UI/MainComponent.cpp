@@ -19,7 +19,7 @@ namespace menu
 {
     enum
     {
-        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, exportTracks, showFolder, quit, openWelcome,
+        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome,
         undo = 100, redo, undoHistory, compareMixes, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
@@ -52,6 +52,7 @@ public:
     {
         owner.detailShown = ! owner.detailShown;
         owner.resized();
+        owner.menuItemsChanged();
     }
 
 private:
@@ -340,7 +341,7 @@ void MainComponent::startup (const String& commandLine)
     const auto last = File (settings.getValue ("lastProject"));
 
     // A new install: open a finished-sounding song, made with Lathe's own instruments, so the
-    // first thing anyone does is press play. Once only; File > Open the Welcome Song brings it back.
+    // first thing anyone does is press play. Once only; File > New from Template > Welcome to Lathe brings it back.
     if (! settings.containsKey ("welcomeSongShown"))
     {
         settings.setValue ("welcomeSongShown", true);
@@ -1196,6 +1197,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
             templates.addSeparator();
         templates.addSubMenu ("Delete Template", deleteTemplates, i > 0);
         templates.addItem (menu::restoreTemplates, "Restore Built-in Templates", settings.getValue ("hiddenTemplates").isNotEmpty());
+        templates.addSeparator();
+        templates.addItem (menu::openWelcome, "Welcome to Lathe (the demo song)");
         m.addSubMenu ("New from Template", templates);
 
         item (menu::open, "Open...", cmd + "O");
@@ -1210,16 +1213,13 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
             recentMenuFiles.add (f);
         }
         m.addSubMenu ("Open Recent", recent, recent.getNumItems() > 0);
-        item (menu::openWelcome, "Open the Welcome Song");
         m.addSeparator();
         item (menu::save, "Save", cmd + "S");
         item (menu::saveAs, "Save As...", cmd + "Shift+S");
         item (menu::saveTemplate, "Save as Template...");
         m.addSeparator();
         item (menu::importAudio, "Import Audio...", cmd + "I");
-        item (menu::exportAudio, "Export Mix / Stems...", cmd + "Shift+E");
-        item (menu::exportTracks, ctx.selection.trackIds.size() > 1 ? "Export Selected Tracks..." : "Export Selected Track...", {},
-              ! ctx.selection.trackIds.empty() || ctx.selection.trackId >= 0);
+        item (menu::exportAudio, "Export Audio...", cmd + "Shift+E");
         m.addSeparator();
         item (menu::showFolder, "Show Project Folder", {}, edit.workDir.isDirectory());
        #if ! JUCE_MAC
@@ -1261,8 +1261,8 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         m.addSeparator();
         item (menu::deleteTrack, "Delete Selected Track", {}, t != nullptr && ! t->isMaster());
         m.addSeparator();
-        item (menu::addNote, "Add Note at Start Marker...", cmd + "Alt+N", t != nullptr && t->holdsClips());
-        item (menu::addSongNote, "Add Song Note...", {});
+        item (menu::addNote, "Add Comment at Start Marker...", cmd + "Alt+N", t != nullptr && t->holdsClips());
+        item (menu::addSongNote, "Add Song Comment...", {});
     }
     else if (index == 3)
     {
@@ -1270,13 +1270,13 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::toggleDetail, "Show Bottom Panel", {}, true, detailShown);
         m.addSeparator();
         item (menu::compareMixes, "Compare...", cmd + "K");
-        item (menu::showNotes, "Notes...", cmd + "Shift+N");
+        item (menu::showNotes, "Comments...", cmd + "Shift+N");
         PopupMenu showOn;
         const auto show = notes->getShow();
-        showOn.addItem (menu::notesAll, "Every Note", true, show == NotesController::Show::all);
-        showOn.addItem (menu::notesUnresolved, "Unresolved Notes Only", true, show == NotesController::Show::unresolved);
-        showOn.addItem (menu::notesNone, "No Notes", true, show == NotesController::Show::none);
-        m.addSubMenu ("Show on Tracks", showOn);
+        showOn.addItem (menu::notesAll, "Every Comment", true, show == NotesController::Show::all);
+        showOn.addItem (menu::notesUnresolved, "Unresolved Comments Only", true, show == NotesController::Show::unresolved);
+        showOn.addItem (menu::notesNone, "No Comments", true, show == NotesController::Show::none);
+        m.addSubMenu ("Comments on Tracks", showOn);
         m.addSeparator();
         item (menu::zoomIn, "Zoom In", "+");
         item (menu::zoomOut, "Zoom Out", "-");
@@ -1375,14 +1375,6 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::saveTemplate:  saveAsTemplate(); break;
         case menu::importAudio:   importAudio(); break;
         case menu::exportAudio:   showExportDialog (ctx); break;
-        case menu::exportTracks:
-        {
-            auto ids = ctx.selection.trackIds;
-            if (ids.empty() && ctx.selection.trackId >= 0)
-                ids.insert (ctx.selection.trackId);
-            showExportDialog (ctx, ids);
-            break;
-        }
         case menu::showFolder:    edit.workDir.revealToUser(); break;
         case menu::quit:          JUCEApplication::getInstance()->systemRequestedQuit(); break;
 
@@ -1433,11 +1425,11 @@ void MainComponent::menuItemSelected (int id, int)
             break;
 
         case menu::toggleView:    setMixerShown (! mixerShown); break;
-        case menu::toggleDetail:  detailShown = ! detailShown; resized(); break;
+        case menu::toggleDetail:  detailShown = ! detailShown; resized(); menuItemsChanged(); break;
         case menu::showNotes:     notes->showWindow(); break;
-        case menu::notesAll:        notes->setShow (NotesController::Show::all); break;
-        case menu::notesUnresolved: notes->setShow (NotesController::Show::unresolved); break;
-        case menu::notesNone:       notes->setShow (NotesController::Show::none); break;
+        case menu::notesAll:        notes->setShow (NotesController::Show::all); menuItemsChanged(); break;
+        case menu::notesUnresolved: notes->setShow (NotesController::Show::unresolved); menuItemsChanged(); break;
+        case menu::notesNone:       notes->setShow (NotesController::Show::none); menuItemsChanged(); break;
         case menu::addNote:
             if (auto t = edit.findTrack (ctx.selection.trackId); t != nullptr && t->holdsClips())
             {

@@ -3,6 +3,22 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.11
+
+- **Notes are now Comments.** "Notes" kept getting mixed up with musical notes, so the remarks you pin to
+  a moment in a track, and the song-wide ones, are called comments everywhere: the top bar, the menus,
+  and the listening page. Nothing else about them changed, and existing ones are all still there.
+- **Menus show their keyboard shortcuts** on macOS, and their ticks stay right: View > Show Bottom Panel
+  and the comment filter no longer stay ticked after you change them some other way.
+- **Audio / MIDI Settings scrolls** when your screen is shorter than the window, so nothing is squashed
+  or out of reach, and **Add Folder...** picks an extra plug-in folder for you instead of typing its path.
+- **One Export.** File > Export Audio does it all: choose "Only the tracks ticked below" in the dialog to
+  export some tracks. Right-click a track still has Export This Track.
+- **The loop strip is harder to hit by accident.** A click at the top of the ruler places the start marker
+  like anywhere else; only a drag changes the loop. The strip is shaded so you can see where it is.
+- **Any track colour.** Colour > Other... opens a full colour picker.
+- The welcome song moved to File > New from Template.
+
 ## New in 0.12.10
 
 - **Crash reports, only if you say so.** If Lathe crashes, the next time it opens it shows you a short

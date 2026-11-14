@@ -24,9 +24,9 @@ String who (const String& email, const String& me)
 String explain (CloudController& cloud, const cloud::ApiError& err)
 {
     if (cloud.isOldServer (err))
-        return "Notes aren't available on Lathe Cloud yet. Try again later.";
+        return "Comments aren't available on Lathe Cloud yet. Try again later.";
     if (err.status == 404)
-        return "That note or song isn't there anymore (it may have been deleted or unshared).";
+        return "That comment or song isn't there anymore (it may have been deleted or unshared).";
     return err.message;
 }
 
@@ -242,13 +242,13 @@ bool NotesController::isConnectionProblem (const cloud::ApiError& err) const
 String NotesController::offlineMessage (const cloud::ApiError& err) const
 {
     const int n = (int) outbox.size();
-    const auto kept = n == 0 ? String ("Your notes are kept here")
+    const auto kept = n == 0 ? String ("Your comments are kept here")
                              : String (n) + (n == 1 ? " change is kept here" : " changes are kept here");
     if (cloud.isOldServer (err))
-        return "Notes aren't syncing: Lathe Cloud doesn't have notes yet. " + kept + " until it does.";
+        return "Comments aren't syncing: Lathe Cloud doesn't have comments yet. " + kept + " until it does.";
     if (err.status == 401)
-        return "Notes aren't syncing: sign in again (Cloud > Sign In). " + kept + " until then.";
-    return "Notes aren't syncing: can't reach Lathe Cloud. " + kept + " and sent when it's back.";
+        return "Comments aren't syncing: sign in again (Cloud > Sign In). " + kept + " until then.";
+    return "Comments aren't syncing: can't reach Lathe Cloud. " + kept + " and sent when it's back.";
 }
 
 void NotesController::setSyncProblem (const String& problem)
@@ -260,7 +260,7 @@ void NotesController::setSyncProblem (const String& problem)
     if (wasOk && problem.isNotEmpty())
         ctx.showStatus (problem);
     else if (! wasOk && problem.isEmpty())
-        ctx.showStatus ("Notes are syncing again.");
+        ctx.showStatus ("Comments are syncing again.");
     changed();
 }
 
@@ -329,8 +329,8 @@ void NotesController::refresh()
                 self->setSyncProblem (self->offlineMessage (err));
             else
             {
-                self->error = err.status == 404 ? String ("This song isn't shared with you anymore, so its notes can't be loaded.")
-                                                : "Couldn't load notes: " + err.message;
+                self->error = err.status == 404 ? String ("This song isn't shared with you anymore, so its comments can't be loaded.")
+                                                : "Couldn't load comments: " + err.message;
                 self->changed();
             }
             return;
@@ -358,8 +358,8 @@ void NotesController::refresh()
                 const bool isReply = ! newest->replies.empty() && newest->replies.back().createdAt >= newest->createdAt
                                      && newest->replies.back().author != self->getMe();
                 const auto from = isReply ? newest->replies.back().author : newest->author;
-                self->ctx.showStatus ((isReply ? "New reply from " : "New note from ") + shortName (from) + ": "
-                                      + self->describeWhere (*newest) + ". Click Notes in the top bar to read it.");
+                self->ctx.showStatus ((isReply ? "New reply from " : "New comment from ") + shortName (from) + ": "
+                                      + self->describeWhere (*newest) + ". Click Comments in the top bar to read it.");
             }
         }
         self->changed();
@@ -520,7 +520,7 @@ void NotesController::flush()
         if (err.status != 0)
         {
             if (err.status != 404 || kind == "add" || kind == "reply")
-                alert ("A note change couldn't be saved", explain (self->cloud, err));
+                alert ("A comment change couldn't be saved", explain (self->cloud, err));
             self->pollCountdown = 0;   // show what's really there
         }
         else if (kind == "delete")
@@ -757,7 +757,7 @@ String NotesController::describePosition (double beat) const
 String NotesController::describeWhere (const SongNote& n) const
 {
     if (n.isSongNote())
-        return "Song note";
+        return "Song comment";
     if (auto t = ctx.edit.trackForNote (n))
         return t->name + ", " + describePosition (n.beat);
     const auto name = n.trackName.isNotEmpty() ? n.trackName : String ("A track");
@@ -919,17 +919,17 @@ private:
 
         if (composing)
         {
-            where.setText (newTrack < 0 ? String ("New song note")
-                                        : "New note: " + (nc.ctx.edit.findTrack (newTrack) != nullptr ? nc.ctx.edit.findTrack (newTrack)->name : String ("track"))
+            where.setText (newTrack < 0 ? String ("New song comment")
+                                        : "New comment: " + (nc.ctx.edit.findTrack (newTrack) != nullptr ? nc.ctx.edit.findTrack (newTrack)->name : String ("track"))
                                               + ", " + nc.describePosition (newBeat),
                            dontSendNotification);
             state.setText (nc.isCloud() ? String ("Everyone this song is shared with will see it.")
-                                        : String ("Saved with the song. If you put it in the cloud, the note goes too."),
+                                        : String ("Saved with the song. If you put it in the cloud, the comment goes too."),
                            dontSendNotification);
             editor.setTextToShowWhenEmpty (newTrack < 0 ? "Something about the whole song: the plan so far, what's left..."
                                                         : "What about this part? (\"The bass doesn't sit right here, can you try...\")",
                                            theme::textDim);
-            send.setButtonText ("Add Note");
+            send.setButtonText ("Add Comment");
             setSize (380, 220);
             resized();
             return;
@@ -978,7 +978,7 @@ private:
         resolve.setVisible (true);
         edit.setVisible (nc.canEditText (*n) && ! editing);
         del.setVisible (nc.canDelete (n->author));
-        del.setButtonText ("Delete Note");
+        del.setButtonText ("Delete Comment");
         send.setButtonText (editing ? "Save" : "Reply");
         if (! editing)
             editor.setTextToShowWhenEmpty ("Reply...", theme::textDim);
@@ -1019,7 +1019,7 @@ private:
 
     void deleteNote()
     {
-        if (del.getButtonText() == "Delete Note")
+        if (del.getButtonText() == "Delete Comment")
         {
             const auto* n = nc.find (noteId);
             del.setButtonText (n != nullptr && ! n->replies.empty() ? "Delete All " + String ((int) n->replies.size() + 1) + "?" : String ("Sure?"));
@@ -1111,7 +1111,7 @@ class NotesController::NotesWindow : public DocumentWindow
 {
 public:
     explicit NotesWindow (NotesController& c)
-        : DocumentWindow ("Notes", theme::panel, DocumentWindow::closeButton)
+        : DocumentWindow ("Comments", theme::panel, DocumentWindow::closeButton)
     {
         setUsingNativeTitleBar (true);
         setContentOwned (new Content (c), true);
@@ -1132,9 +1132,9 @@ private:
             showLabel.setColour (Label::textColourId, theme::textDim);
             showLabel.setFont (theme::font (12.5f));
             addAndMakeVisible (showLabel);
-            show.addItem ("Show every note", (int) Show::all);
-            show.addItem ("Hide resolved notes", (int) Show::unresolved);
-            show.addItem ("Hide all notes", (int) Show::none);
+            show.addItem ("Show every comment", (int) Show::all);
+            show.addItem ("Hide resolved comments", (int) Show::unresolved);
+            show.addItem ("Hide all comments", (int) Show::none);
             show.setSelectedId ((int) nc.getShow(), dontSendNotification);
             show.onChange = [this] { nc.setShow ((Show) show.getSelectedId()); };
             addAndMakeVisible (show);
@@ -1199,7 +1199,7 @@ private:
             if (text.isEmpty())
                 text = nc.getSyncProblem();
             if (text.isEmpty())
-                text = all.empty() ? String ("No notes yet. Right-click a track at a moment in the song: Add Note Here. Or add a song note above.")
+                text = all.empty() ? String ("No comments yet. Right-click a track at a moment in the song: Add Comment Here. Or add a song comment above.")
                                    : nc.isCloud() ? String ("Everyone this song is shared with sees these. Click one to open the conversation.")
                                                   : String ("These are saved with the song. Put it in the cloud and they go with it.");
             hint.setText (text, dontSendNotification);
@@ -1263,7 +1263,7 @@ private:
         NotesController& nc;
         Label showLabel, hint;
         ComboBox show;
-        TextButton addSong { "Add Song Note..." };
+        TextButton addSong { "Add Song Comment..." };
         ListBox list;
         std::vector<int> order;
     };

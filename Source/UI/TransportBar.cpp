@@ -241,7 +241,7 @@ TransportBar::TransportBar (AppContext& c) : ctx (c)
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
     }
-    styleToggle (notesButton, "Notes", theme::accent, "Notes on this song and its tracks  (Cmd/Ctrl+Shift+N)");
+    styleToggle (notesButton, "Comments", theme::accent, "Comments on this song and its tracks  (Cmd/Ctrl+Shift+N)");
     notesButton.onClick = [this] { if (ctx.notes != nullptr) ctx.notes->showWindow(); };
     addAndMakeVisible (notesButton);
     arrangeButton.setTooltip ("Arrangement  (Tab)");
@@ -356,15 +356,15 @@ void TransportBar::refresh()
     clickButton.setToggleState (eng.metronomeOn.load(), dontSendNotification);
     if (ctx.notes != nullptr)
     {
-        // "Notes 3": lit when someone left something you haven't read.
+        // "Comments 3": lit when someone left something you haven't read.
         const int unread = ctx.notes->unreadCount();
         const int total = (int) ctx.notes->getNotes().size();
         const auto problem = ctx.notes->getSyncProblem();
-        const auto text = problem.isNotEmpty() ? String ("Notes offline")
-                        : unread > 0 ? "Notes " + String (unread) + " new" : total > 0 ? "Notes " + String (total) : String ("Notes");
+        const auto text = problem.isNotEmpty() ? String ("Comments offline")
+                        : unread > 0 ? "Comments " + String (unread) + " new" : total > 0 ? "Comments " + String (total) : String ("Comments");
         if (notesButton.getButtonText() != text)
             notesButton.setButtonText (text);
-        const auto tip = problem.isNotEmpty() ? problem : String ("Notes on this song and its tracks  (Cmd/Ctrl+Shift+N)");
+        const auto tip = problem.isNotEmpty() ? problem : String ("Comments on this song and its tracks  (Cmd/Ctrl+Shift+N)");
         if (notesButton.getTooltip() != tip)
             notesButton.setTooltip (tip);
         notesButton.setToggleState (unread > 0, dontSendNotification);
@@ -442,7 +442,7 @@ void TransportBar::resized()
     mixButton.setBounds (right.removeFromRight (52));
     arrangeButton.setBounds (right.removeFromRight (70));
     right.removeFromRight (12);
-    notesButton.setBounds (right.removeFromRight (100));
+    notesButton.setBounds (right.removeFromRight (124));
 
     // transport cluster in the middle
     const int clusterWidth = 34 * 3 + 8 + 48 + 12 + 92 + 6 + 110;

@@ -27,7 +27,8 @@ Label* makeNote (Component& parent, OwnedArray<Label>& labels, const String& tex
 }
 
 //==============================================================================
-class SettingsPanel : public Component, private ChangeListener, private Timer
+/** Everything in Settings, as tall as it needs to be: SettingsWindow scrolls it when the screen is shorter. */
+class SettingsPanel : public Component, private ChangeListener, private Timer, private ComponentListener
 {
 public:
     explicit SettingsPanel (AppContext& c)
@@ -35,6 +36,7 @@ public:
           devices (c.engine.deviceManager, 0, 256, 0, 256, true, false, true, false)
     {
         addAndMakeVisible (devices);
+        devices.addComponentListener (this);
 
         audioHeading = makeHeading (*this, labels, "Recording");
         offsetNote = makeNote (*this, labels, {});
@@ -91,6 +93,9 @@ public:
         folders.setTextToShowWhenEmpty ("Extra folders to scan, separated by ;  (the standard VST3 folders are always scanned)", theme::textDim);
         folders.onTextChange = [this] { ctx.host.setExtraFolders (StringArray::fromTokens (folders.getText(), ";", "")); };
         addAndMakeVisible (folders);
+        addFolder.setTooltip ("Pick a folder of plug-ins to add to the list");
+        addFolder.onClick = [this] { chooseExtraFolder(); };
+        addAndMakeVisible (addFolder);
 
         scan.onClick = [this] { ctx.host.startScan (false); updateNotes(); };
         rescan.onClick = [this] { ctx.host.startScan (true); updateNotes(); };
@@ -151,11 +156,12 @@ public:
         ctx.engine.deviceManager.addChangeListener (this);
         updateNotes();
         startTimer (500);
-        setSize (640, 1076);
+        setSize (640, 1000);
     }
 
     ~SettingsPanel() override
     {
+        devices.removeComponentListener (this);
         ctx.engine.deviceManager.removeChangeListener (this);
         ctx.engine.saveDeviceSettings();
         ctx.settings.saveIfNeeded();
@@ -178,11 +184,24 @@ public:
         retry.setEnabled (! skipped.isEmpty() && ! ctx.host.isScanning());
     }
 
+    /** Lays everything out for the current width and sets the height to fit it all. */
     void resized() override
     {
-        auto r = getLocalBounds().reduced (14);
-        devices.setBounds (r.removeFromTop (380));
-        r.removeFromTop (8);
+        const int h = layout();
+        if (h != getHeight())
+            setSize (getWidth(), h);
+    }
+
+    int layout()
+    {
+        auto r = getLocalBounds().reduced (14).withHeight (100000);
+        {
+            // The device list sizes itself to what it shows (more MIDI inputs, a Bluetooth button...),
+            // given room to; its own layout ends with an empty row, most of which is taken back here.
+            const ScopedValueSetter<bool> sizing (sizingDevices, true);
+            devices.setBounds (r.getX(), r.getY(), r.getWidth(), 1000);
+        }
+        r.removeFromTop (jmax (0, devices.getHeight() - 16));
 
         audioHeading->setBounds (r.removeFromTop (22));
         offsetNote->setBounds (r.removeFromTop (48));
@@ -203,7 +222,10 @@ public:
 
         pluginHeading->setBounds (r.removeFromTop (22));
         pluginNote->setBounds (r.removeFromTop (62));
-        folders.setBounds (r.removeFromTop (24));
+        auto folderRow = r.removeFromTop (24);
+        addFolder.setBounds (folderRow.removeFromRight (120));
+        folderRow.removeFromRight (8);
+        folders.setBounds (folderRow);
         r.removeFromTop (6);
         auto row = r.removeFromTop (26);
         scan.setBounds (row.removeFromLeft (150));
@@ -232,11 +254,37 @@ public:
         crashBox.setBounds (c.removeFromLeft (160));
         r.removeFromTop (2);
         crashNote->setBounds (r.removeFromTop (34));
+        return r.getY() + 14;
     }
 
 private:
     void changeListenerCallback (ChangeBroadcaster*) override   { updateNotes(); }
     void timerCallback() override                               { updateNotes(); }
+    void componentMovedOrResized (Component&, bool, bool wasResized) override
+    {
+        // The device list changed size by itself (another device type, MIDI devices coming and going).
+        if (wasResized && ! sizingDevices)
+            resized();
+    }
+
+    void chooseExtraFolder()
+    {
+        chooser = std::make_unique<FileChooser> ("Add a folder of VST3 plug-ins",
+                                                 File::getSpecialLocation (File::userHomeDirectory));
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories,
+                              [safe = SafePointer<SettingsPanel> (this)] (const FileChooser& fc)
+        {
+            const auto dir = fc.getResult();
+            if (safe == nullptr || ! dir.isDirectory())
+                return;
+            auto list = StringArray::fromTokens (safe->folders.getText(), ";", "");
+            list.trim();
+            list.removeEmptyStrings();
+            if (! list.contains (dir.getFullPathName()))
+                list.add (dir.getFullPathName());
+            safe->folders.setText (list.joinIntoString ("; "), true);   // saves it, as typing does
+        });
+    }
 
     AppContext& ctx;
     AudioDeviceSelectorComponent devices;
@@ -248,8 +296,60 @@ private:
     HyperlinkButton whatsSent;
     Slider offset;
     TextEditor folders;
+    TextButton addFolder { "Add Folder..." };
+    std::unique_ptr<FileChooser> chooser;
+    bool sizingDevices = false;
     TextButton scan { "Scan for new plug-ins" }, rescan { "Clear list and rescan all" }, retry { "Retry skipped plug-ins" };
     ComboBox startup, templateBox, rate, cores;
+};
+
+//==============================================================================
+/** Settings in a scrolling view, so every part of it can be reached however short the window is. */
+class SettingsWindow : public Component, private ComponentListener
+{
+public:
+    explicit SettingsWindow (AppContext& ctx) : panel (ctx)
+    {
+        view.setViewedComponent (&panel, false);
+        view.setScrollBarsShown (true, false);
+        view.setScrollBarThickness (10);
+        view.getVerticalScrollBar().setAutoHide (false);
+        addAndMakeVisible (view);
+        panel.addComponentListener (this);
+        const auto screen = Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr
+                          ? Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea.getHeight() : 900;
+        panel.setSize (640, panel.getHeight());
+        setSize (650, jlimit (300, jmax (300, screen - 80), panel.getHeight()));
+    }
+
+    ~SettingsWindow() override  { panel.removeComponentListener (this); }
+
+    void resized() override
+    {
+        view.setBounds (getLocalBounds());
+        fitPanel();
+    }
+
+private:
+    void componentMovedOrResized (Component&, bool, bool wasResized) override
+    {
+        if (wasResized && ! fitting)
+            fitPanel();
+    }
+
+    // The panel takes the whole width, less the scroll bar's when it's taller than the window.
+    void fitPanel()
+    {
+        const ScopedValueSetter<bool> s (fitting, true);
+        const int full = view.getWidth();
+        panel.setSize (full, panel.getHeight());
+        if (panel.getHeight() > view.getHeight())
+            panel.setSize (full - view.getScrollBarThickness(), panel.getHeight());
+    }
+
+    Viewport view;
+    SettingsPanel panel;
+    bool fitting = false;
 };
 
 //==============================================================================
@@ -888,7 +988,7 @@ void launch (Component* content, const String& title, bool resizable)
 
 void showSettingsDialog (AppContext& ctx)
 {
-    launch (new SettingsPanel (ctx), "Audio / MIDI Settings", true);
+    launch (new SettingsWindow (ctx), "Audio / MIDI Settings", true);
 }
 
 void handleCrashReports (PropertiesFile& settings)

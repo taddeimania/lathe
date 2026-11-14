@@ -1,0 +1,60 @@
+diff --git a/modules/juce_gui_basics/native/juce_MainMenu_mac.mm b/modules/juce_gui_basics/native/juce_MainMenu_mac.mm
+index 3ae4e8f..d9562f9 100644
+--- a/modules/juce_gui_basics/native/juce_MainMenu_mac.mm
++++ b/modules/juce_gui_basics/native/juce_MainMenu_mac.mm
+@@ -136,6 +136,7 @@ public:
+         // weird side-effects which messed-up keyboard focus when switching between windows. By creating
+         // a new menu and replacing the old one with it, that problem seems to be avoided..
+         NSMenu* menu = [[NSMenu alloc] initWithTitle: juceStringToNS (name)];
++        [menu setDelegate: (id<NSMenuDelegate>) callback];   // [Lathe] rebuilt each time it opens, like the first one
+ 
+         for (PopupMenu::MenuItemIterator iter (menuToCopy); iter.next();)
+             addMenuItem (iter, menu, menuId, topLevelIndex);
+@@ -327,6 +328,32 @@ public:
+                     break;
+                 }
+             }
++            else if (i.shortcutKeyDescription.isNotEmpty())
++            {
++                // [Lathe] Show the shortcut the app handles itself, e.g. "Cmd+Shift+E", "Tab", "C".
++                // Display only: menuHasKeyEquivalent below keeps the menu from acting on it.
++                auto parts = StringArray::fromTokens (i.shortcutKeyDescription, "+", {});
++                if (i.shortcutKeyDescription.endsWith ("+"))
++                    parts.add ("+");
++                parts.removeEmptyStrings();
++                NSUInteger mods = 0;
++                String key;
++                for (auto& part : parts)
++                {
++                    if      (part.equalsIgnoreCase ("Cmd") || part.equalsIgnoreCase ("Command"))  mods |= NSEventModifierFlagCommand;
++                    else if (part.equalsIgnoreCase ("Ctrl"))                                    mods |= NSEventModifierFlagControl;
++                    else if (part.equalsIgnoreCase ("Shift"))                                   mods |= NSEventModifierFlagShift;
++                    else if (part.equalsIgnoreCase ("Alt") || part.equalsIgnoreCase ("Option")) mods |= NSEventModifierFlagOption;
++                    else if (part.equalsIgnoreCase ("Tab"))                                     key = String::charToString ((juce_wchar) 0x09);
++                    else if (part.equalsIgnoreCase ("Delete"))                                  key = String::charToString ((juce_wchar) 0x08);
++                    else if (part.length() == 1)                                                key = part.toLowerCase();
++                }
++                if (key.isNotEmpty())
++                {
++                    [item setKeyEquivalent: juceStringToNS (key)];
++                    [item setKeyEquivalentModifierMask: mods];
++                }
++            }
+ 
+             [menuToAddTo addItem: item];
+             [item release];
+@@ -551,6 +578,14 @@ private:
+                 getOwner (self)->updateTopLevelMenu (menu);
+             });
+ 
++            // [Lathe] The shortcuts shown in these menus are handled by the app's own components, so the
++            // menus never take a key press themselves (one typed into a plug-in window, say). Only the
++            // app's own top-level menus have this delegate; the application menu (Quit, Hide) doesn't.
++            addMethod (@selector (menuHasKeyEquivalent:forEvent:target:action:), [] (id, SEL, NSMenu*, NSEvent*, id*, SEL*) -> BOOL
++            {
++                return NO;
++            });
++
+             addMethod (@selector (validateMenuItem:), [] (id, SEL, NSMenuItem* item) -> BOOL
+             {
+                 if (auto* juceItem = getPopupMenuItem (item))
