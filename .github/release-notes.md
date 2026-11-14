@@ -3,6 +3,11 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.12
+
+- Fixed: on macOS, Lathe could crash right after you quit it, while it was signed in to Lathe Cloud. Your
+  work was already saved; it just showed a crash report on the way out.
+
 ## New in 0.12.11
 
 - **Notes are now Comments.** "Notes" kept getting mixed up with musical notes, so the remarks you pin to
