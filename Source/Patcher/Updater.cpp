@@ -120,6 +120,7 @@ Result parseRelease (const var& json, const String& platform, Release& out)
 
 Result fetchLatest (Release& out, const String& repository)
 {
+    JUCE_AUTORELEASEPOOL   // macOS: free the request's objects before the thread ends (see cloud::httpRequest)
     int statusCode = 0;
     auto options = URL::InputStreamOptions (URL::ParameterHandling::inAddress)
                        .withExtraHeaders ("User-Agent: Lathe-Patcher\r\nAccept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28")
@@ -147,6 +148,7 @@ Result fetchLatest (Release& out, const String& repository)
 
 Result download (const Release& r, const File& destination, const std::function<bool (double)>& progress)
 {
+    JUCE_AUTORELEASEPOOL   // as in fetchLatest
     destination.getParentDirectory().createDirectory();
     destination.deleteFile();
 

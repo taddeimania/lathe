@@ -61,6 +61,10 @@ String HttpResult::errorMessage() const
 HttpResult httpRequest (const String& method, const String& url, const MemoryBlock* body,
                         const String& extraHeaders, int timeoutMs)
 {
+    // macOS: free the request's Objective-C objects here, while everything is alive. Left to the thread's
+    // own pool they were freed as the thread ended, which at quit could be after Lathe tore down the
+    // classes they need, crashing Lathe on the way out.
+    JUCE_AUTORELEASEPOOL
     HttpResult r;
     auto u = URL::createWithoutParsing (url);
     if (body != nullptr)
@@ -89,6 +93,7 @@ HttpResult httpRequest (const String& method, const String& url, const MemoryBlo
 
 Result httpDownload (const String& url, const File& destination, const std::function<bool (double)>& progress)
 {
+    JUCE_AUTORELEASEPOOL   // see httpRequest
     int status = 0;
     auto options = URL::InputStreamOptions (URL::ParameterHandling::inAddress)
                        .withConnectionTimeoutMs (30000)

@@ -840,7 +840,10 @@ void CloudController::run (const String& what, std::function<void()> work, std::
     WeakReference<CloudController> weak (this);
     worker.addJob ([weak, job = std::move (work), onDone = std::move (done)]() mutable
     {
-        job();
+        {
+            JUCE_AUTORELEASEPOOL   // macOS: nothing left for the thread to free after Lathe quits
+            job();
+        }
         MessageManager::callAsync ([weak, callback = std::move (onDone)]
         {
             if (auto* self = weak.get())
@@ -929,7 +932,7 @@ void CloudController::signOut()
     if (session.refreshToken.isNotEmpty())
     {
         auto c = client;
-        apiWorker.addJob ([c, token = session.refreshToken] { c->revoke (token); });
+        apiWorker.addJob ([c, token = session.refreshToken] { JUCE_AUTORELEASEPOOL c->revoke (token); });
     }
 
     accountActive = false;
@@ -1681,6 +1684,7 @@ void CloudController::request (const String& method, const String& path, const v
     WeakReference<CloudController> weak (this);
     apiWorker.addJob ([c, method, path, body, weak, account, onDone = std::move (done)]() mutable
     {
+        JUCE_AUTORELEASEPOOL   // macOS: nothing left for the thread to free after Lathe quits
         cloud::ApiError err;
         // An empty POST still sends a body, so every platform's HTTP stack treats it as a POST.
         const auto sendBody = body.isVoid() && method != "GET" && method != "DELETE" ? var (new DynamicObject()) : body;
@@ -1834,6 +1838,7 @@ void CloudController::poll()
     WeakReference<CloudController> weak (this);
     worker.addJob ([c, id, latest, err, song, songErr, weak, account]
     {
+        JUCE_AUTORELEASEPOOL   // macOS: nothing left for the thread to free after Lathe quits
         // Our role (and whether we still have the song at all), then the newest revision.
         *song = c->call ("GET", "/v2/songs/" + id, {}, *songErr);
         *latest = c->call ("GET", "/projects/" + id + "/revisions?limit=1", {}, *err);
