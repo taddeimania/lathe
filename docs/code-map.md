@@ -16,7 +16,8 @@ Source/
                         writes "Welcome to Lathe" (Resources/Welcome.lathe), the song a new install opens
   Assistant/            AI assistant (MCP): Server (127.0.0.1 HTTP, key, JSON-RPC), Tools (what the AI can
                         read and do), MixAnalysis (what analyze_mix measures in an offline render), Service
-                        (on/off, message thread), BridgeMain (LatheMCP, stdio <-> Lathe)
+                        (on/off, message thread), BridgeMain (LatheMCP, stdio <-> Lathe), Notation (the
+                        note notation write_notes and get_notes use: parse and format, docs/notation.md)
   Cloud/                cloud sharing: CloudClient (sign-in, API, uploads), Revisions (local history,
                         snapshots, push / pull), ProjectDiff (change summaries)
   Patcher/              Lathe Patcher: Updater.* (GitHub lookup, download, verify, swap in place) + its window

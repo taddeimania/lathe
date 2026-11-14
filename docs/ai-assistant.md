@@ -22,8 +22,9 @@ What it can do:
 |---|---|
 | `describe_session` | Tempo, transport, every track (input, output, monitoring, plug-ins in order and which ones generate notes, clips), returns and master, plus likely reasons a track can't be heard. |
 | `describe_track` | One track in full: sends, EQ, who it feeds, every clip with its position. |
-| `get_notes` | A MIDI track's notes (pitch, bar, length, velocity), for one clip or a range of bars. |
-| `write_notes` | Writes notes into a MIDI track's bars, replacing what was there or adding to it, with an optional repeat. One undo step. |
+| `get_notes` | A MIDI track's notes for one clip or a range of bars, in Lathe's [note notation](notation.md) (or as a JSON list). |
+| `write_notes` | Writes notes into a MIDI track's bars, as a [notation](notation.md) pattern or a JSON list, replacing what was there or adding to it, with an optional repeat. One undo step. |
+| `notation_guide` | The full reference for the note notation, for the assistant to read before writing a detailed part. |
 | `play` | Starts playback, optionally from a bar. With `to_bar`, Lathe stops by itself exactly at that bar. With `loop_times`, it plays the loop that many times and stops at the loop end. Either way the playhead then goes back to the insert marker, as Stop does. |
 | `stop` | Stops, like the Stop button. Stop while recording keeps the take. |
 | `set_loop` | Sets the loop region (in bars) and turns it on, or turns it off. The loop is saved with the project, as when you drag the loop brackets. |

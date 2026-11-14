@@ -295,11 +295,13 @@ var toolDefinitions()
                      schema ({ { "track", prop ("string", "Track name (as shown in Lathe) or numeric id") } }, { "track" }),
                      true));
     tools.add (tool ("get_notes", "Get MIDI notes",
-                     "The notes in a MIDI track's clips, in time order: pitch (MIDI number and name, middle C = C3 as in Lathe), "
-                     "start as a song position in bars (1-based; 3.5 is halfway through bar 3) and in beats from the song start, "
-                     "length in beats, and velocity 1-127. Optionally one clip, or only notes between two bars. "
-                     "Returns at most 2000 notes.",
+                     "The notes in a MIDI track's clips. By default in Lathe's note notation (see notation_guide): drum grids "
+                     "and token lines, with the bars they cover, ready to edit and write back with write_notes' pattern over the "
+                     "same bars. format \"list\" gives one JSON object per note instead: pitch (number and name, C3 = middle C), "
+                     "start in bars (1-based) and beats, length in beats, velocity 1-127, at most 2000 notes. "
+                     "Optionally one clip, or only notes between two bars.",
                      schema ({ { "track", prop ("string", "MIDI track name or id") },
+                               { "format", prop ("string", "\"pattern\" (default) or \"list\"") },
                                { "clip", prop ("integer", "Only this clip (id from describe_track)") },
                                { "from_bar", prop ("number", "Only notes starting at or after this bar (1-based)") },
                                { "to_bar", prop ("number", "Only notes starting before this bar (1-based)") } },
@@ -315,7 +317,14 @@ var toolDefinitions()
             { "pitch", "start_bar" });
 
         tools.add (tool ("write_notes", "Write MIDI notes",
-                         "Writes notes into a MIDI track, as one undo step in Lathe. The notes go in a clip covering from_bar to "
+                         "Writes notes into a MIDI track, as one undo step in Lathe. Give pattern (Lathe's note notation; "
+                         "notation_guide has the full reference) or notes (a JSON list). A pattern is lines; each loops to fill "
+                         "from_bar to to_bar. Drum grid: a lane then one character per step (16ths by default; . rest, x hit, "
+                         "X accent, o ghost, 1-9 velocity levels), e.g. \"kick x... ..x. x... ....\". Token line: notes split "
+                         "each bar evenly (| between bars; ~ rest, _ hold, [a b] share a step, [a,b] chord), each with optional "
+                         ":velocity, +8ms/-5ms or +20% timing, =beats length, e.g. \"bass: c2:110 ~ [c2 c2:70-6ms] ~ | f1=2 _ ~ g1+4ms\". "
+                         "\"swing 58%\" and \"humanize 6ms 8vel seed 3\" lines set the feel for the lines after. "
+                         "The notes go in a clip covering from_bar to "
                          "to_bar: with mode \"replace\" (the default) whatever was in those bars on that track goes first; with "
                          "\"add\" they join the notes already there. Every note must start inside the bars. repeat plays the "
                          "notes again that many times back to back (a one-bar beat with repeat 4 fills four bars). "
@@ -324,14 +333,19 @@ var toolDefinitions()
                          schema ({ { "track", prop ("string", "MIDI track name or id") },
                                    { "from_bar", prop ("number", "Where the clip starts (1-based bar)") },
                                    { "to_bar", prop ("number", "Where it ends: from_bar 1, to_bar 2 is one bar") },
+                                   { "pattern", prop ("string", "The notes in Lathe's note notation (instead of notes)") },
                                    { "notes", object ({ { "type", "array" }, { "items", note },
-                                                        { "description", "The notes (at most 4000 with the repeats)" } }) },
+                                                        { "description", "The notes as a list, instead of pattern (at most 4000 with the repeats)" } }) },
                                    { "repeat", prop ("integer", "Play the notes this many times in a row, each copy (to_bar - from_bar) bars later, "
                                                                 "and make the clip that much longer (default 1)") },
                                    { "mode", prop ("string", "\"replace\" (default) or \"add\"") } },
-                                 { "track", "from_bar", "to_bar", "notes" }),
+                                 { "track", "from_bar", "to_bar" }),
                          false, true));
     }
+    tools.add (tool ("notation_guide", "Note notation guide",
+                     "The full reference for Lathe's note notation, used by write_notes' pattern and get_notes: every symbol, "
+                     "velocities, timing, swing and humanize, with examples. Read it before writing a detailed part.",
+                     schema ({}), true));
     tools.add (tool ("play", "Play",
                      "Starts playback, from the given bar or from Lathe's insert marker. With to_bar, Lathe stops by "
                      "itself exactly when the playhead gets there. With loop_times, it plays the loop that many times "

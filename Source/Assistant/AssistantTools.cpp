@@ -1,4 +1,5 @@
 #include "AssistantTools.h"
+#include "Notation.h"
 #include "../Engine/Mp3Writer.h"
 #include "AssistantShared.h"
 #include "../Devices/Device.h"
@@ -87,6 +88,8 @@ var Tools::call (const String& name, const var& args, String& status)
 
     if (name == "get_notes")
         return getNotes (args);
+    if (name == "notation_guide")
+        return toolText (notation::guide());
     if (name == "write_notes")
         return writeNotes (args, status);
     if (name == "play")
@@ -492,6 +495,50 @@ var Tools::getNotes (const var& args) const
     }
     std::stable_sort (rows.begin(), rows.end(), [] (auto& a, auto& b) { return a.beat < b.beat; });
 
+    const auto format = args.getProperty ("format", "pattern").toString().trim().toLowerCase();
+    if (format != "pattern" && format != "list")
+        return toolText ("format is \"pattern\" or \"list\".", true);
+    if (format == "pattern")
+    {
+        // Whole bars: from the bar of the first note (or from_bar, or the clip's start) to the end of
+        // the bar of the last one (or to_bar, or the clip's end).
+        const double bpb = edit.beatsPerBar();
+        auto barFloor = [bpb] (double beat) { return std::floor (beat / bpb + 1.0e-9) * bpb; };
+        auto barCeil  = [bpb] (double beat) { return std::ceil (beat / bpb - 1.0e-9) * bpb; };
+        double first = 0.0, last = bpb;
+        if (const auto* c = oneClip ? t->findClip (clipId) : nullptr)
+        {
+            first = c->start;
+            last = c->end();
+        }
+        else if (! rows.empty())
+        {
+            first = rows.front().beat;
+            last = rows.back().beat + 1.0e-6;
+        }
+        const double rangeFrom = barFloor (args.hasProperty ("from_bar") ? from : first);
+        const double rangeTo = jmax (rangeFrom + bpb, barCeil (args.hasProperty ("to_bar") ? to : last));
+        std::vector<notation::Note> list;
+        for (auto& r : rows)
+            if (r.beat >= rangeFrom - 1.0e-9 && r.beat < rangeTo - 1.0e-9)
+                list.push_back ({ r.n->pitch, r.beat - rangeFrom, r.n->length, jlimit (1, 127, roundToInt (r.n->velocity * 127.0f)) });
+
+        const auto* inst = soundingInstrument (*t);
+        const bool drums = inst != nullptr && inst->getName().containsIgnoreCase ("drum");
+        notation::Context nc { bpb, edit.tempo, rangeTo - rangeFrom };
+        String text;
+        text << "# \"" << t->name << "\", bars " << barText (rangeFrom) << " to " << barText (rangeTo) << " ("
+             << edit.timeSigNum << "/" << edit.timeSigDen << ", " << String (edit.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".")
+             << " BPM), " << (int) list.size() << (list.size() == 1 ? " note" : " notes")
+             << ". Lines loop to fill the bars. write_notes from_bar " << barText (rangeFrom) << ", to_bar "
+             << barText (rangeTo) << " with this pattern gives the same notes.\n";
+        if (list.empty())
+            text << "# No notes in these bars.";
+        else
+            text << notation::format (list, nc, drums);
+        return toolText (text);
+    }
+
     constexpr size_t limit = 2000;
     Array<var> notes;
     for (size_t i = 0; i < rows.size() && i < limit; ++i)
@@ -569,35 +616,52 @@ var Tools::writeNotes (const var& args, String& status)
     const auto mode = args.getProperty ("mode", "replace").toString().trim().toLowerCase();
     if (mode != "replace" && mode != "add")
         return toolText ("mode is \"replace\" or \"add\".", true);
-    auto* list = args.getProperty ("notes", {}).getArray();
-    if (list == nullptr || list->isEmpty())
-        return toolText ("Give \"notes\": a list of { pitch, start_bar, length_beats, velocity }.", true);
-    if (list->size() * repeat > 4000)
-        return toolText ("At most 4000 notes per call, repeats included.", true);
-
     const double from = toBeats (fromBar), span = toBeats (toBar_) - from, to = from + span * repeat;
 
     std::vector<Note> notes;
-    for (int k = 0; k < list->size(); ++k)
+    const auto pattern = args.getProperty ("pattern", {});
+    auto* list = args.getProperty ("notes", {}).getArray();
+    if (! pattern.isVoid() && list != nullptr)
+        return toolText ("Give pattern or notes, not both.", true);
+    if (! pattern.isVoid())
     {
-        const auto& v = list->getReference (k);
-        const auto where = "Note " + String (k + 1) + ": ";
-        const int pitch = parsePitch (v.getProperty ("pitch", {}));
-        if (pitch < 0)
-            return toolText (where + "pitch " + JSON::toString (v.getProperty ("pitch", {})) + " isn't a MIDI number (0-127) or a name like C3 (middle C).", true);
-        if (! v.hasProperty ("start_bar"))
-            return toolText (where + "give start_bar.", true);
-        const double start = toBeats ((double) v["start_bar"]);
-        if (start < from - 1.0e-9 || start >= from + span - 1.0e-9)
-            return toolText (where + "start_bar " + String ((double) v["start_bar"]) + " is outside bars "
-                             + barText (from) + " to " + barText (from + span) + ".", true);
-        const double length = (double) v.getProperty ("length_beats", 0.25);
-        if (! (length > 0.0) || length > 10000.0)
-            return toolText (where + "length_beats must be more than 0.", true);
-        const int velocity = (int) v.getProperty ("velocity", 100);
-        if (velocity < 1 || velocity > 127)
-            return toolText (where + "velocity must be 1-127.", true);
-        notes.push_back ({ pitch, start - from, length, (float) velocity / 127.0f });
+        std::vector<notation::Note> parsed;
+        const auto r = notation::parse (pattern.toString(), { edit.beatsPerBar(), edit.tempo, span }, parsed);
+        if (r.failed())
+            return toolText (r.getErrorMessage() + " Nothing was changed. (notation_guide has the full reference.)", true);
+        if (parsed.size() * (size_t) repeat > 4000)
+            return toolText ("At most 4000 notes per call, repeats included (this pattern makes " + String ((int) parsed.size() * repeat) + ").", true);
+        for (auto& n : parsed)
+            notes.push_back ({ n.pitch, n.start, n.length, (float) n.velocity / 127.0f });
+    }
+    else
+    {
+        if (list == nullptr || list->isEmpty())
+            return toolText ("Give \"pattern\" (notation_guide explains it) or \"notes\": a list of { pitch, start_bar, length_beats, velocity }.", true);
+        if (list->size() * repeat > 4000)
+            return toolText ("At most 4000 notes per call, repeats included.", true);
+
+        for (int k = 0; k < list->size(); ++k)
+        {
+            const auto& v = list->getReference (k);
+            const auto where = "Note " + String (k + 1) + ": ";
+            const int pitch = parsePitch (v.getProperty ("pitch", {}));
+            if (pitch < 0)
+                return toolText (where + "pitch " + JSON::toString (v.getProperty ("pitch", {})) + " isn't a MIDI number (0-127) or a name like C3 (middle C).", true);
+            if (! v.hasProperty ("start_bar"))
+                return toolText (where + "give start_bar.", true);
+            const double start = toBeats ((double) v["start_bar"]);
+            if (start < from - 1.0e-9 || start >= from + span - 1.0e-9)
+                return toolText (where + "start_bar " + String ((double) v["start_bar"]) + " is outside bars "
+                                 + barText (from) + " to " + barText (from + span) + ".", true);
+            const double length = (double) v.getProperty ("length_beats", 0.25);
+            if (! (length > 0.0) || length > 10000.0)
+                return toolText (where + "length_beats must be more than 0.", true);
+            const int velocity = (int) v.getProperty ("velocity", 100);
+            if (velocity < 1 || velocity > 127)
+                return toolText (where + "velocity must be 1-127.", true);
+            notes.push_back ({ pitch, start - from, length, (float) velocity / 127.0f });
+        }
     }
 
     edit.commitUndoStep();   // what was done before this call stays a step of its own

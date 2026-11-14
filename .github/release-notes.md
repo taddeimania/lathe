@@ -3,6 +3,16 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.13
+
+- **A shorthand for AI assistants writing music.** The AI assistant tools now write and read parts in a
+  short text notation: drum-machine grids (`kick x... ..x. x... ....`) and lines of notes
+  (`bass: c2 ~ [c2 c2:70-6ms] ~ | f1=2 _ ~ g1`), with velocity, timing in milliseconds and length on any
+  note when you want them, plus swing and humanize. A part takes a fraction of the tokens a list of notes
+  did, the assistant no longer writes a script to make one, and a mistake is reported with its line and
+  bar before anything changes. get_notes answers in the same notation, ready to edit and write back.
+  [How it works](https://github.com/taddeimania/lathe/blob/main/docs/notation.md).
+
 ## New in 0.12.12
 
 - Fixed: on macOS, Lathe could crash right after you quit it, while it was signed in to Lathe Cloud. Your

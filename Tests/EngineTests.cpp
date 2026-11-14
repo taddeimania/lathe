@@ -18,6 +18,7 @@
 #include "Assistant/MixAnalysis.h"
 #include "Assistant/SessionWatch.h"
 #include "Assistant/AssistantService.h"
+#include "Assistant/Notation.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
 #include "Demo/Welcome.h"
@@ -3926,6 +3927,177 @@ int main (int argc, char** argv)
         engine.setEdit (&edit);
     }
 
+    std::cout << "Note notation (for the AI assistant)" << std::endl;
+    {
+        namespace nt = lathe::notation;
+        auto parsed = [] (const String& text, double bars, double bpb = 4.0, double tempo = 120.0)
+        {
+            std::vector<nt::Note> out;
+            auto r = nt::parse (text, { bpb, tempo, bars * bpb }, out);
+            return std::make_pair (r, out);
+        };
+        auto count = [] (const std::vector<nt::Note>& v, int pitch)
+        {
+            return (int) std::count_if (v.begin(), v.end(), [pitch] (auto& n) { return n.pitch == pitch; });
+        };
+        auto find = [] (const std::vector<nt::Note>& v, int pitch, int nth) -> nt::Note
+        {
+            for (auto& n : v)
+                if (n.pitch == pitch && nth-- == 0)
+                    return n;
+            return { -1, -1.0, 0.0, 0 };
+        };
+        auto near = [] (double a, double b) { return std::abs (a - b) < 1.0e-6; };
+
+        {
+            auto [r, v] = parsed ("grid 16\nkick   x... ..x. x... ....\nsnare  .... x... .... x..o\nhat    8.6. 9.6. 8.6. 9.67  # a comment", 1);
+            check (r.wasOk() && count (v, 36) == 3 && count (v, 38) == 3 && count (v, 42) == 9
+                       && near (find (v, 36, 1).start, 1.5) && near (find (v, 36, 0).length, 0.25)
+                       && find (v, 42, 0).velocity == 113 && find (v, 42, 1).velocity == 85 && find (v, 38, 2).velocity == 45,
+                   "grid lines: one step per character, x X o and 1-9 velocities (" + r.getErrorMessage() + ")");
+        }
+        {
+            auto [r, v] = parsed ("kick x... ..x. x... ....", 4);
+            check (r.wasOk() && count (v, 36) == 12 && near (v.back().start, 14.0), "a one-bar line loops to fill the range");
+        }
+        {
+            auto [r, v] = parsed ("bass: c2:110 ~ [c2:80 c2:70-6ms] ~ | f1:105=2 _ ~ g1:90+4ms", 2);
+            const auto a = find (v, 48, 0), b = find (v, 48, 1), c = find (v, 48, 2), f = find (v, 41, 0), g = find (v, 43, 0);
+            check (r.wasOk() && v.size() == 5 && a.velocity == 110 && near (a.length, 1.0) && near (b.start, 2.0) && near (b.length, 0.5)
+                       && near (c.start, 2.5 - 0.012) && c.velocity == 70 && near (f.start, 4.0) && near (f.length, 2.0)
+                       && near (g.start, 7.008) && g.velocity == 90,
+                   "token lines: steps split the bar, [ ] shares a step, :velocity, ms timing, =length (" + r.getErrorMessage() + ")");
+        }
+        {
+            auto [r, v] = parsed ("keys: [c3,e3,g3] _ _ ~ | <[a2,c3,e3] [f2,a2,c3]> _ _ ~", 4);
+            check (r.wasOk() && v.size() == 12 && near (find (v, 64, 0).length, 3.0) && near (find (v, 57, 0).start, 4.0)
+                       && count (v, 53) == 1 && near (find (v, 53, 0).start, 12.0) && near (find (v, 53, 0).length, 3.0),
+                   "chords, holds, and < > taking turns each time the line plays");
+        }
+        {
+            auto [r, v] = parsed ("hat: [x x x x]*2 | x*4 X:90+10%", 2);
+            check (r.wasOk() && count (v, 42) == 13 && near (v[1].start, 0.5) && v.back().velocity == 90 && near (v.back().start, 6.2),
+                   "*n repeats within a step; % is a share of the note's own step (" + r.getErrorMessage() + ")");
+        }
+        {
+            auto [r, v] = parsed ("swing 60%\nhat xxxx xxxx xxxx xxxx", 1);
+            auto [r2, v2] = parsed ("swing 62% 8\nhat x.x. x.x. x.x. x.x.", 1);
+            check (r.wasOk() && near (v[0].start, 0.0) && near (v[1].start, 0.3) && near (v[2].start, 0.5)
+                       && r2.wasOk() && near (v2[1].start, 0.62),
+                   "swing moves every second 16th (or 8th)");
+        }
+        {
+            const String h = "humanize 10ms 10vel seed 3\nhat xxxx xxxx xxxx xxxx\nsnare: x+0ms:77";
+            auto [r1, v1] = parsed (h, 1);
+            auto [r2, v2] = parsed (h, 1);
+            auto [r3, v3] = parsed (h.replace ("seed 3", "seed 4"), 1);
+            bool same = v1.size() == v2.size(), differs = false, moved = false;
+            for (size_t k = 0; same && k < v1.size(); ++k)
+            {
+                same = near (v1[k].start, v2[k].start) && v1[k].velocity == v2[k].velocity;
+                differs = differs || ! near (v1[k].start, v3[k].start) || v1[k].velocity != v3[k].velocity;
+                moved = moved || (v1[k].pitch == 42 && v1[k].start > 0.01 && ! near (std::fmod (v1[k].start, 0.25), 0.0));
+            }
+            const auto snare = find (v1, 38, 0);
+            check (r1.wasOk() && same && differs && moved && near (snare.start, 0.0) && snare.velocity == 77,
+                   "humanize: the same seed gives the same notes, and a note's own timing and velocity are left alone");
+        }
+        {
+            auto [r, v] = parsed ("36 x... .... x... ....\nC3 x.x. x.x. x.x. x.x.", 1);
+            auto [r7, v7] = parsed ("kick x... ..x. x... ..", 2, 3.5);
+            check (r.wasOk() && count (v, 36) == 2 && count (v, 60) == 8 && r7.wasOk() && count (v7, 36) == 6 && near (v7[3].start, 3.5),
+                   "lanes by number or note name; 7/8 has 14 steps a bar");
+        }
+        {
+            auto err = [&] (const String& text, double bars, const String& expected)
+            {
+                auto [r, v] = parsed (text, bars);
+                return r.failed() && v.empty() && r.getErrorMessage().contains (expected);
+            };
+            check (err ("kick x... x... x... x...\nhat x.x. x.x. | x.x. x.x. x.x.", 2, "Line 2 (hat), bar 1: 8 steps")
+                       && err ("bass: c2 q3 ~", 1, "\"q3\" isn't a note")
+                       && err ("kick x... x... x... x... | x... x... x... x... | x... x... x... x...", 2, "the line is 3 bars")
+                       && err ("x ~ x ~", 1, "no drum or pitch label")
+                       && err ("lead: c3:200", 1, "velocity after : must be 1-127")
+                       && err ("lead: c3+8", 1, "say ms or %")
+                       && err ("# only a comment", 1, "no notes"),
+                   "mistakes say the line, label, bar and what was expected, and give no notes");
+        }
+
+        // Round trips: format, parse, and the notes come back.
+        auto roundTrip = [&] (std::vector<nt::Note> notes, double bars, double bpb, bool drums, String& text)
+        {
+            const nt::Context ctx { bpb, 117.0, bars * bpb };
+            text = nt::format (notes, ctx, drums);
+            std::vector<nt::Note> back;
+            if (auto r = nt::parse (text, ctx, back); r.failed() || back.size() != notes.size())
+            {
+                text << "\n" << r.getErrorMessage() << " (" << (int) back.size() << " of " << (int) notes.size() << " notes)";
+                return false;
+            }
+            auto key = [] (const nt::Note& n) { return std::make_tuple (n.pitch, n.start, n.length, n.velocity); };
+            auto sorted = [&] (std::vector<nt::Note> v)
+            {
+                std::sort (v.begin(), v.end(), [&] (auto& a, auto& b)
+                           { return std::abs (a.start - b.start) > 1.0e-4 ? a.start < b.start : a.pitch != b.pitch ? a.pitch < b.pitch : key (a) < key (b); });
+                return v;
+            };
+            notes = sorted (notes);
+            back = sorted (back);
+            for (size_t k = 0; k < notes.size(); ++k)
+                if (notes[k].pitch != back[k].pitch || std::abs (notes[k].start - back[k].start) > 1.0e-4
+                    || std::abs (notes[k].length - back[k].length) > 1.0e-4 || notes[k].velocity != back[k].velocity)
+                {
+                    auto d = [] (const nt::Note& x) { return String (x.pitch) + "@" + String (x.start, 5) + "/" + String (x.length, 5) + ":" + String (x.velocity); };
+                    text << "\nfirst difference: " << d (notes[k]) << " came back as " << d (back[k]);
+                    return false;
+                }
+            return true;
+        };
+        {
+            std::vector<nt::Note> beat;
+            for (int bar = 0; bar < 16; ++bar)
+                for (int s = 0; s < 16; ++s)
+                {
+                    if (s % 4 == 0)   beat.push_back ({ 36, bar * 4.0 + s * 0.25, 0.25, 100 });
+                    if (s % 2 == 0)   beat.push_back ({ 42, bar * 4.0 + s * 0.25, 0.25, s % 4 == 0 ? 113 : 71 });
+                }
+            String text;
+            const bool back = roundTrip (beat, 16, 4.0, true, text);
+            check (back && text.length() < 120 && ! text.containsChar ('|'),
+                   "16 bars of a steady beat read back as two one-bar grid lines (" + String (text.length()) + " characters):\n" + text);
+        }
+        Random rnd (7);
+        bool allBack = true;
+        String failed;
+        for (int trial = 0; trial < 400 && allBack; ++trial)
+        {
+            const bool drums = trial % 2 == 0;
+            const double bpb = trial % 3 == 0 ? 3.5 : trial % 5 == 0 ? 3.0 : 4.0;
+            const int bars = 1 + rnd.nextInt (4);
+            std::vector<nt::Note> notes;
+            const int n = 1 + rnd.nextInt (40);
+            for (int k = 0; k < n; ++k)
+            {
+                nt::Note x;
+                x.pitch = drums ? (rnd.nextBool() ? 36 + rnd.nextInt (21) : 60) : 36 + rnd.nextInt (48);
+                const bool onGrid = rnd.nextInt (4) != 0;
+                x.start = onGrid ? std::floor (rnd.nextDouble() * bars * bpb * 4.0) / 4.0
+                                 : rnd.nextDouble() * (bars * bpb - 0.001);
+                x.length = rnd.nextInt (3) == 0 ? 0.25 : rnd.nextBool() ? 0.5 * (1 + rnd.nextInt (8)) : 0.01 + rnd.nextDouble() * 3.0;
+                x.velocity = rnd.nextBool() ? 100 : 1 + rnd.nextInt (127);
+                notes.push_back (x);
+            }
+            String text;
+            if (! roundTrip (notes, bars, bpb, drums, text))
+            {
+                allBack = false;
+                failed = "trial " + String (trial) + (drums ? " (drums)" : "") + ", " + String (bpb) + " beats a bar:\n" + text;
+            }
+        }
+        check (allBack, "random parts (drums and melodic, chords, odd timing and lengths, 7/8 and 3/4) come back exactly " + failed);
+    }
+
     std::cout << "AI assistant (MCP)" << std::endl;
     {
         using namespace lathe::assistant;
@@ -4066,6 +4238,7 @@ int main (int argc, char** argv)
 
         auto args = var (new DynamicObject());
         args.getDynamicObject()->setProperty ("track", "dice");
+        args.getDynamicObject()->setProperty ("format", "list");
         const auto notesJson = JSON::parse (tools.call ("get_notes", args, status)["content"][0]["text"].toString());
         const auto* list = notesJson["notes"].getArray();
         check (list != nullptr && list->size() == 2 && (int) (*list)[0]["pitch"] == 60 && (*list)[0]["name"].toString() == "C3"
@@ -4153,6 +4326,43 @@ int main (int argc, char** argv)
             e.undo();
             check (beat->clips.size() == 1 && beat->clips[0].notes.size() == 25, "each write is one undo step");
             e.removeTrack (beat->id);
+            e.commitUndoStep();
+        }
+
+        // --- the notation through the tools: write a pattern, read it back, write that back
+        {
+            auto pat = e.addTrack (TrackKind::midi, "Pat");
+            e.commitUndoStep();
+            const String pattern = "grid 16\nkick x... ..x. x... ....\nsnare .... x... .... x..o\n"
+                                   "lead: c3:96 ~ [e3 g3:70-6ms] ~ | <a3=2 f3:80+12%> _ ~ c4";
+            auto w = tools.call ("write_notes", args2 ({ { "track", "Pat" }, { "from_bar", 1 }, { "to_bar", 5 }, { "pattern", pattern } }), status);
+            auto snapshot = [&]
+            {
+                StringArray out;
+                for (auto& c : pat->clips)
+                    for (auto& n : c.notes)
+                        out.add (String (n.pitch) + "@" + String (c.start + n.start, 4) + "/" + String (n.length, 4) + ":" + String (roundToInt (n.velocity * 127.0f)));
+                out.sort (false);
+                return out;
+            };
+            const auto first = snapshot();
+            check (! (bool) w["isError"] && first.size() == 24 + 10, "write_notes takes a pattern: lines loop over four bars (" + text (w) + ", "
+                   + String (first.size()) + " notes)");
+            const auto back = text (tools.call ("get_notes", args2 ({ { "track", "Pat" } }), status));
+            check (back.startsWith ("# \"Pat\", bars 1 to 5") && back.contains ("write_notes from_bar 1, to_bar 5"),
+                   "get_notes answers in the notation, saying the bars to write it back over");
+            w = tools.call ("write_notes", args2 ({ { "track", "Pat" }, { "from_bar", 1 }, { "to_bar", 5 }, { "pattern", back } }), status);
+            check (! (bool) w["isError"] && snapshot() == first, "written back over the same bars, it's the same notes:\n" + back);
+            const auto clips = pat->clips.size();
+            w = tools.call ("write_notes", args2 ({ { "track", "Pat" }, { "from_bar", 1 }, { "to_bar", 2 }, { "pattern", "hat x..x x..x x..x x.." } }), status);
+            check ((bool) w["isError"] && text (w).contains ("Line 1 (hat)") && text (w).contains ("Nothing was changed")
+                       && pat->clips.size() == clips && snapshot() == first,
+                   "a mistake says where, and nothing is written (" + text (w) + ")");
+            w = tools.call ("write_notes", args2 ({ { "track", "Pat" }, { "from_bar", 1 }, { "to_bar", 2 }, { "pattern", "kick x" },
+                                                     { "notes", Array<var> { args2 ({ { "pitch", 36 }, { "start_bar", 1.0 } }) } } }), status);
+            check ((bool) w["isError"], "pattern or notes, not both");
+            check (text (tools.call ("notation_guide", var (new DynamicObject()), status)).contains ("GRID LINES"), "notation_guide gives the reference");
+            e.removeTrack (pat->id);
             e.commitUndoStep();
         }
 
@@ -4797,7 +5007,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 19 && listed["id"].toString() == "a", "tools/list has the nineteen tools");
+        check (listed["result"]["tools"].size() == 20 && listed["id"].toString() == "a", "tools/list has the twenty tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);
