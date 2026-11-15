@@ -304,6 +304,14 @@ void MainComponent::startup (const String& commandLine)
         Component::SafePointer<MainComponent> safe (this);
         Timer::callAfterDelay (2500, [safe] { if (safe != nullptr) safe->setStatus (safe->crashedPluginNote); });
     }
+    // Opened from inside the zip (Windows) or from Downloads without moving it (Mac): say how to fix it.
+    if (! forScreenshots)
+    {
+        const auto problem = PluginHost::installProblem (File::getSpecialLocation (File::currentExecutableFile));
+        if (problem.isNotEmpty())
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Lathe isn't installed yet", problem);
+    }
+
     // Anonymous milestones: asked once, on a brand-new install only (Main.cpp sets askMilestones
     // when there was no settings file), after the window is up. Never after an update.
     // Nothing is sent unless they say yes (Cloud/Milestones.h).
@@ -370,8 +378,10 @@ void MainComponent::openWelcomeSong()
         return;
     }
     openProject (song);
-    setStatus ("This song was made in Lathe with its built-in instruments. Press Space to play it, "
-               "then change anything: it's yours.");
+    welcomeSongFile = song;
+    welcomeHint = "This song was made in Lathe with its built-in instruments. Press Space to play it, "
+                  "then change anything: it's yours.";
+    setStatus (welcomeHint);
 }
 
 Array<File> MainComponent::templateFiles()
@@ -947,10 +957,17 @@ void MainComponent::timerCallback()
                 milestones::reach (settings, "interface");
         }
         showAssistantBar();   // goes away a little after the assistant's last step
+        if (welcomeHint.isNotEmpty() && (engine.isPlaying() || edit.projectFile != welcomeSongFile))
+            welcomeHint = {};
         if (statusTime != 0 && Time::getMillisecondCounter() - statusTime > 12000)
         {
-            statusLeft.setText ({}, dontSendNotification);
-            statusTime = 0;
+            if (welcomeHint.isNotEmpty() && statusLeft.getText() != welcomeHint)
+                setStatus (welcomeHint);
+            else if (welcomeHint.isEmpty())
+            {
+                statusLeft.setText ({}, dontSendNotification);
+                statusTime = 0;
+            }
         }
         updateTitle();
 

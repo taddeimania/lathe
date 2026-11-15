@@ -156,6 +156,33 @@ File PluginHost::getScannerExecutable()
    #endif
 }
 
+String PluginHost::installProblem (const File& exe)
+{
+    const auto path = exe.getFullPathName();
+    if (path.contains ("/AppTranslocation/"))
+        return "macOS is running Lathe from a temporary copy, because it was opened from where it was "
+               "downloaded. Lathe works, but updates can't be installed there.\n\n"
+               "Quit Lathe, then in the Finder drag Lathe to your Applications folder and open it from there.";
+    if (path.contains (".app/Contents/"))
+        return {};   // the helpers are inside the app
+
+    const String ext = exe.getFileExtension().equalsIgnoreCase (".exe") ? ".exe" : "";
+    StringArray missing;
+    for (auto* name : { "LatheScanner", "LatheHost", "LatheMCP", "LathePatcher" })
+        if (! exe.getSiblingFile (name + ext).existsAsFile())
+            missing.add (name + ext);
+    if (missing.isEmpty())
+        return {};
+    if (ext.isNotEmpty())
+        return "Lathe is running without the programs that come with it (" + missing.joinIntoString (", ")
+               + "). This happens when Lathe.exe is opened from inside the zip file. Without them, "
+               "plug-ins are checked less safely, and updates and the AI assistant don't work.\n\n"
+               "Quit Lathe, right-click the zip file and choose Extract All, then open Lathe.exe from the folder it makes.";
+    return "Lathe is running without the programs that come with it (" + missing.joinIntoString (", ")
+           + "). Without them, plug-ins are checked less safely, and updates and the AI assistant don't work.\n\n"
+           "Keep every file from the download together in one folder, and open Lathe from there.";
+}
+
 void PluginHost::saveList()
 {
     if (auto xml = known.createXml())

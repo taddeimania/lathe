@@ -57,6 +57,13 @@ public:
 
     /** Where the out-of-process scanner lives (next to the Lathe executable). */
     static File getScannerExecutable();
+    /** What's wrong with where Lathe is running from, in words for a dialog, or "" if nothing.
+        exe is Lathe's own executable (in a Mac app, Contents/MacOS/Lathe). Windows and Linux: the
+        helpers (LatheScanner, LatheHost, LatheMCP, LathePatcher) must be beside it; opening
+        Lathe.exe from inside the zip in Explorer copies only Lathe.exe to a temporary folder. Mac:
+        an app opened where it was downloaded, without being moved, runs from a temporary
+        read-only copy (App Translocation), where updates can't install. */
+    static String installProblem (const File& exe);
 
 private:
     class ScanThread;

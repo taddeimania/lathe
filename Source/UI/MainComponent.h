@@ -143,6 +143,11 @@ private:
     bool mixerShown = false, pianoRollShown = false, detailShown = true;
     int detailHeight = 190;
     uint32 statusTime = 0;
+    // The welcome song's "Press Space to play it": it comes back when another message times out,
+    // until the song has played or another project is open (it's easy to miss behind the
+    // first-launch question).
+    String welcomeHint;
+    File welcomeSongFile;
     int ticks = 0;
     int64 lastAutosave = 0;
 

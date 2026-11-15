@@ -39,6 +39,10 @@ public:
 
     /** Opens the saved audio device, or on first run the interface with the most inputs. */
     void openDevice();
+    /** First run: could this device be the person's audio interface? It must play sound (two or
+        more outputs) and have more inputs than a laptop's mic, and not be a virtual device that
+        routes audio between apps (they often have many inputs and play nothing you can hear). */
+    static bool isFirstRunCandidate (const String& name, int inputs, int outputs);
     void saveDeviceSettings();
 
     void setEdit (Edit*);

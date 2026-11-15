@@ -262,6 +262,24 @@ void Engine::status (const String& s)
 }
 
 //==============================================================================
+bool Engine::isFirstRunCandidate (const String& name, int inputs, int outputs)
+{
+    if (inputs <= 2 || outputs < 2)
+        return false;
+    // Devices that pass audio between apps, record the screen or join calls, and the generic
+    // ASIO wrappers: picking one on first run means pressing play and hearing nothing.
+    static const char* virtualNames[] = {
+        "blackhole", "loopback", "soundflower", "aggregate", "multi-output", "zoomaudio", "zoom audio",
+        "teams", "krisp", "vb-audio", "vb-cable", "cable input", "cable output", "voicemeeter",
+        "background music", "audio hijack", "obs virtual", "nvidia broadcast", "ndi audio", "virtual",
+        "asio4all", "fl studio asio", "generic low latency asio" };
+    const auto lower = name.toLowerCase();
+    for (auto* v : virtualNames)
+        if (lower.contains (v))
+            return false;
+    return true;
+}
+
 void Engine::openDevice()
 {
     auto saved = props.getXmlValue ("audioDevice");
@@ -270,8 +288,9 @@ void Engine::openDevice()
     if (saved == nullptr)
     {
         // First run: pick the audio interface, meaning the device (ASIO on Windows, Core Audio
-        // on the Mac) with the most inputs, if it has more than a laptop's built-in mic. Use all
-        // its channels at a 128-sample buffer. Otherwise keep the system default.
+        // on the Mac) with the most inputs, if it has more than a laptop's built-in mic and can
+        // play sound (isFirstRunCandidate). Use all its channels at a 128-sample buffer.
+        // Otherwise keep the system default.
         String bestType, bestName;
         int bestInputs = 2;
         for (auto* type : deviceManager.getAvailableDeviceTypes())
@@ -283,7 +302,8 @@ void Engine::openDevice()
             {
                 std::unique_ptr<AudioIODevice> probe (type->createDevice (name, name));
                 const int inputs = probe != nullptr ? probe->getInputChannelNames().size() : 0;
-                if (inputs > bestInputs)
+                const int outputs = probe != nullptr ? probe->getOutputChannelNames().size() : 0;
+                if (inputs > bestInputs && isFirstRunCandidate (name, inputs, outputs))
                 {
                     bestInputs = inputs;
                     bestType = type->getTypeName();

@@ -5114,6 +5114,39 @@ int main (int argc, char** argv)
         engine.setEdit (&edit);
     }
 
+    // --- First run: which device Lathe picks, and where it's running from ------------------------
+    {
+        check (Engine::isFirstRunCandidate ("Studio Interface 8", 8, 8), "an interface with 8 ins and outs is picked");
+        check (! Engine::isFirstRunCandidate ("MacBook Pro Microphone", 1, 0)
+               && ! Engine::isFirstRunCandidate ("USB Mic", 2, 2),
+               "a laptop mic or a 2-input device isn't treated as an interface");
+        check (! Engine::isFirstRunCandidate ("Field Recorder", 4, 0), "a device that can't play sound isn't picked");
+        check (! Engine::isFirstRunCandidate ("BlackHole 16ch", 16, 16)
+               && ! Engine::isFirstRunCandidate ("Aggregate Device", 10, 10)
+               && ! Engine::isFirstRunCandidate ("ZoomAudioDevice", 4, 4)
+               && ! Engine::isFirstRunCandidate ("ASIO4ALL v2", 6, 6)
+               && ! Engine::isFirstRunCandidate ("Voicemeeter Virtual ASIO", 8, 8),
+               "virtual devices that pass audio between apps aren't picked on first run");
+
+        const auto dir = File::getSpecialLocation (File::tempDirectory).getNonexistentChildFile ("lathe-install-check", "");
+        dir.createDirectory();
+        const auto exe = dir.getChildFile ("Lathe.exe");
+        exe.create();
+        const auto alone = PluginHost::installProblem (exe);
+        for (auto* n : { "LatheScanner.exe", "LatheHost.exe", "LatheMCP.exe", "LathePatcher.exe" })
+            dir.getChildFile (n).create();
+        const auto together = PluginHost::installProblem (exe);
+        check (alone.contains ("Extract All") && alone.contains ("LatheScanner.exe") && together.isEmpty(),
+               "Lathe.exe without its helpers (opened from inside the zip) says to extract the zip; with them, nothing");
+        dir.deleteRecursively();
+
+        const auto translocated = PluginHost::installProblem (
+            File ("/private/var/folders/xy/T/AppTranslocation/1234/d/Lathe.app/Contents/MacOS/Lathe"));
+        const auto installed = PluginHost::installProblem (File ("/Applications/Lathe.app/Contents/MacOS/Lathe"));
+        check (translocated.contains ("Applications") && installed.isEmpty(),
+               "a Mac app run from where it was downloaded says to move it to Applications; one in Applications is fine");
+    }
+
     engine.setEdit (nullptr);
     std::cout << (failures == 0 ? "\nAll tests passed." : "\n" + String (failures) + " test(s) FAILED.") << std::endl;
     return failures == 0 ? 0 : 1;
