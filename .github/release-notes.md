@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.2
+
+- **A built-in tuner.** Add **Tuner** to the track you're tuning, arm it and play: it shows the note, a
+  needle and how many cents off you are, from a bass's low B up. **Mute** silences the track while you
+  tune, and A4 can be set anywhere from 415 to 466 Hz (440 unless your band tunes elsewhere).
+- **Move several clips at once.** With more than one clip selected, drag any of them and they all move
+  together, across tracks too when each lands on a track of its kind.
+
 ## New in 0.13.1
 
 - **A built-in piano.** Add **Piano** from the plug-in menu: a modelled piano, with no samples to download.
