@@ -1810,26 +1810,54 @@ void MainComponent::runScreenshots (const File& outDir)
         {
             if (self == nullptr) return;
             shot (*self, "mixer.jpg");
-            self->setMixerShown (false);
 
-            // The shared copy, for its History window.
-            self->loadProjectFile (run->songs.shared, run->songs.shared);
-            Timer::callAfterDelay (1000, [self, run, shot, finish]
+            // Lathe Cloud's track-limited share, as the bandmate who may push only Guitar sees it
+            // (cloud.html): the banner, Guitar outlined and marked Yours, everything else dimmed.
+            for (auto& t : self->edit.tracks)
+                if (t->name == "Guitar")
+                {
+                    self->ctx.pushTracks = { t->id };
+                    self->ctx.pushTrackNames = t->name;
+                }
+            self->showPushBanner();
+            Timer::callAfterDelay (500, [self, run, shot, finish]
             {
                 if (self == nullptr) return;
-                auto view = self->cloud->makeHistoryView();
-                view->setSize (900, 540);
-                shot (*view, "history.jpg");
-                self->runDawShots (run->out, run->work, run->songs.plain, [self, run, finish] (bool dawOk, StringArray dawWritten)
+                const bool limited = self->ctx.isPushLimited();
+                if (limited)
+                    shot (*self, "cloud-push-guitar-mixer.jpg", { 0, 0, 700, 689 });
+                self->setMixerShown (false);
+                Timer::callAfterDelay (500, [self, run, shot, finish, limited]
                 {
-                    run->ok = run->ok && dawOk;
-                    run->written.addArray (dawWritten);
                     if (self == nullptr) return;
-                    self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                    if (limited)
+                        shot (*self, "cloud-push-guitar.jpg", { 0, 0, 900, 432 });
+                    else
+                        run->ok = false;   // the demo song has no Guitar track any more
+                    self->ctx.pushTracks.clear();
+                    self->ctx.pushTrackNames = {};
+                    self->showPushBanner();
+
+                    // The shared copy, for its History window.
+                    self->loadProjectFile (run->songs.shared, run->songs.shared);
+                    Timer::callAfterDelay (1000, [self, run, shot, finish]
                     {
-                        run->ok = run->ok && ok;
-                        run->written.addArray (written);
-                        finish();
+                        if (self == nullptr) return;
+                        auto view = self->cloud->makeHistoryView();
+                        view->setSize (900, 540);
+                        shot (*view, "history.jpg");
+                        self->runDawShots (run->out, run->work, run->songs.plain, [self, run, finish] (bool dawOk, StringArray dawWritten)
+                        {
+                            run->ok = run->ok && dawOk;
+                            run->written.addArray (dawWritten);
+                            if (self == nullptr) return;
+                            self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                            {
+                                run->ok = run->ok && ok;
+                                run->written.addArray (written);
+                                finish();
+                            });
+                        });
                     });
                 });
             });
