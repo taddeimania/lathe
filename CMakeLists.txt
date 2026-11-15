@@ -142,6 +142,7 @@ set(LATHE_DEVICE_SOURCES
     Source/Devices/Effects.cpp
     Source/Devices/Instruments.cpp
     Source/Devices/Piano.cpp
+    Source/Devices/Tuner.cpp
     Source/Devices/Reverb/Blocks.cpp
     Source/Devices/Reverb/Engine.cpp
     Source/Devices/Reverb/Nonlinear.cpp

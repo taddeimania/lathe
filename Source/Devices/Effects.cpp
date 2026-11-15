@@ -7,6 +7,7 @@
 #include "Reverb/Engine.h"
 #include "Delay/Engine.h"
 #include "Master/Master.h"
+#include "Tuner.h"
 
 #include <juce_dsp/juce_dsp.h>
 
@@ -771,6 +772,7 @@ const std::vector<Info>& all()
         { "grains", "Grains", Kind::effect, "Chops what goes through it into grains, then smears, scatters, pitches and freezes them.", [] { return makeGrains(); } },
         { "compressor", "Compressor", Kind::effect, "Evens out levels: glue a bus, tame a vocal, squash drums.", [] { return std::unique_ptr<Device> (new Compressor()); } },
         { "saturator", "Saturator", Kind::effect, "Warmth and grit: tape, tube or clipped.", [] { return std::unique_ptr<Device> (new Saturator()); } },
+        { "tuner", "Tuner", Kind::effect, "Shows the pitch of what you play: note, cents and a needle. Mute it to tune in silence.", [] { return makeTuner(); } },
         { "mastering", "Mastering", Kind::effect, "Finishes a mix to a loudness target.", [] { return std::unique_ptr<Device> (new Master()); } },
         { "randomnotes", "Random Notes", Kind::generator, "Plays random melodies and rhythms in time and in key, and can loop what it played.", [] { return makeRandomNotes(); } } };
     return list;

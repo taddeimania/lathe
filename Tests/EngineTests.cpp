@@ -4,6 +4,7 @@
 #include "Engine/Engine.h"
 #include "Devices/Device.h"
 #include "Devices/Instruments.h"
+#include "Devices/Tuner.h"
 #include "Devices/Reverb/Types.h"
 #include "Engine/ClipJoin.h"
 #include "Patcher/Updater.h"
@@ -1790,7 +1791,7 @@ int main (int argc, char** argv)
         StringArray ids;
         for (auto& info : all())
             ids.add (info.id);
-        check (ids.joinIntoString (",") == "bass,poly,piano,multi,resonator,drums,reverb,delay,grains,compressor,saturator,mastering,randomnotes", "the built-in devices (" + ids.joinIntoString (",") + ")");
+        check (ids.joinIntoString (",") == "bass,poly,piano,multi,resonator,drums,reverb,delay,grains,compressor,saturator,tuner,mastering,randomnotes", "the built-in devices (" + ids.joinIntoString (",") + ")");
 
         // Noise for half a second, then silence; instruments get a chord (or a drum hit
         // every eighth note) for that half second instead.
@@ -2519,6 +2520,102 @@ int main (int argc, char** argv)
                 if (auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (2).withBitsPerSample (24)))
                     w->writeFromAudioSampleBuffer (all, 0, at);
                 std::cout << "    piano demo written to " << demo.getFullPathName() << std::endl;
+            }
+        }
+
+        // Tuner: finds the pitch of pure and harmonic-rich tones, low bass to high treble, and nothing in noise.
+        {
+            std::vector<float> work;
+            auto tone = [] (double rate, double hz, int n, std::initializer_list<float> harmonics, double decaySeconds = 0.0)
+            {
+                std::vector<float> v ((size_t) n);
+                for (int i = 0; i < n; ++i)
+                {
+                    double x = 0.0;
+                    int k = 1;
+                    for (float a : harmonics)
+                        x += a * std::sin (MathConstants<double>::twoPi * hz * k++ * i / rate);
+                    if (decaySeconds > 0.0)
+                        x *= std::exp (-i / (decaySeconds * rate));
+                    v[(size_t) i] = (float) (0.3 * x);
+                }
+                return v;
+            };
+            String misses;
+            for (double rate : { 48000.0, 44100.0 })
+                for (double hz : { 30.87, 41.2, 82.41, 110.0, 196.0, 440.0, 659.26, 1046.5 })
+                {
+                    const int n = (int) (rate * 0.085);
+                    auto v = tone (rate, hz, n, { 1.0f });
+                    const auto r = tuner::detect (v.data(), n, rate, work);
+                    const double cents = r.hz > 0.0f ? 1200.0 * std::log2 (r.hz / hz) : 9999.0;
+                    if (std::abs (cents) > 0.5)
+                        misses << String (hz, 2) << " Hz at " << String (rate / 1000.0, 1) << "k: " << String (cents, 2) << "c  ";
+                }
+            check (misses.isEmpty(), "tuner: pure tones from a bass's low B (31 Hz) to C6 within half a cent, at 48 and 44.1 kHz " + misses);
+
+            const int n48 = (int) (48000.0 * 0.085);
+            // A guitar's low E: the second harmonic louder than the fundamental, plenty above it.
+            auto guitar = tone (48000.0, 82.41, n48, { 0.5f, 1.0f, 0.8f, 0.6f, 0.5f, 0.35f, 0.3f, 0.2f });
+            const auto g = tuner::detect (guitar.data(), n48, 48000.0, work);
+            auto pluck = tone (48000.0, 110.0, n48, { 1.0f, 0.6f, 0.4f, 0.3f }, 0.08);
+            const auto p = tuner::detect (pluck.data(), n48, 48000.0, work);
+            check (std::abs (1200.0 * std::log2 (g.hz / 82.41)) < 1.0 && std::abs (1200.0 * std::log2 (p.hz / 110.0)) < 1.0,
+                   "tuner: a low E whose second harmonic is louder still reads E, not the octave above ("
+                       + String (g.hz, 2) + " Hz), and a dying pluck reads true (" + String (p.hz, 2) + " Hz)");
+
+            std::vector<float> noise ((size_t) n48), silence ((size_t) n48, 0.0f);
+            Random rng (3);
+            for (auto& x : noise)
+                x = 0.3f * (rng.nextFloat() * 2.0f - 1.0f);
+            const auto rn = tuner::detect (noise.data(), n48, 48000.0, work);
+            const auto rs = tuner::detect (silence.data(), n48, 48000.0, work);
+            check (rn.hz == 0.0f && rs.hz == 0.0f, "tuner: noise and silence have no pitch");
+
+            const auto a = tuner::nearest (440.0f), sharp = tuner::nearest (445.0f), at442 = tuner::nearest (440.0f, 442.0f), e = tuner::nearest (82.41f);
+            check (a.midi == 69 && std::abs (a.cents) < 0.01f && sharp.midi == 69 && std::abs (sharp.cents - 19.56f) < 0.05f
+                       && at442.midi == 69 && std::abs (at442.cents + 7.85f) < 0.05f && e.midi == 40 && std::abs (e.cents) < 0.1f,
+                   "tuner: note and cents: 440 is A in tune, 445 is +19.6, 440 is -7.9 against A442, 82.41 Hz is the low E");
+
+            // The device passes sound through untouched, and Mute silences it.
+            auto slot = load ("tuner");
+            auto& t = dynamic_cast<Device&> (*slot->instance);
+            t.prepareToPlay (48000.0, 256);
+            AudioBuffer<float> buf (2, 256);
+            MidiBuffer midi;
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < 256; ++i)
+                    buf.setSample (c, i, 0.25f * std::sin ((float) i * 0.1f));
+            AudioBuffer<float> in (buf);
+            t.processBlock (buf, midi);
+            float diff = 0.0f;
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < 256; ++i)
+                    diff = jmax (diff, std::abs (buf.getSample (c, i) - in.getSample (c, i)));
+            t.set ("mute", 1.0f);
+            buf.makeCopyOf (in);
+            t.processBlock (buf, midi);
+            check (diff == 0.0f && buf.getMagnitude (0, 256) == 0.0f, "tuner: passes the sound through untouched, and Mute silences it");
+
+            // LATHE_TUNER_SHOT=/path.png: the panel with a slightly flat low E going through, to look at.
+            if (auto* shotPath = std::getenv ("LATHE_TUNER_SHOT"))
+            {
+                t.set ("mute", 0.0f);
+                auto flat = tone (48000.0, 82.0, 48000 / 4, { 0.5f, 1.0f, 0.8f, 0.6f, 0.5f });
+                for (int pos = 0; pos + 256 <= (int) flat.size(); pos += 256)
+                {
+                    for (int c = 0; c < 2; ++c)
+                        for (int i = 0; i < 256; ++i)
+                            buf.setSample (c, i, flat[(size_t) (pos + i)]);
+                    t.processBlock (buf, midi);
+                }
+                std::unique_ptr<AudioProcessorEditor> ed (t.createEditor());
+                const auto image = ed->createComponentSnapshot (ed->getLocalBounds(), true, 2.0f);
+                File shot (String::fromUTF8 (shotPath));
+                shot.deleteFile();
+                FileOutputStream out (shot);
+                PNGImageFormat().writeImageToStream (image, out);
+                std::cout << "    tuner panel drawn to " << shot.getFullPathName() << std::endl;
             }
         }
 

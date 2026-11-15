@@ -25,6 +25,7 @@ Source/
                         (Reverb, Delay, Compressor, Saturator, Mastering), and their engines in
                         Reverb/, Delay/ and Master/; Instruments.* (Bass Synth, Poly Synth, Drums);
                         Piano.cpp (the modelled piano: waveguide strings, hammer, soundboard);
+                        Tuner.* (the Tuner: YIN pitch detection, its own panel);
                         Mutable.* (Multi Synth, Resonator, Grains, Random Notes, and CoreRate, which
                         runs a fixed-rate core at any sample rate)
 ThirdParty/mutable/     the vendored MIT DSP behind those four (see its README for source and changes)
