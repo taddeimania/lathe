@@ -4180,11 +4180,14 @@ int main (int argc, char** argv)
                 }
                 check (wrong.isEmpty(), "every chord quality plays its notes on C3 (wrong: " + wrong.joinIntoString (", ") + ")");
             }
-            // A root spelled across a C: the pitch class wraps and the root stays in octave 3, so {Cb} is
-            // B3 (71) and {B#} is C3 (60). (The note names differ: Cb3 is 59 and B#3 is 72.)
+            // A root spelled across a C sits where its note name does: {Cb} from Cb3 (59), {B#} from B#3 (72).
             auto [r8, v8] = parsed ("keys: {Cb} {B#}", 1);
-            check (r8.wasOk() && pitchesAt (v8, 0.0) == std::vector<int> { 71, 75, 78 } && pitchesAt (v8, 2.0) == std::vector<int> { 60, 64, 67 },
-                   "{Cb} plays B major from B3 and {B#} C major from C3 (" + r8.getErrorMessage() + ")");
+            check (r8.wasOk() && pitchesAt (v8, 0.0) == std::vector<int> { 59, 63, 66 } && pitchesAt (v8, 2.0) == std::vector<int> { 72, 76, 79 }
+                       && nt::parsePitchName ("Cb3") == 59 && nt::parsePitchName ("B#3") == 72,
+                   "{Cb} starts on Cb3 and {B#} on B#3, as the note names do (" + r8.getErrorMessage() + ")");
+            auto [r9, v9] = parsed ("keys: {Cb/Eb}", 1);
+            check (r9.wasOk() && pitchesAt (v9, 0.0) == std::vector<int> { 51, 59, 63, 66 },
+                   "a slash bass still goes just below such a root ({Cb/Eb}: Eb2 under Cb3) (" + r9.getErrorMessage() + ")");
             auto bad = [&] (const String& text, const String& expected)
             {
                 auto [rb, vb] = parsed (text, 1);

@@ -235,17 +235,19 @@ private:
             { "9", { 0, 4, 7, 10, 14 } }, { "maj9", { 0, 4, 7, 11, 14 } }, { "m9", { 0, 3, 7, 10, 14 } },
             { "11", { 0, 4, 7, 10, 14, 17 } }, { "m11", { 0, 3, 7, 10, 14, 17 } }, { "13", { 0, 4, 7, 10, 14, 21 } },
         };
-        auto pitchClass = [] (const String& t, int& used) -> int
+        // Semitones from C, as spelled, the way note names count them: Cb is -1 and B# is 12, so {Cb}
+        // starts where Cb3 is, not an octave up. used is 0 when it isn't a note letter.
+        auto semitone = [] (const String& t, int& used) -> int
         {
             static const int semis[] { 9, 11, 0, 2, 4, 5, 7 };   // A B C D E F G
             used = 0;
             if (t.isEmpty() || t[0] < 'A' || t[0] > 'G')
-                return -1;
+                return 0;
             int pc = semis[t[0] - 'A'];
             used = 1;
             while (used < t.length() && (t[used] == '#' || t[used] == 'b'))
                 pc += t[used++] == '#' ? 1 : -1;
-            return (pc + 12) % 12;
+            return pc;
         };
 
         auto main = symbol, bass = String();
@@ -255,8 +257,8 @@ private:
             bass = symbol.fromFirstOccurrenceOf ("/", false, false);
         }
         int used = 0;
-        const int root = pitchClass (main, used);
-        if (root < 0)
+        const int root = semitone (main, used);
+        if (used == 0)
             return "isn't a chord: start with the root, a capital A-G (like {Am7}, {F#m}, {Bbmaj7}, {C/E})";
         const auto qualityName = main.substring (used);
         const Quality* quality = nullptr;
@@ -271,10 +273,10 @@ private:
         if (bass.isNotEmpty())
         {
             int bassUsed = 0;
-            const int b = pitchClass (bass, bassUsed);
-            if (b < 0 || bassUsed != bass.length())
+            const int b = semitone (bass, bassUsed);
+            if (bassUsed == 0 || bassUsed != bass.length())
                 return "has a bass note that isn't one (after / comes a note name without an octave, like C/E)";
-            int bassPitch = rootPitch - 12 + ((b - root + 12) % 12);   // the nearest one below the root
+            int bassPitch = rootPitch - 12 + (((b - root) % 12) + 12) % 12;   // the nearest one below the root
             if (bassPitch >= rootPitch)
                 bassPitch -= 12;
             out.push_back (bassPitch);
