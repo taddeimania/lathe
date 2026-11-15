@@ -619,6 +619,7 @@ var Tools::writeNotes (const var& args, String& status)
     const double from = toBeats (fromBar), span = toBeats (toBar_) - from, to = from + span * repeat;
 
     std::vector<Note> notes;
+    String looped;   // which pattern lines looped to fill the bars, for the reply
     const auto pattern = args.getProperty ("pattern", {});
     auto* list = args.getProperty ("notes", {}).getArray();
     if (! pattern.isVoid() && list != nullptr)
@@ -626,13 +627,15 @@ var Tools::writeNotes (const var& args, String& status)
     if (! pattern.isVoid())
     {
         std::vector<notation::Note> parsed;
-        const auto r = notation::parse (pattern.toString(), { edit.beatsPerBar(), edit.tempo, span }, parsed);
+        std::vector<notation::LineSummary> lines;
+        const auto r = notation::parse (pattern.toString(), { edit.beatsPerBar(), edit.tempo, span }, parsed, &lines);
         if (r.failed())
             return toolText (r.getErrorMessage() + " Nothing was changed. (notation_guide has the full reference.)", true);
         if (parsed.size() * (size_t) repeat > 4000)
             return toolText ("At most 4000 notes per call, repeats included (this pattern makes " + String ((int) parsed.size() * repeat) + ").", true);
         for (auto& n : parsed)
             notes.push_back ({ n.pitch, n.start, n.length, (float) n.velocity / 127.0f });
+        looped = notation::describeLoops (lines);
     }
     else
     {
@@ -718,7 +721,8 @@ var Tools::writeNotes (const var& args, String& status)
     status = "AI assistant: wrote " + String (count) + " notes on " + ("\"" + t->name + "\"");
     return toolText ("Wrote " + String (count) + (count == 1 ? " note" : " notes") + " on " + ("\"" + t->name + "\"")
                      + ", bars " + barText (from) + " to " + barText (to) + " (clip " + String (clipId) + "). "
-                     "In Lathe this is one undo step (Cmd/Ctrl+Z).");
+                     + (looped.isNotEmpty() ? "Looped to fill bars " + barText (from) + " to " + barText (from + span) + ": " + looped + ". " : String())
+                     + "In Lathe this is one undo step (Cmd/Ctrl+Z).");
 }
 
 String Tools::barText (double beats) const

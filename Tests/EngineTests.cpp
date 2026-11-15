@@ -4024,6 +4024,31 @@ int main (int argc, char** argv)
                    "mistakes say the line, label, bar and what was expected, and give no notes");
         }
 
+        {
+            const String h = "humanize 10ms 12vel all seed 5\nlead: c3:80+4ms c3:80+4ms c3:80+4ms c3:80+4ms c3:80+4ms c3:80+4ms c3:80+4ms c3:80+4ms\n"
+                             "humanize 10ms 12vel seed 5\nbass: c1:80+4ms c1:80+4ms c1:80+4ms c1:80+4ms";
+            auto [r, v] = parsed (h, 1);
+            bool velocities = false, timing = false, inside = true, keptLeft = true;
+            for (auto& n : v)
+            {
+                const double written = std::round (n.start * 2.0) / 2.0 + 0.008;   // 8ths, +4ms at 120 BPM
+                if (n.pitch == 60)
+                {
+                    velocities = velocities || n.velocity != 80;
+                    timing = timing || ! near (n.start, written);
+                    inside = inside && std::abs (n.velocity - 80) <= 12 && std::abs (n.start - written) <= 0.02 + 1.0e-9;
+                }
+                else
+                {
+                    keptLeft = keptLeft && n.velocity == 80 && near (n.start, std::round (n.start) + 0.008);
+                }
+            }
+            auto [r2, v2] = parsed ("humanize 10ms 12vel all\nhumanize off\nlead: c3:80+4ms", 1);
+            check (r.wasOk() && velocities && timing && inside && keptLeft && r2.wasOk() && v2[0].velocity == 80 && near (v2[0].start, 0.008),
+                   "humanize ... all also varies a note's own velocity and timing, around what it set; without all, or after off, they're kept ("
+                       + r.getErrorMessage() + ")");
+        }
+
         // Round trips: format, parse, and the notes come back.
         auto roundTrip = [&] (std::vector<nt::Note> notes, double bars, double bpb, bool drums, String& text)
         {
@@ -4096,6 +4121,50 @@ int main (int argc, char** argv)
             }
         }
         check (allBack, "random parts (drums and melodic, chords, odd timing and lengths, 7/8 and 3/4) come back exactly " + failed);
+
+        {
+            // A snare humanized a little early on the bar line: bar 2's first step, a little before it.
+            std::vector<nt::Note> notes { { 38, 1.0, 0.25, 100 }, { 38, 3.0, 0.25, 100 }, { 38, 4.0 - 0.012, 0.25, 100 }, { 38, 7.0, 0.25, 100 } };
+            String text;
+            const bool back = roundTrip (notes, 2, 4.0, true, text);
+            const auto bar2 = text.fromFirstOccurrenceOf ("|", false, false).trim();
+            check (back && bar2.startsWith ("x-") && ! text.contains ("+9"),
+                   "a hit just before a bar line reads back on the next bar's first step with a - offset:\n" + text);
+            std::vector<nt::Note> last { { 38, 8.0 - 0.012, 0.25, 100 } };
+            check (roundTrip (last, 2, 4.0, true, text) && text.contains ("+"), "...but in the last bar it stays where it is:\n" + text);
+        }
+        {
+            // Hats on every 16th with swing 60%, a kick straight; a lead on swung 8ths.
+            std::vector<nt::Note> notes;
+            for (int s = 0; s < 32; ++s)
+                notes.push_back ({ 42, s * 0.25 + (s % 2 == 1 ? 0.05 : 0.0), 0.25, s % 4 == 0 ? 113 : 71 });
+            String text;
+            bool back = roundTrip (notes, 2, 4.0, true, text);
+            check (back && text.contains ("swing 60%") && text.contains ("hat") && ! text.contains ("%:") && ! text.contains ("+"),
+                   "a swung hat line reads back as swing and a plain grid:\n" + text);
+            notes.push_back ({ 49, 0.0, 0.25, 100 });
+            notes.push_back ({ 49, 2.25, 0.25, 100 });   // an off-beat crash that isn't swung (its lane comes after the hat's)
+            back = roundTrip (notes, 2, 4.0, true, text);
+            check (back && text.contains ("swing 60%") && text.contains ("swing off"), "a straight lane after a swung one turns swing off first:\n" + text);
+
+            std::vector<nt::Note> lead;
+            for (int k = 0; k < 8; ++k)
+                lead.push_back ({ 60 + k, k * 0.5 + (k % 2 == 1 ? 0.12 : 0.0), 0.25, 100 });
+            back = roundTrip (lead, 1, 4.0, false, text);
+            check (back && text.contains ("swing 62% 8") && ! text.contains ("+"), "swung 8ths on a melodic part read back as swing 62% 8:\n" + text);
+
+            std::vector<nt::Note> loose;
+            for (int s = 0; s < 16; ++s)
+                loose.push_back ({ 42, s * 0.25 + (s % 2 == 1 ? 0.05 + 0.001 * s : 0.0), 0.25, 100 });
+            back = roundTrip (loose, 1, 4.0, true, text);
+            check (back && ! text.contains ("swing"), "off-beats moved by different amounts aren't called swing:\n" + text);
+
+            std::vector<nt::Note> seven;
+            for (int s = 0; s < 14; ++s)
+                seven.push_back ({ 42, s * 0.25 + (s % 2 == 1 ? 0.04 : 0.0), 0.25, 100 });
+            back = roundTrip (seven, 1, 3.5, true, text);
+            check (back && text.contains ("swing 58%"), "swing in 7/8:\n" + text);
+        }
     }
 
     std::cout << "AI assistant (MCP)" << std::endl;
@@ -4348,6 +4417,8 @@ int main (int argc, char** argv)
             const auto first = snapshot();
             check (! (bool) w["isError"] && first.size() == 24 + 10, "write_notes takes a pattern: lines loop over four bars (" + text (w) + ", "
                    + String (first.size()) + " notes)");
+            check (text (w).contains ("Looped to fill bars 1 to 5: kick and snare: 1 bar, played 4 times; lead: 2 bars, played 2 times."),
+                   "write_notes says which lines looped, and how many times (" + text (w) + ")");
             const auto back = text (tools.call ("get_notes", args2 ({ { "track", "Pat" } }), status));
             check (back.startsWith ("# \"Pat\", bars 1 to 5") && back.contains ("write_notes from_bar 1, to_bar 5"),
                    "get_notes answers in the notation, saying the bars to write it back over");

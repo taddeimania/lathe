@@ -131,6 +131,7 @@ Any note, hit or group can carry up to four suffixes, in this order, no spaces:
 swing 58%            # every second 16th, 58% of the way through its 8th (50% is straight)
 swing 62% 8          # every second 8th instead
 humanize 6ms 8vel seed 3
+humanize 5ms 6vel all  # vary notes' own timing and velocity too
 swing off
 humanize off
 ```
@@ -138,7 +139,8 @@ humanize off
 They apply to the lines after them until changed. Swing moves notes that start exactly on the
 off-beat it names, before any `+ms`. Humanize nudges timing by up to ± the given milliseconds and
 velocity by up to ± the given amount, but leaves alone what a note sets itself (its own offset,
-its own velocity). The same text and seed always give the same notes, so undo, the cloud and a
+its own velocity). With `all`, it varies those too, around what the note set: a lead with written
+dynamics and pushed notes (`c4:96+6ms`) can still be played a little loose. The same text and seed always give the same notes, so undo, the cloud and a
 re-run all agree.
 
 ## Reading back (get_notes)
@@ -159,7 +161,13 @@ hat    x.x. x.x. x.x. x.x. | x.x. x.x. x.x. xXx.
 - On other tracks, notes go into as few token lines ("voices") as keep them from overlapping:
   chords are `[ , ]`, lengths are holds where they fit the bar's steps and `=` where they don't,
   and anything off the grid gets a `%` offset, which is exact at any tempo.
-- Swing and humanize are never guessed back; their effect shows as offsets and velocities.
+- Swing is recognised: when every note in a lane or voice sits on a straight step, or on an
+  off-beat moved later by one same amount, it reads back as a `swing` line and a straight part
+  (`swing off` before the next line that isn't swung). 16ths first, then 8ths (`swing 62% 8`).
+- A note played just before a bar line (within a quarter of a 16th) reads back on the next bar's
+  first step with a negative offset (`x-4.8%`), not at the very end of the bar before. In the last
+  bar of the range there's no next bar, so it stays where it is.
+- Humanize is never guessed back; its effect shows as offsets and velocities.
 
 Round trip: the same notes, starts and lengths within 0.0001 beats (well under a millisecond),
 velocities exact.
@@ -167,7 +175,9 @@ velocities exact.
 ## In the MCP tools
 
 - `write_notes`: new `pattern` (string), instead of `notes`. Same `from_bar`, `to_bar`, `repeat`
-  and `mode`. Its description carries a few lines and two examples; that's paid in every
+  and `mode`. Its reply says which lines looped to fill the bars, and how many times
+  (`kick and snare: 1 bar, played 16 times; bass: 4 bars, played 4 times`), so a short line
+  that ran under the wrong section shows up. Its description carries a few lines and two examples; that's paid in every
   session, so it stays short.
 - `get_notes`: new `format`, `"pattern"` (default) or `"list"`.
 - `notation_guide`: no arguments; returns the reference above (symbols, velocity table, feel,
@@ -185,8 +195,9 @@ velocities exact.
   text), plus the drum names and the guide text. No dependence on the engine, so it's tested on
   its own.
 - `AssistantTools.cpp`: `write_notes` takes `pattern`, `get_notes` gives it, `notation_guide`.
-- Tests: parsing each symbol, errors, swing and humanize, and round trips of random parts
-  (drums, chords, offsets, odd meters).
+- Tests: parsing each symbol, errors, swing and humanize (and `all`), the loop summary, and
+  round trips of random parts (drums, chords, offsets, odd meters), swung parts and hits just
+  before a bar line.
 
 ## Later
 

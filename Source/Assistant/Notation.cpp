@@ -71,6 +71,7 @@ struct Feel
     double swing = 50.0, swingUnit = 0.25;   // percent, beats
     double humanizeMs = 0.0;
     int humanizeVel = 0;
+    bool humanizeAll = false;   // also vary what a note sets itself (its offset, its velocity)
     Random random { 1 };
 };
 
@@ -335,11 +336,11 @@ public:
         }
         if (m.hasOffset)
             start += m.percent ? m.offsetPercent / 100.0 * slot : m.offsetMs / 1000.0 * ctx.tempo / 60.0;
-        else if (feel.humanizeMs > 0.0)
+        if (feel.humanizeMs > 0.0 && (! m.hasOffset || feel.humanizeAll))
             start += (feel.random.nextDouble() * 2.0 - 1.0) * feel.humanizeMs / 1000.0 * ctx.tempo / 60.0;
 
         int velocity = m.velocity >= 0 ? m.velocity : defaultVelocity;
-        if (m.velocity < 0 && feel.humanizeVel > 0)
+        if (feel.humanizeVel > 0 && (m.velocity < 0 || feel.humanizeAll))
             velocity += feel.random.nextInt (2 * feel.humanizeVel + 1) - feel.humanizeVel;
 
         Note n;
@@ -531,10 +532,13 @@ String pitchName (int pitch)
 }
 
 //==============================================================================
-Result parse (const String& text, const Context& ctx, std::vector<Note>& out)
+Result parse (const String& text, const Context& ctx, std::vector<Note>& out, std::vector<LineSummary>* lineSummaries)
 {
     out.clear();
+    if (lineSummaries != nullptr)
+        lineSummaries->clear();
     std::vector<Note> notes;
+    std::vector<LineSummary> summaries;
     Feel feel;
     int grid = defaultGrid (ctx.beatsPerBar);
     const double bpb = ctx.beatsPerBar;
@@ -586,21 +590,24 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out)
         }
         if (first == "humanize")
         {
-            if (words.size() == 2 && words[1].equalsIgnoreCase ("off")) { feel.humanizeMs = 0.0; feel.humanizeVel = 0; continue; }
+            if (words.size() == 2 && words[1].equalsIgnoreCase ("off")) { feel.humanizeMs = 0.0; feel.humanizeVel = 0; feel.humanizeAll = false; continue; }
             double ms = 0.0;
             int vel = 0, seed = 1;
+            bool all = false;
             for (int w = 1; w < words.size(); ++w)
             {
                 const auto x = words[w].toLowerCase();
                 if (x.endsWith ("ms") && x.dropLastCharacters (2).containsOnly ("0123456789."))       ms = x.dropLastCharacters (2).getDoubleValue();
                 else if (x.endsWith ("vel") && x.dropLastCharacters (3).containsOnly ("0123456789")) vel = x.dropLastCharacters (3).getIntValue();
                 else if (x == "seed" && w + 1 < words.size() && words[w + 1].containsOnly ("0123456789")) seed = words[++w].getIntValue();
-                else return Result::fail (where + ": humanize takes amounts like \"6ms 8vel seed 3\" (or \"off\").");
+                else if (x == "all")                                                                  all = true;
+                else return Result::fail (where + ": humanize takes amounts like \"6ms 8vel seed 3\", and \"all\" to vary notes' own timing and velocity too (or \"off\").");
             }
             if (ms < 0.0 || ms > 100.0 || vel < 0 || vel > 64)
                 return Result::fail (where + ": humanize up to 100ms and 64vel.");
             feel.humanizeMs = ms;
             feel.humanizeVel = vel;
+            feel.humanizeAll = all;
             feel.random.setSeed (seed);
             continue;
         }
@@ -669,6 +676,7 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out)
             if (lineBars * bpb > ctx.spanBeats + eps)
                 return Result::fail (at + ": the line is " + String (lineBars) + " bars, longer than the " + number (ctx.spanBeats / bpb, 2)
                                      + " bars it's written over. Shorten it or widen the range.");
+            summaries.push_back ({ label.isNotEmpty() ? label : "line " + String (ln + 1), lineBars, ctx.spanBeats / (lineBars * bpb) });
             const double step = bpb / grid;
             for (size_t b = 0; b < bars.size(); ++b)
                 for (int s = 0; s < grid; ++s)
@@ -715,6 +723,7 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out)
         if (lineBars * bpb > ctx.spanBeats + eps)
             return Result::fail (at + ": the line is " + String (lineBars) + " bars, longer than the " + number (ctx.spanBeats / bpb, 2)
                                  + " bars it's written over. Shorten it or widen the range.");
+        summaries.push_back ({ label.isNotEmpty() ? label : "line " + String (ln + 1), lineBars, ctx.spanBeats / (lineBars * bpb) });
         for (int loop = 0; loop * lineBars * bpb < ctx.spanBeats - eps; ++loop)
             for (size_t b = 0; b < bars.size(); ++b)
             {
@@ -730,7 +739,34 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out)
         return Result::fail ("The pattern has no notes in it (only settings or comments).");
     std::stable_sort (notes.begin(), notes.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
     out = std::move (notes);
+    if (lineSummaries != nullptr)
+        *lineSummaries = std::move (summaries);
     return Result::ok();
+}
+
+String describeLoops (const std::vector<LineSummary>& lines)
+{
+    // Lines of the same length (so played the same number of times) are named together, in order.
+    std::vector<std::pair<int, StringArray>> groups;
+    for (auto& l : lines)
+    {
+        if (l.plays <= 1.0 + eps)
+            continue;
+        auto g = std::find_if (groups.begin(), groups.end(), [&] (auto& x) { return x.first == l.bars; });
+        if (g == groups.end())
+            groups.push_back ({ l.bars, { l.label } });
+        else
+            g->second.add (l.label);
+    }
+    StringArray parts;
+    for (auto& [bars, names] : groups)
+    {
+        const double plays = std::find_if (lines.begin(), lines.end(), [b = bars] (auto& l) { return l.bars == b; })->plays;
+        String who = names.size() == 1 ? names[0]
+                   : names.joinIntoString (", ", 0, names.size() - 1) + " and " + names[names.size() - 1];
+        parts.add (who + ": " + String (bars) + (bars == 1 ? " bar" : " bars") + ", played " + number (plays, 2) + " times");
+    }
+    return parts.joinIntoString ("; ");
 }
 
 //==============================================================================
@@ -746,13 +782,21 @@ String velocitySuffix (int velocity, int defaultVelocity)
 StringArray tokenBars (const std::vector<Note>& notes, const Context& ctx, int bars, int lane)
 {
     const double bpb = ctx.beatsPerBar;
+    // A note a hair before a bar line (humanized, played early) belongs to the next bar's first step,
+    // with a negative offset, not at the very end of the bar before it: within a quarter of a step.
+    const double early = bpb / defaultGrid (bpb) / 4.0;
+    auto barOf = [&] (const Note& n)
+    {
+        const int b = jmin (bars - 1, (int) std::floor (n.start / bpb + eps));
+        return b + 1 < bars && (b + 1) * bpb - n.start < early ? b + 1 : b;
+    };
     StringArray out;
     for (int b = 0; b < bars; ++b)
     {
         const double barStart = b * bpb;
         std::vector<Note> in;
         for (auto& n : notes)
-            if (n.start >= barStart - eps && n.start < barStart + bpb - eps)
+            if (barOf (n) == b)
                 in.push_back (n);
         if (in.empty())
         {
@@ -897,6 +941,64 @@ bool gridBars (const std::vector<Note>& notes, const Context& ctx, int bars, int
     return true;
 }
 
+/** Swing as parse() plays it: percent (0 when straight) and the unit it moves (16ths or 8ths). */
+struct Swing
+{
+    double percent = 0.0, unit = 0.25;
+    bool operator== (const Swing& o) const { return std::abs (percent - o.percent) < eps && std::abs (unit - o.unit) < eps; }
+};
+
+/** If the notes are a straight part with swing on it (every note on an even step of `unit`, or on
+    an odd one moved later by one same amount, the most "swing 80%" moves it), the swing, with the
+    notes put back on the straight steps. Otherwise percent 0 and the notes are left alone. */
+Swing unswing (std::vector<Note>& notes, double bpb, double unit)
+{
+    double delta = -1.0;
+    for (auto& n : notes)
+    {
+        const double barStart = std::floor (n.start / bpb + eps) * bpb;
+        const double q = (n.start - barStart) / unit;
+        const int k = (int) std::floor (q + eps);
+        if (k % 2 == 0)
+        {
+            if (! nearInt (q))
+                return {};
+            continue;
+        }
+        const double d = n.start - barStart - k * unit;
+        if (d < eps || (delta >= 0.0 && std::abs (d - delta) > eps))
+            return {};   // an off-beat left where it was, or moved by a different amount
+        delta = d;
+    }
+    if (delta < 0.0)
+        return {};
+    // parse() moves an off-beat by 2 * unit * percent / 100 - unit.
+    const double percent = std::round (50.0 * (1.0 + delta / unit) * 1000.0) / 1000.0;
+    if (percent <= 50.0 || percent > 80.0)
+        return {};
+    for (auto& n : notes)
+    {
+        const double barStart = std::floor (n.start / bpb + eps) * bpb;
+        if (((int) std::floor ((n.start - barStart) / unit + eps)) % 2 == 1)
+            n.start -= delta;
+    }
+    return { percent, unit };
+}
+
+/** The swing in a part (16ths, then 8ths), with the part put straight; percent 0 if none. */
+Swing findSwing (std::vector<Note>& notes, double bpb)
+{
+    for (double unit : { 0.25, 0.5 })
+        if (auto s = unswing (notes, bpb, unit); s.percent > 0.0)
+            return s;
+    return {};
+}
+
+String swingLine (const Swing& s)
+{
+    return s.percent <= 0.0 ? String ("swing off") : "swing " + number (s.percent, 3) + "%" + (s.unit > 0.25 + eps ? " 8" : "");
+}
+
 /** The shortest loop of bars that the line repeats (lines loop to fill the range). */
 StringArray shortestLoop (const StringArray& bars)
 {
@@ -927,6 +1029,17 @@ String format (std::vector<Note> notes, const Context& ctx, bool drums)
     StringArray lines;
     const int normalGrid = defaultGrid (bpb);
     int currentGrid = normalGrid;
+    Swing currentSwing;
+    // A swung part is written straight under a "swing" line (it sets the feel for the lines after it).
+    auto straighten = [&] (std::vector<Note>& part)
+    {
+        const auto swing = findSwing (part, bpb);
+        if (! (swing == currentSwing))
+        {
+            lines.add (swingLine (swing));
+            currentSwing = swing;
+        }
+    };
 
     if (drums)
     {
@@ -939,6 +1052,7 @@ String format (std::vector<Note> notes, const Context& ctx, bool drums)
 
         for (auto& [pitch, list] : lanes)
         {
+            straighten (list);
             const auto name = drumName (pitch).isNotEmpty() ? drumName (pitch) : pitchName (pitch);
             StringArray cells;
             int chosen = 0;
@@ -987,7 +1101,10 @@ String format (std::vector<Note> notes, const Context& ctx, bool drums)
         home->lastLength = n.length;
     }
     for (auto& v : voices)
+    {
+        straighten (v.notes);
         lines.add (shortestLoop (tokenBars (v.notes, ctx, bars, -1)).joinIntoString (" | "));
+    }
     return lines.joinIntoString ("\n");
 }
 
@@ -1032,10 +1149,14 @@ SUFFIXES on any note, hit or group, no spaces, in this order:
 FEEL (applies to the lines after it):
   swing 58%        every 2nd 16th moved to 58% of its 8th (50 = straight);  swing 62% 8 for 8ths
   humanize 6ms 8vel seed 3   small random timing/velocity; same seed = same notes. swing off / humanize off
+                   It leaves a note's own +ms and :velocity alone; add "all" to vary those too
+                   (humanize 5ms 6vel all: written dynamics and pushes, played a little loose).
 
 TIPS: one line per drum is easiest. A 4-bar part over 16 bars: write the 4 bars, it loops.
 Use a token line only where you need exact timing, lengths or velocities. get_notes shows a
-part in this notation; edit it and write it back over the same bars. Mistakes are reported
+part in this notation (a swung part as a swing line and straight steps; a hit played just
+before a bar line as the next bar's first step with a - offset); edit it and write it back
+over the same bars. write_notes' reply says which lines looped and how many times. Mistakes are reported
 with the line, bar and step, and nothing is written until the whole pattern is right.)";
 }
 } // namespace lathe::notation
