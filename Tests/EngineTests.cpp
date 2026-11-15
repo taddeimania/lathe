@@ -4143,6 +4143,18 @@ int main (int argc, char** argv)
                    "chord symbols take turns inside < >");
             auto [r4, v4] = parsed ("lead: G6", 1);
             check (r4.wasOk() && v4.size() == 1 && v4[0].pitch == 103, "without braces, G6 is still the note G6");
+            // After the brace, "-" and a digit is an octave when nothing but a break or a suffix follows the
+            // digit, and an offset otherwise ("-6ms").
+            auto [r5, v5] = parsed ("keys: {C}-1", 1);
+            check (r5.wasOk() && pitchesAt (v5, 0.0) == std::vector<int> { 12, 16, 19 },
+                   "{C}-1 is C major with its root in octave -1 (" + r5.getErrorMessage() + ")");
+            auto [r6, v6] = parsed ("keys: ~ {C}-6ms", 1);
+            check (r6.wasOk() && pitchesAt (v6, 2.0 - 0.012) == std::vector<int> { 60, 64, 67 },
+                   "{C}-6ms is C major in octave 3, 6 ms early (" + r6.getErrorMessage() + ")");
+            auto [r7, v7] = parsed ("keys: {C}-1:80", 1);
+            check (r7.wasOk() && pitchesAt (v7, 0.0) == std::vector<int> { 12, 16, 19 }
+                       && std::all_of (v7.begin(), v7.end(), [] (auto& n) { return n.velocity == 80; }),
+                   "{C}-1:80 is octave -1 at velocity 80 (" + r7.getErrorMessage() + ")");
             auto bad = [&] (const String& text, const String& expected)
             {
                 auto [rb, vb] = parsed (text, 1);
