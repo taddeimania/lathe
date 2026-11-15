@@ -3,6 +3,19 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.15
+
+- **The AI assistant tools read and write parts more like a musician would.**
+  - After writing a pattern, the reply says which lines looped to fill the bars and how many times
+    ("bass: 4 bars, played 4 times"), so a short line left running under the wrong section is easy
+    to spot.
+  - Reading a swung part back gives a `swing 60%` line and a plain grid, instead of an offset on
+    every other hit.
+  - A hit played just before a bar line reads back as early on the next bar, not as the very end
+    of the bar before.
+  - `humanize 5ms 6vel all` loosens notes that set their own velocity or timing too, so a part with
+    written dynamics can still be played a little loose.
+
 ## New in 0.12.14
 
 - **Lathe for Windows is now signed.** Lathe and its helpers carry a verified publisher signature, so
