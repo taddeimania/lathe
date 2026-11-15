@@ -3,6 +3,15 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.16
+
+- **The AI assistant knows where the master's EQ sits.** The channel EQ on the master comes after
+  Mastering, so a boost there can push the mix past the limiter. For tone changes on the whole mix,
+  the assistant now adds an EQ plug-in before the limiter instead.
+- **Windows crash reports can be traced.** Each Windows release now keeps its debug symbols on the
+  side (not in the download), so a crash report you send from Windows can be turned into the exact
+  place in the code that failed.
+
 ## New in 0.12.15
 
 - **The AI assistant tools read and write parts more like a musician would.**
