@@ -836,6 +836,76 @@ public:
             updateMarquee();
     }
 
+    /** Moves every clip in drag.group by what the pointer moved: in time by the grabbed clip's
+        snapped move (never before the song's start), and across tracks by the same number of
+        tracks, if every clip would land on a track of its own kind. */
+    void moveGroup (const MouseEvent& e)
+    {
+        const bool noSnap = e.mods.isAltDown();
+        const double beat = owner.xToBeat ((float) e.x);
+        double grabbedStart = jmax (0.0, drag.original.start + (beat - drag.grabBeat));
+        if (! noSnap)
+            grabbedStart = jmax (0.0, owner.snap (grabbedStart, false));
+        double delta = grabbedStart - drag.original.start;
+        for (auto& g : drag.group)
+            delta = jmax (delta, -g.original.start);
+
+        // Across tracks: the same number of tracks for every clip, or none.
+        int trackDelta = 0;
+        const int over = owner.trackIndexAtY (e.y);
+        if (over >= 0)
+        {
+            trackDelta = over - drag.grabTrackIndex;
+            for (auto& g : drag.group)
+            {
+                const int to = g.originalTrackIndex + trackDelta;
+                if (! owner.isTrackShown (to) || ctx.edit.tracks[(size_t) to]->kind != ctx.edit.tracks[(size_t) g.originalTrackIndex]->kind)
+                {
+                    trackDelta = 0;
+                    break;
+                }
+            }
+        }
+
+        std::set<std::pair<int, int>> selection;
+        for (auto& g : drag.group)
+        {
+            auto from = ctx.edit.tracks[(size_t) g.trackIndex];
+            const int toIndex = g.originalTrackIndex + trackDelta;
+            auto to = ctx.edit.tracks[(size_t) toIndex];
+            const int at = from->indexOfClip (g.clipId);
+            if (at < 0)
+                continue;
+            if (to != from)
+            {
+                Clip c = from->clips[(size_t) at];
+                from->clips.erase (from->clips.begin() + at);
+                to->clips.push_back (c);
+                g.trackIndex = toIndex;
+            }
+            if (auto* c = to->findClip (g.clipId))
+                c->start = g.original.start + delta;
+            selection.insert ({ to->id, g.clipId });
+        }
+        ctx.setClipSelection (selection);
+    }
+
+    /** Clears [start, end) on a track, leaving the clips in `keep` alone (clearRange keeps only one). */
+    void clearAroundExcept (Track& t, double start, double end, const std::set<int>& keep)
+    {
+        // Set the kept clips aside, clear, put them back.
+        std::vector<Clip> aside;
+        for (int i = (int) t.clips.size() - 1; i >= 0; --i)
+            if (keep.count (t.clips[(size_t) i].id) > 0)
+            {
+                aside.push_back (t.clips[(size_t) i]);
+                t.clips.erase (t.clips.begin() + i);
+            }
+        ctx.edit.clearRange (t, start, end, -1);
+        for (auto& c : aside)
+            t.clips.push_back (c);
+    }
+
     Rectangle<float> clipBounds (int trackIndex, const Clip& c) const
     {
         const float x1 = owner.beatToX (c.start), x2 = owner.beatToX (c.end());
@@ -1018,8 +1088,10 @@ public:
             return;
         }
 
-        // Right-clicking one of several selected clips keeps them all (for Join, Copy...).
-        if (! (e.mods.isPopupMenu() && ctx.isClipSelected (h.clipId) && ctx.selection.clips.size() > 1))
+        // One of several selected clips: keep them all, for right-click (Join, Copy...) and to drag
+        // them together. A plain click that doesn't drag selects just this one (on mouse up).
+        const bool inGroup = ctx.isClipSelected (h.clipId) && ctx.selection.clips.size() > 1;
+        if (! inGroup)
             ctx.selectClip (track->id, h.clipId);
 
         if (e.mods.isPopupMenu())
@@ -1033,6 +1105,20 @@ public:
         drag.clipId = h.clipId;
         drag.original = *track->findClip (h.clipId);
         drag.grabBeat = owner.xToBeat ((float) e.x);
+        drag.grabTrackIndex = h.trackIndex;
+        drag.group.clear();
+        drag.selectOnlyOnUp = inGroup;
+        if (inGroup && drag.mode == Drag::move)
+        {
+            // Every selected clip, where it started, to move by the same amount.
+            for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+            {
+                auto& t = ctx.edit.tracks[(size_t) i];
+                for (auto& c : t->clips)
+                    if (ctx.isClipSelected (c.id))
+                        drag.group.push_back ({ c.id, i, i, c });
+            }
+        }
         owner.repaint();
     }
 
@@ -1051,6 +1137,18 @@ public:
                 stopTimer();
             else if (! isTimerRunning())
                 startTimerHz (60);
+            return;
+        }
+
+        if (drag.mode == Drag::move && ! drag.group.empty())
+        {
+            if (! drag.started)
+            {
+                drag.started = true;
+                ctx.edit.beginClipEdit();
+            }
+            moveGroup (e);
+            owner.repaint();
             return;
         }
 
@@ -1125,7 +1223,21 @@ public:
             return;
         }
 
-        if (drag.mode != Drag::none && drag.started)
+        if (drag.mode != Drag::none && drag.started && ! drag.group.empty())
+        {
+            // Each moved clip overwrites what it landed on, as a single one does; never one another.
+            std::set<int> moved;
+            for (auto& g : drag.group)
+                moved.insert (g.clipId);
+            for (auto& g : drag.group)
+            {
+                auto t = ctx.edit.tracks[(size_t) g.trackIndex];
+                if (auto* c = t->findClip (g.clipId))
+                    clearAroundExcept (*t, c->start, c->end(), moved);
+            }
+            ctx.edit.changed();
+        }
+        else if (drag.mode != Drag::none && drag.started)
         {
             if (auto track = ctx.edit.findTrack (drag.trackId))
                 if (auto* c = track->findClip (drag.clipId))
@@ -1134,6 +1246,13 @@ public:
                     ctx.edit.clearRange (*track, start, end, drag.clipId);
                 }
             ctx.edit.changed();
+        }
+        else if (drag.selectOnlyOnUp)
+        {
+            // A click on one of several selected clips, without dragging: just that one.
+            if (auto track = ctx.edit.findTrack (drag.trackId))
+                ctx.selectClip (track->id, drag.clipId);
+            owner.repaint();
         }
         drag = {};
     }
@@ -1388,6 +1507,11 @@ private:
         float anchorContentY = 0.0f;                      //   and in the whole track list
         Point<float> pointer;                             //   where the pointer is now
         std::set<std::pair<int, int>> baseSelection;      // marquee with Cmd/Ctrl or Shift adds to this
+        // Moving several selected clips together.
+        struct Moving { int clipId; int originalTrackIndex; int trackIndex; Clip original; };
+        std::vector<Moving> group;
+        int grabTrackIndex = -1;
+        bool selectOnlyOnUp = false;                      // clicked one of several selected clips
     };
     Rectangle<float> marquee;
     double clickBeat = 0.0;               // where the last click was (for "Add Comment Here")
