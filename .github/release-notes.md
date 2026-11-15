@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.14
+
+- **Lathe for Windows is now signed.** Lathe and its helpers carry a verified publisher signature, so
+  Windows shows who made them instead of "Unknown publisher". Windows may still warn about a new download
+  for a while until enough people have installed it; choose "More info" and "Run anyway" if it does.
+
 ## New in 0.12.13
 
 - **A shorthand for AI assistants writing music.** The AI assistant tools now write and read parts in a
