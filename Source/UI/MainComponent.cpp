@@ -22,7 +22,7 @@ namespace menu
         newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome,
         undo = 100, redo, undoHistory, compareMixes, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
-        toggleView = 300, toggleDetail, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
+        toggleView = 300, toggleDetail, followPlayhead, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
         settings = 400, scan, metronome, browser, checkUpdates, autoUpdates, assistant,
         templateBase = 1000, deleteTemplateBase = 1500, restoreTemplates = 1999, recentBase = 2000
     };
@@ -158,6 +158,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     recentFiles.setMaxNumberOfItems (10);
     recentFiles.restoreFromString (settings.getValue ("recentProjects"));
     detailHeight = settings.getIntValue ("detailHeight", 190);
+    ctx.followPlayhead = settings.getBoolValue ("followPlayhead", true);
     engine.metronomeOn = settings.getBoolValue ("metronome", false);
 
     edit.addChangeListener (this);
@@ -1285,6 +1286,7 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
     {
         item (menu::toggleView, mixerShown ? "Show Arrangement" : "Show Mixer", "Tab");
         item (menu::toggleDetail, "Show Bottom Panel", {}, true, detailShown);
+        item (menu::followPlayhead, "Follow Playhead", "F", true, ctx.followPlayhead);
         m.addSeparator();
         item (menu::compareMixes, "Compare...", cmd + "K");
         item (menu::showNotes, "Comments...", cmd + "Shift+N");
@@ -1443,6 +1445,7 @@ void MainComponent::menuItemSelected (int id, int)
 
         case menu::toggleView:    setMixerShown (! mixerShown); break;
         case menu::toggleDetail:  detailShown = ! detailShown; resized(); menuItemsChanged(); break;
+        case menu::followPlayhead: ctx.setFollowPlayhead (! ctx.followPlayhead); menuItemsChanged(); break;
         case menu::showNotes:     notes->showWindow(); break;
         case menu::notesAll:        notes->setShow (NotesController::Show::all); menuItemsChanged(); break;
         case menu::notesUnresolved: notes->setShow (NotesController::Show::unresolved); menuItemsChanged(); break;
@@ -1530,6 +1533,7 @@ bool MainComponent::keyPressed (const KeyPress& k)
     if (is ('r')) { transport.record(); return true; }
     if (is ('c')) { engine.metronomeOn = ! engine.metronomeOn.load(); settings.setValue ("metronome", engine.metronomeOn.load()); return true; }
     if (is ('l')) { edit.loopEnabled = ! edit.loopEnabled; edit.changed(); return true; }
+    if (is ('f')) { menuItemSelected (menu::followPlayhead, 0); return true; }
     if (ch == '+' || ch == '=') { arrangement.zoom (1.25, 0.0f); return true; }
     if (ch == '-') { arrangement.zoom (0.8, 0.0f); return true; }
 

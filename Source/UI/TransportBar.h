@@ -67,7 +67,7 @@ private:
     TransportIcon playButton { TransportIcon::Shape::play, theme::accent };
     TransportIcon stopButton { TransportIcon::Shape::stop, theme::text };
     TransportIcon recordButton { TransportIcon::Shape::record, theme::record };
-    TextButton clickButton, clickMenuButton, loopButton;
+    TextButton clickButton, clickMenuButton, loopButton, followButton;
     void applyCountIn();
     /** Metronome and count-in (from Click's arrow, or right-clicking record). */
     void showClickMenu (Component& target);

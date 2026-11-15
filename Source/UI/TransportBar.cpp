@@ -210,6 +210,14 @@ TransportBar::TransportBar (AppContext& c) : ctx (c)
     };
     addAndMakeVisible (loopButton);
 
+    styleToggle (followButton, "Follow", theme::accent, "Keep the playhead in view while playing. Off: scroll anywhere while it plays  (F)");
+    followButton.onClick = [this]
+    {
+        ctx.setFollowPlayhead (! ctx.followPlayhead);
+        followButton.setToggleState (ctx.followPlayhead, dontSendNotification);
+    };
+    addAndMakeVisible (followButton);
+
     tempo.suffix = " BPM";
     tempo.onChange = [this] (double v) { ctx.edit.setTempo (v); };
     sigNum.onChange = [this] (double v) { ctx.edit.timeSigNum = (int) v; ctx.edit.changed(); };
@@ -370,6 +378,7 @@ void TransportBar::refresh()
         notesButton.setToggleState (unread > 0, dontSendNotification);
     }
     loopButton.setToggleState (e.loopEnabled, dontSendNotification);
+    followButton.setToggleState (ctx.followPlayhead, dontSendNotification);
 
     tempo.setValue (e.tempo, false);
     sigNum.setValue (e.timeSigNum, false);
@@ -445,7 +454,7 @@ void TransportBar::resized()
     notesButton.setBounds (right.removeFromRight (124));
 
     // transport cluster in the middle
-    const int clusterWidth = 34 * 3 + 8 + 48 + 12 + 92 + 6 + 110;
+    const int clusterWidth = 34 * 3 + 8 + 48 + 4 + 58 + 12 + 92 + 6 + 110;
     auto mid = r.withSizeKeepingCentre (jmin (r.getWidth(), clusterWidth), r.getHeight());
     playButton.setBounds (mid.removeFromLeft (34));
     mid.removeFromLeft (2);
@@ -454,6 +463,8 @@ void TransportBar::resized()
     recordButton.setBounds (mid.removeFromLeft (34));
     mid.removeFromLeft (8);
     loopButton.setBounds (mid.removeFromLeft (48));
+    mid.removeFromLeft (4);
+    followButton.setBounds (mid.removeFromLeft (58));
     mid.removeFromLeft (12);
     position.setBounds (mid.removeFromLeft (92));
     mid.removeFromLeft (6);

@@ -47,6 +47,16 @@ struct AppContext
     bool isLocalOnly (int trackId) const noexcept    { return isPushLimited() && ! isYourTrack (trackId); }
     std::function<void()> pushTracksChanged;
 
+    /** While playing, the arrangement scrolls to keep the playhead in view. Off: scroll anywhere
+        while it plays. Saved in the settings ("followPlayhead"); View > Follow Playhead, F, or the
+        transport's Follow button. */
+    bool followPlayhead = true;
+    void setFollowPlayhead (bool on)
+    {
+        followPlayhead = on;
+        settings.setValue ("followPlayhead", on);
+    }
+
     void selectTrack (int id)
     {
         selection.trackId = id;

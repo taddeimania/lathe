@@ -6,6 +6,7 @@
 | R | Record |
 | C | Metronome |
 | L | Loop on/off (drag in the top strip of the ruler to set the loop) |
+| F | Follow Playhead on/off. On, the arrangement scrolls to keep the playhead in view while playing; off, you can scroll anywhere while it plays. Also the transport's **Follow** button and View > Follow Playhead; Lathe remembers it. |
 | Tab | Arrangement / mixer |
 | Cmd/Ctrl+B | Plug-in browser |
 | Cmd/Ctrl+G, +Shift+G | Group the selected tracks / ungroup |

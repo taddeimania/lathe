@@ -1552,8 +1552,8 @@ void ArrangementView::tick()
     const float x = ctx.engine.isPlaying() ? beatToX (ctx.engine.getPlayheadBeats()) : -100.0f;
     if (std::abs (x - lastPlayheadX) >= 0.5f)
     {
-        // Keep the playhead on screen while playing.
-        if (ctx.engine.isPlaying() && (x > (float) lanes->getWidth() - 20.0f || x < 0.0f) && ! isMouseButtonDownAnywhere())
+        // Keep the playhead on screen while playing (unless Follow Playhead is off).
+        if (ctx.followPlayhead && ctx.engine.isPlaying() && (x > (float) lanes->getWidth() - 20.0f || x < 0.0f) && ! isMouseButtonDownAnywhere())
         {
             scrollToPlayhead();
             return;
