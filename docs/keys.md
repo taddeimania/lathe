@@ -10,7 +10,7 @@
 | Cmd/Ctrl+B | Plug-in browser |
 | Cmd/Ctrl+G, +Shift+G | Group the selected tracks / ungroup |
 | Cmd/Ctrl+T, +Shift+T, +Alt+T | Add audio / MIDI / return track |
-| Cmd/Ctrl-click, Shift-click | Add a clip to the selection (or take it out). Drag on empty lane space to box-select clips. |
+| Cmd/Ctrl-click, Shift-click | Add a clip to the selection (or take it out). Drag on empty lane space to box-select clips; drag to an edge of the arrangement and it scrolls, so the box can reach clips you can't see yet. |
 | Cmd/Ctrl+A | Select all clips |
 | Cmd/Ctrl+C, X, V | Copy / cut the selected clips; paste them at the start marker on the selected track (click an empty spot to put the marker there) |
 | Cmd/Ctrl+D | Duplicate the selected clips |

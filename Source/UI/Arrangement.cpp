@@ -582,7 +582,7 @@ private:
 //==============================================================================
 // Lanes: grid, clips, playhead
 //==============================================================================
-class ArrangementView::Lanes : public Component, public TooltipClient, private ChangeListener
+class ArrangementView::Lanes : public Component, public TooltipClient, private ChangeListener, private Timer
 {
 public:
     explicit Lanes (ArrangementView& o) : owner (o), ctx (o.ctx)
@@ -778,6 +778,64 @@ public:
         g.drawRect (outline, 1.5f);
     }
 
+    /** The box from where the drag started (a beat and a place in the track list) to the pointer,
+        and the clips it touches, selected (plus what was selected already when adding). */
+    void updateMarquee()
+    {
+        const Point<float> anchor (owner.beatToX (drag.anchorBeat), drag.anchorContentY - (float) owner.scrollY);
+        auto pointer = drag.pointer;
+        pointer.x = jlimit (0.0f, (float) getWidth(), pointer.x);
+        pointer.y = jlimit (0.0f, (float) getHeight(), pointer.y);
+        marquee = Rectangle<float> (anchor, pointer);
+        auto picked = drag.baseSelection;
+        for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
+        {
+            if (! owner.isTrackShown (i))
+                continue;
+            auto& t = *ctx.edit.tracks[(size_t) i];
+            for (auto& c : t.clips)
+                if (clipBounds (i, c).intersects (marquee))
+                    picked.insert ({ t.id, c.id });
+        }
+        ctx.setClipSelection (picked);
+        repaint();
+    }
+
+    /** How fast to scroll (pixels a second, x and y) for a pointer near or past the edges while
+        drawing a box: nothing in the middle, faster the further out it goes. */
+    Point<float> edgeSpeed (Point<float> p) const
+    {
+        constexpr float zone = 32.0f;
+        auto speed = [] (float into) { return into <= 0.0f ? 0.0f : jlimit (60.0f, 2400.0f, into * 18.0f); };
+        const float w = (float) getWidth(), h = (float) getHeight();
+        return { p.x > w - zone ? speed (p.x - (w - zone)) : p.x < zone ? -speed (zone - p.x) : 0.0f,
+                 p.y > h - zone ? speed (p.y - (h - zone)) : p.y < zone ? -speed (zone - p.y) : 0.0f };
+    }
+
+    void timerCallback() override
+    {
+        if (drag.mode != Drag::marquee)
+        {
+            stopTimer();
+            return;
+        }
+        const auto v = edgeSpeed (drag.pointer);
+        if (v.isOrigin())
+        {
+            stopTimer();
+            return;
+        }
+        const double dt = 1.0 / 60.0;
+        const auto beforeBeats = owner.scrollBeats;
+        const auto beforeY = owner.scrollY;
+        if (v.x != 0.0f)
+            owner.hbar.setCurrentRangeStart (jmax (0.0, owner.hbar.getCurrentRangeStart() + v.x * dt / owner.pxPerBeat));
+        if (v.y != 0.0f)
+            owner.vbar.setCurrentRangeStart (jmax (0.0, owner.vbar.getCurrentRangeStart() + v.y * dt));
+        if (! exactlyEqual (beforeBeats, owner.scrollBeats) || beforeY != owner.scrollY)
+            updateMarquee();
+    }
+
     Rectangle<float> clipBounds (int trackIndex, const Clip& c) const
     {
         const float x1 = owner.beatToX (c.start), x2 = owner.beatToX (c.end());
@@ -944,6 +1002,10 @@ public:
             {
                 drag.mode = Drag::marquee;
                 drag.anchor = e.position;
+                // Kept as a beat and a place in the whole track list, so the box stays put while
+                // the view scrolls under it.
+                drag.anchorBeat = owner.xToBeat (e.position.x);
+                drag.anchorContentY = e.position.y + (float) owner.scrollY;
             }
             owner.repaint();
             return;
@@ -982,19 +1044,13 @@ public:
         if (drag.mode == Drag::marquee)
         {
             drag.started = true;
-            marquee = Rectangle<float> (drag.anchor, e.position);
-            auto picked = drag.baseSelection;
-            for (int i = 0; i < (int) ctx.edit.tracks.size(); ++i)
-            {
-                if (! owner.isTrackShown (i))
-                    continue;
-                auto& t = *ctx.edit.tracks[(size_t) i];
-                for (auto& c : t.clips)
-                    if (clipBounds (i, c).intersects (marquee))
-                        picked.insert ({ t.id, c.id });
-            }
-            ctx.setClipSelection (picked);
-            repaint();
+            drag.pointer = e.position;
+            updateMarquee();
+            // Near or past an edge: keep scrolling that way while the button is down.
+            if (edgeSpeed (drag.pointer).isOrigin())
+                stopTimer();
+            else if (! isTimerRunning())
+                startTimerHz (60);
             return;
         }
 
@@ -1062,6 +1118,7 @@ public:
     {
         if (drag.mode == Drag::marquee)
         {
+            stopTimer();
             marquee = {};
             drag = {};
             repaint();
@@ -1327,6 +1384,9 @@ private:
         double grabBeat = 0.0;
         bool started = false;
         Point<float> anchor;                              // marquee
+        double anchorBeat = 0.0;                          // marquee: where it started, in the song
+        float anchorContentY = 0.0f;                      //   and in the whole track list
+        Point<float> pointer;                             //   where the pointer is now
         std::set<std::pair<int, int>> baseSelection;      // marquee with Cmd/Ctrl or Shift adds to this
     };
     Rectangle<float> marquee;
