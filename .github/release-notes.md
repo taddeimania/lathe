@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.1
+
+- **A built-in piano.** Add **Piano** from the plug-in menu: a modelled piano, with no samples to download.
+  Choose a grand, an upright, a felt piano or an electric piano. It answers to how hard you play and to the
+  sustain and soft pedals, letting go of a key damps it (except the top keys, as on a real piano), and
+  Hammer, Decay, Dampers, Body and Width shape it. Eight presets to start from.
+- **Box-select scrolls with you.** Drag a box to select clips and keep going past the edge of the
+  arrangement: it scrolls, so one drag can take in a whole track.
+- **Follow Playhead.** Turn off **Follow** (next to Loop, or press F, or View > Follow Playhead) and you
+  can scroll anywhere while the song plays, instead of being pulled back to the playhead. Lathe remembers
+  your choice.
+
 ## New in 0.12.21
 
 - **Clip names are readable on dark track colours.** A clip on a dark track now shows its name in light
