@@ -3,6 +3,11 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.21
+
+- **Clip names are readable on dark track colours.** A clip on a dark track now shows its name in light
+  text instead of near-black. Lathe's own track colours look the same as before.
+
 ## New in 0.12.20
 
 - **Chord names spelled across a C now land in the right octave.** `{Cb}` starts on Cb3 and `{B#}`
