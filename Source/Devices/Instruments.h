@@ -7,6 +7,8 @@ namespace lathe::devices
 std::unique_ptr<Device> makeBassSynth();
 std::unique_ptr<Device> makePolySynth();
 std::unique_ptr<Device> makeDrums();
+/** A modelled piano: struck strings and a soundboard, no samples (Piano.cpp). */
+std::unique_ptr<Device> makePiano();
 
 /** The small building blocks the instruments share. */
 namespace synth
@@ -45,5 +47,24 @@ float readDelay (const float* line, int size, int writePos, float delaySamples);
 
 float noteHz (float midiNote);
 float polyBlep (float t, float dt);
+
+/** Splits a block at its MIDI events: render (from, to), then the event, in order. */
+template <typename Render, typename Event>
+void withMidi (int numSamples, const MidiBuffer& midi, Render&& render, Event&& event)
+{
+    int pos = 0;
+    for (const auto m : midi)
+    {
+        const int at = jlimit (0, numSamples, m.samplePosition);
+        if (at > pos)
+        {
+            render (pos, at);
+            pos = at;
+        }
+        event (m.getMessage());
+    }
+    if (pos < numSamples)
+        render (pos, numSamples);
+}
 } // namespace synth
 } // namespace lathe::devices

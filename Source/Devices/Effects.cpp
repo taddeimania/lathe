@@ -762,6 +762,7 @@ const std::vector<Info>& all()
     static const std::vector<Info> list {
         { "bass", "Bass Synth", Kind::instrument, "A mono synth for basslines: saw, square or triangle, a sub, and glide.", [] { return makeBassSynth(); } },
         { "poly", "Poly Synth", Kind::instrument, "An eight-voice synth for pads, keys, brass and plucks.", [] { return makePolySynth(); } },
+        { "piano", "Piano", Kind::instrument, "A modelled piano: grand, upright, felt or electric. Responds to how hard you play and to the sustain pedal.", [] { return makePiano(); } },
         { "multi", "Multi Synth", Kind::instrument, "Eight voices, 24 ways to make a sound: analog, FM, wavetables, chords, speech, strings and drums.", [] { return makeMultiSynth(); } },
         { "resonator", "Resonator", Kind::instrument, "Strings, bells and struck bars that ring when you play them.", [] { return makeResonator(); } },
         { "drums", "Drums", Kind::instrument, "Synthesized kits in the style of the classic drum machines: Simple 909, 808, 606 and 707.", [] { return makeDrums(); } },

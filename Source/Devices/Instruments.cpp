@@ -106,24 +106,6 @@ float readDelay (const float* line, int size, int writePos, float delaySamples)
 
 float noteHz (float note)   { return 440.0f * std::pow (2.0f, (note - 69.0f) / 12.0f); }
 
-/** Splits a block at its MIDI events: render (from, to), then the event, in order. */
-template <typename Render, typename Event>
-void withMidi (int numSamples, const MidiBuffer& midi, Render&& render, Event&& event)
-{
-    int pos = 0;
-    for (const auto m : midi)
-    {
-        const int at = jlimit (0, numSamples, m.samplePosition);
-        if (at > pos)
-        {
-            render (pos, at);
-            pos = at;
-        }
-        event (m.getMessage());
-    }
-    if (pos < numSamples)
-        render (pos, numSamples);
-}
 } // namespace synth
 
 namespace

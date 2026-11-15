@@ -1790,7 +1790,7 @@ int main (int argc, char** argv)
         StringArray ids;
         for (auto& info : all())
             ids.add (info.id);
-        check (ids.joinIntoString (",") == "bass,poly,multi,resonator,drums,reverb,delay,grains,compressor,saturator,mastering,randomnotes", "the built-in devices (" + ids.joinIntoString (",") + ")");
+        check (ids.joinIntoString (",") == "bass,poly,piano,multi,resonator,drums,reverb,delay,grains,compressor,saturator,mastering,randomnotes", "the built-in devices (" + ids.joinIntoString (",") + ")");
 
         // Noise for half a second, then silence; instruments get a chord (or a drum hit
         // every eighth note) for that half second instead.
@@ -2351,6 +2351,176 @@ int main (int argc, char** argv)
                 }
             return crossings > 1 ? (crossings - 1) * rate / (double) (last - first) : 0.0;
         };
+
+        // Piano: in tune across the keyboard, louder and brighter when played harder, dampers, pedal.
+        {
+            auto slot = load ("piano");
+            auto& piano = dynamic_cast<Device&> (*slot->instance);
+            piano.setCurrentProgram (0);
+            // Plays timed MIDI events and returns both channels mixed to mono.
+            auto render = [] (AudioPluginInstance& p, double rate, int total, std::vector<std::pair<int, MidiMessage>> events)
+            {
+                constexpr int block = 256;
+                p.prepareToPlay (rate, block);
+                AudioBuffer<float> buffer (2, block);
+                std::vector<float> out;
+                for (int pos = 0; pos < total; pos += block)
+                {
+                    MidiBuffer midi;
+                    for (auto& [at, m] : events)
+                        if (at >= pos && at < pos + block)
+                            midi.addEvent (m, at - pos);
+                    buffer.clear();
+                    p.processBlock (buffer, midi);
+                    for (int i = 0; i < block; ++i)
+                        out.push_back (0.5f * (buffer.getSample (0, i) + buffer.getSample (1, i)));
+                }
+                return out;
+            };
+            auto levelDb = [] (const std::vector<float>& v, int from, int to)
+            {
+                double sum = 0.0;
+                for (int i = from; i < to && i < (int) v.size(); ++i)
+                    sum += (double) v[(size_t) i] * v[(size_t) i];
+                return Decibels::gainToDecibels (std::sqrt (sum / jmax (1, to - from)), -200.0);
+            };
+
+            String tuning;
+            bool inTune = true;
+            for (double rate : { 48000.0, 44100.0 })
+                for (int note : { 33, 45, 57, 69, 81, 93 })
+                {
+                    const double want = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+                    auto out = render (piano, rate, (int) (rate * 1.2), { { 0, MidiMessage::noteOn (1, note, 0.7f) } });
+                    // Only the fundamental: a narrow band-pass around it, then count zero crossings.
+                    // (Twice: a low string's second harmonic is stronger than its fundamental, as on a real piano.)
+                    IIRFilter band, band2;
+                    band.setCoefficients (IIRCoefficients::makeBandPass (rate, want, 6.0));
+                    band2.setCoefficients (IIRCoefficients::makeBandPass (rate, want, 6.0));
+                    for (auto& x : out)
+                        x = band2.processSingleSampleRaw (band.processSingleSampleRaw (x));
+                    const double got = pitchOf (out, (int) (rate * 0.4), (int) (rate * 1.1), rate);
+                    const double cents = 1200.0 * std::log2 (got / want);
+                    inTune = inTune && std::abs (cents) < 3.0;
+                    tuning << "note " << note << " " << String (cents, 1) << "c  ";
+                }
+            check (inTune, "piano: every A from A0 to A5 (C3 = middle C) is within 3 cents, at 48 and 44.1 kHz (" + tuning.trim() + ")");
+
+            auto soft = render (piano, 48000.0, 48000, { { 0, MidiMessage::noteOn (1, 60, 0.25f) } });
+            auto hard = render (piano, 48000.0, 48000, { { 0, MidiMessage::noteOn (1, 60, 1.0f) } });
+            auto brightness = [] (const std::vector<float>& v, int from, int to)   // high-frequency share: |difference| over |signal|
+            {
+                double d = 0.0, e = 0.0;
+                for (int i = from + 1; i < to; ++i)
+                {
+                    d += std::pow (v[(size_t) i] - v[(size_t) i - 1], 2.0);
+                    e += std::pow (v[(size_t) i], 2.0);
+                }
+                return e > 0.0 ? d / e : 0.0;
+            };
+            const double louder = levelDb (hard, 0, 9600) - levelDb (soft, 0, 9600);
+            const double brighter = brightness (hard, 0, 4800) / jmax (1.0e-12, brightness (soft, 0, 4800));
+            check (louder > 8.0 && brighter > 1.3,
+                   "piano: playing harder is louder and brighter (+" + String (louder, 1) + " dB, " + String (brighter, 2) + "x the treble)");
+
+            const int sec = 48000;
+            auto released = render (piano, 48000.0, sec * 2, { { 0, MidiMessage::noteOn (1, 60, 0.8f) }, { sec / 2, MidiMessage::noteOff (1, 60) } });
+            auto pedalled = render (piano, 48000.0, sec * 2, { { 0, MidiMessage::controllerEvent (1, 64, 127) }, { 1, MidiMessage::noteOn (1, 60, 0.8f) },
+                                                               { sec / 2, MidiMessage::noteOff (1, 60) }, { sec + sec / 2, MidiMessage::controllerEvent (1, 64, 0) } });
+            const double before = levelDb (released, sec / 2 - 4800, sec / 2);
+            const double dampedDrop = before - levelDb (released, sec, sec + 4800);
+            const double pedalDrop = before - levelDb (pedalled, sec, sec + 4800);
+            const double liftDrop = levelDb (pedalled, sec + sec / 2 - 4800, sec + sec / 2) - levelDb (pedalled, sec * 2 - 4800, sec * 2);
+            check (dampedDrop > 30.0 && pedalDrop < 15.0 && liftDrop > 25.0,
+                   "piano: letting go damps the note, the sustain pedal keeps it ringing, lifting the pedal damps it (-"
+                       + String (dampedDrop, 0) + " dB, -" + String (pedalDrop, 0) + " dB with the pedal, -" + String (liftDrop, 0) + " dB on lifting)");
+
+            // A top key let go after 0.2 s rings on like one still held (no damper); a middle one doesn't.
+            auto top = render (piano, 48000.0, sec, { { 0, MidiMessage::noteOn (1, 100, 0.8f) }, { sec / 5, MidiMessage::noteOff (1, 100) } });
+            auto topHeld = render (piano, 48000.0, sec, { { 0, MidiMessage::noteOn (1, 100, 0.8f) } });
+            const double topDiff = levelDb (topHeld, sec / 2, sec / 2 + 2400) - levelDb (top, sec / 2, sec / 2 + 2400);
+            check (std::abs (topDiff) < 1.0, "piano: the top keys have no dampers: let go, they ring on as if held ("
+                                                + String (topDiff, 2) + " dB apart 0.3 s later)");
+
+            // Every key at full velocity with the pedal down: nothing blows up or clips.
+            std::vector<std::pair<int, MidiMessage>> gliss { { 0, MidiMessage::controllerEvent (1, 64, 127) } };
+            for (int k = 21; k <= 108; ++k)
+                gliss.push_back ({ 1 + (k - 21) * 400, MidiMessage::noteOn (1, k, 1.0f) });
+            const auto started = Time::getMillisecondCounterHiRes();
+            auto all88 = render (piano, 48000.0, sec * 4, gliss);
+            const double ms = Time::getMillisecondCounterHiRes() - started;
+            float peak = 0.0f;
+            bool fine = true;
+            for (auto x : all88) { fine = fine && std::isfinite (x); peak = jmax (peak, std::abs (x)); }
+            check (fine && peak < 1.0f, "piano: all 88 keys at full velocity with the pedal down stay under 0 dBFS (peak "
+                                            + String (Decibels::gainToDecibels (peak), 1) + " dBFS)");
+            std::cout << "    piano: 4 s of a full-pedal glissando (24 voices) rendered in " << String (ms, 0) << " ms" << std::endl;
+
+            // LATHE_PIANO_DEMO=/path/demo.wav: Am7 Fmaj7 Cmaj7 G6 with the pedal and a melody on top, at 118 BPM,
+            // once each as Grand, Upright and Felt (or the presets in LATHE_PIANO_DEMO_PRESETS, e.g. "1,2,4"),
+            // to listen to. Not a test: nothing is checked.
+            if (auto* demoPath = std::getenv ("LATHE_PIANO_DEMO"))
+            {
+                const double rate = 48000.0;
+                const int beat = (int) (rate * 60.0 / 118.0);
+                static const int chords[4][4] { { 57, 60, 64, 67 }, { 53, 57, 60, 64 }, { 48, 52, 55, 59 }, { 43, 50, 52, 55 } };
+                static const int melody[16] { 76, 74, 72, 74, 72, 69, 67, 69, 67, 64, 67, 72, 71, 67, 69, 71 };
+                std::vector<int> presets { 0, 3, 5 };   // Grand, Upright, Felt piano
+                if (auto* list = std::getenv ("LATHE_PIANO_DEMO_PRESETS"))
+                {
+                    presets.clear();
+                    for (auto& t : StringArray::fromTokens (String::fromUTF8 (list), ",", ""))
+                        presets.push_back (jlimit (0, piano.getNumPrograms() - 1, t.getIntValue()));
+                }
+                AudioBuffer<float> all (2, (int) rate * 10 * (int) presets.size());
+                all.clear();
+                int at = 0;
+                for (int preset : presets)
+                {
+                    piano.setCurrentProgram (preset);
+                    piano.prepareToPlay (rate, 256);
+                    std::vector<std::pair<int, MidiMessage>> ev;
+                    for (int bar = 0; bar < 4; ++bar)
+                    {
+                        const int start = bar * 4 * beat;
+                        ev.push_back ({ start, MidiMessage::controllerEvent (1, 64, 127) });
+                        for (int k = 0; k < 4; ++k)
+                        {
+                            ev.push_back ({ start + 1 + k * 30, MidiMessage::noteOn (1, chords[bar][k], 0.45f + 0.05f * (float) k) });
+                            ev.push_back ({ start + 4 * beat - 600, MidiMessage::noteOff (1, chords[bar][k]) });
+                        }
+                        ev.push_back ({ start + 4 * beat - 200, MidiMessage::controllerEvent (1, 64, 0) });
+                        for (int q = 0; q < 4; ++q)
+                        {
+                            const int m = melody[bar * 4 + q];
+                            ev.push_back ({ start + q * beat + 2, MidiMessage::noteOn (1, m, q == 0 ? 0.8f : 0.6f) });
+                            ev.push_back ({ start + (q + 1) * beat - 500, MidiMessage::noteOff (1, m) });
+                        }
+                    }
+                    const int length = 4 * 4 * beat + (int) rate;
+                    AudioBuffer<float> buf (2, 256);
+                    for (int pos = 0; pos < length && at + pos + 256 <= all.getNumSamples(); pos += 256)
+                    {
+                        MidiBuffer midi;
+                        for (auto& [when, m] : ev)
+                            if (when >= pos && when < pos + 256)
+                                midi.addEvent (m, when - pos);
+                        buf.clear();
+                        piano.processBlock (buf, midi);
+                        for (int c = 0; c < 2; ++c)
+                            all.copyFrom (c, at + pos, buf, c, 0, 256);
+                    }
+                    at += length;
+                }
+                File demo (String::fromUTF8 (demoPath));
+                demo.deleteFile();
+                std::unique_ptr<OutputStream> stream (demo.createOutputStream());
+                WavAudioFormat wav;
+                if (auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (rate).withNumChannels (2).withBitsPerSample (24)))
+                    w->writeFromAudioSampleBuffer (all, 0, at);
+                std::cout << "    piano demo written to " << demo.getFullPathName() << std::endl;
+            }
+        }
 
         // Multi Synth: every model sounds, A4 is 440 Hz at 48 and 44.1 kHz, and a note stops after its release.
         {
@@ -5020,7 +5190,7 @@ int main (int argc, char** argv)
             check (listed["plugins"].size() == 5 + (int) devices::all().size() && diceyKind == "note generator"
                    && listed["plugins"][0]["format"].toString() == "built into Lathe",
                    "list_plugins lists Lathe's own first, then these, Arpeggiator as a note generator");
-            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2 + 5,   // + Lathe's own five
+            check (JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "instrument" } }), status)))["plugins"].size() == 2 + 6,   // + Lathe's own six
                    "list_plugins filters by kind");
             {
                 const auto gens = JSON::parse (text (tx.call ("list_plugins", args2 ({ { "kind", "note generator" } }), status)));
