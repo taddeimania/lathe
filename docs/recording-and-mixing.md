@@ -65,6 +65,8 @@ Every track, return and the master has a built-in EQ after its plug-ins and befo
 - **Scroll** (or Alt-drag) on a bell to set its width.
 - **Double-click** a bell or shelf to set it back to 0 dB, or double-click a cut to turn it on or off.
 - The power button bypasses the whole EQ. **Reset** flattens it.
+- A flat EQ uses no CPU: Lathe skips any band at 0 dB and any cut that's off.
+- On the master, the EQ comes after Mastering or any limiter on it. A boost there can go past the limiter's ceiling, so for tonal moves on the whole mix, put an EQ plug-in before the limiter.
 
 ## Compare (View > Compare, Cmd/Ctrl+K)
 

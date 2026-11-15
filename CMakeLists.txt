@@ -15,6 +15,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # then won't start. Set before JUCE so its targets (and the test plug-ins) match.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# Windows: Release builds keep their debug symbols in .pdb files next to the exes, so a crash
+# report's "Lathe.exe + 0x..." steps can be turned into function names later
+# (lathe-backend/scripts/symbolicate.py). The code is the same: /Z7 puts the debug info in the
+# object files, /DEBUG writes the .pdb, and /OPT:REF,ICF keep the size a Release build has
+# without /DEBUG. CI keeps the .pdb files with each release; they don't go in the download.
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()

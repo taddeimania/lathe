@@ -434,7 +434,9 @@ var toolDefinitions()
                          "bell 1, bell 2, high shelf, high cut; describe_track shows what's active). set_eq changes one band: "
                          "{\"action\":\"set_eq\",\"track\":\"Guitar\",\"band\":\"bell 1\",\"freq_hz\":300,\"gain_db\":-3,\"q\":1.4} "
                          "or {\"action\":\"set_eq\",\"track\":\"Vocal\",\"band\":\"low cut\",\"freq_hz\":100}. Changing a band "
-                         "switches it on. Prefer this to adding an EQ plug-in for corrective cuts.\n"
+                         "switches it on. Prefer this to adding an EQ plug-in for corrective cuts. On the master the EQ comes "
+                         "after Mastering or any limiter, so a boost there can push the output past the limiter's ceiling; for "
+                         "tonal moves on the whole mix, add an EQ plug-in before the limiter instead.\n"
                          "Volume, pan, send levels and the EQ are part of the undo step; mute, solo, monitoring and arm change "
                          "live and aren't.",
                          schema ({ { "changes", object ({ { "type", "array" }, { "items", change },

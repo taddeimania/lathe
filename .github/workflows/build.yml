@@ -278,6 +278,40 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Windows: the .pdb files (debug symbols) go in their own zip with the exes they match,
+      # Lathe-symbols-<version>-Windows.zip, kept on the release for reading crash reports
+      # (lathe-backend/scripts/symbolicate.py). Not in the download, and not on getlathe.app:
+      # "Publish downloads" only copies Lathe-<version>-*.
+      - name: Symbols (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          art=build/Lathe_artefacts/Release
+          sym="Lathe-symbols-${ARCHIVE#Lathe-}"
+          stage="$RUNNER_TEMP/${sym%.zip}"
+          mkdir -p "$stage"
+          for p in Lathe LatheScanner LatheHost LatheMCP LathePatcher; do
+            pdb="$art/$p.pdb"
+            [ -f "$pdb" ] || pdb=$(find build -name "$p.pdb" -path "*Release*" | head -1)
+            if [ -z "$pdb" ]; then
+              echo "::error::$p.pdb wasn't built: crash reports from this release couldn't be read."
+              exit 1
+            fi
+            cp "$pdb" "$art/$p.exe" "$stage/"
+          done
+          ls -la "$stage"
+          (cd "$RUNNER_TEMP" && 7z a -tzip "$GITHUB_WORKSPACE/$sym" "$(basename "$stage")" > /dev/null)
+          echo "SYMBOLS=$sym" >> "$GITHUB_ENV"
+
+      - name: Upload symbols (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.SYMBOLS }}
+          path: ${{ env.SYMBOLS }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
   # Multi-core rendering (docs/multicore.md) under ThreadSanitizer: every engine test with
   # each block shared over 4 threads, and random sessions compared with one thread. Any data
   # race between the audio thread and the workers fails the build.
