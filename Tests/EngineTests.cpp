@@ -5347,6 +5347,19 @@ int main (int argc, char** argv)
         check (older.master->eqPosition == -1 && older.master->eqIndex() == 1, "a song from before keeps the EQ after its plug-ins");
     }
 
+    // --- Clip names on a track's colour ------------------------------------------------------------
+    {
+        bool paletteDark = true;
+        for (auto& c : getTrackPalette())
+            paletteDark = paletteDark && theme::textOn (c) == theme::textDark;
+        check (paletteDark, "every palette colour keeps dark clip names, as before");
+        check (theme::textOn (Colour (0xff2b47bd)) == theme::text && theme::textOn (Colour (0xff3a2a1a)) == theme::text
+                   && theme::textOn (Colours::black) == theme::text,
+               "a dark track colour (deep blue, brown, black) gets light clip names");
+        check (theme::textOn (Colours::white) == theme::textDark && theme::textOn (Colour (0xffe9a23b)) == theme::textDark,
+               "white and the accent amber keep dark ones");
+    }
+
     // --- First run: which device Lathe picks, and where it's running from ------------------------
     {
         check (Engine::isFirstRunCandidate ("Studio Interface 8", 8, 8), "an interface with 8 ins and outs is picked");

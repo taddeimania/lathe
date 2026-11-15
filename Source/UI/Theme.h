@@ -24,6 +24,21 @@ namespace theme
     inline const Colour textDim     { 0xff8e8e8e };
     inline const Colour textDark    { 0xff1e1e1e };
 
+    /** The text colour that reads on a background: textDark on light colours, text on dark ones,
+        whichever has more contrast (WCAG relative luminance). For names drawn on a track's colour. */
+    inline Colour textOn (Colour background)
+    {
+        auto luminance = [] (Colour c)
+        {
+            auto channel = [] (float v) { return v <= 0.03928f ? v / 12.92f : std::pow ((v + 0.055f) / 1.055f, 2.4f); };
+            return 0.2126f * channel (c.getFloatRed()) + 0.7152f * channel (c.getFloatGreen()) + 0.0722f * channel (c.getFloatBlue());
+        };
+        const float l = luminance (background);
+        const float againstDark = (l + 0.05f) / (luminance (textDark) + 0.05f);
+        const float againstLight = (luminance (text) + 0.05f) / (l + 0.05f);
+        return againstDark >= againstLight ? textDark : text;
+    }
+
     inline const Colour accent      { 0xffe9a23b };   // play, playhead, selection
     inline const Colour record      { 0xffdb4b40 };
     inline const Colour solo        { 0xff5ea9d8 };

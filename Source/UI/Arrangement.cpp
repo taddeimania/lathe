@@ -796,7 +796,7 @@ public:
         auto titleBar = r.removeFromTop (14.0f);
         g.setColour (colour);
         g.fillRect (titleBar);
-        g.setColour (theme::textDark);
+        g.setColour (theme::textOn (colour));   // light text on a dark track colour
         g.setFont (theme::font (11.0f));
         g.drawText (c.name, titleBar.reduced (4.0f, 0.0f), Justification::centredLeft, true);
 
