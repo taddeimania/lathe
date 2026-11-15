@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.19
+
+- **Chord names for AI assistants writing music.** In the note notation, a chord can now be written by
+  name: `{Am7} _ {Fmaj7} _`, `{C/E}`, or `{Bbmaj7}2` for a lower octave, instead of spelling out every
+  note. Velocity, timing and length work on the whole chord, as they do for any group.
+
 ## New in 0.12.18
 
 - **Move the channel EQ anywhere in the chain.** Drag the EQ card by its name to a new place among
