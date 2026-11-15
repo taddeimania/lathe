@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.12.17
+
+- **A smoother first launch.**
+  - The first time Lathe opens, it no longer picks a device that can't play sound, such as one
+    that routes audio between apps for screen recording or calls. So the welcome song plays when you
+    press Space.
+  - The "Press Space to play it" hint comes back until you've played the welcome song, instead of
+    disappearing behind the first-launch question.
+  - If Lathe on Windows is opened from inside the zip, or Lathe on a Mac is opened straight from
+    Downloads, it now says so and how to fix it: extract the zip first, or move Lathe to
+    Applications. Otherwise updates and some features don't work.
+
 ## New in 0.12.16
 
 - **The AI assistant knows where the master's EQ sits.** The channel EQ on the master comes after
