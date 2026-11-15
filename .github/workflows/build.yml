@@ -28,6 +28,11 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
+    # Azure trusts GitHub's sign-in only for runs in this environment (Windows signing).
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -157,6 +162,65 @@ jobs:
             --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
           xcrun stapler staple "$app"
           spctl --assess --type execute --verbose "$app"
+
+      # Windows: sign Lathe and its helpers with Microsoft's Artifact Signing, so Windows shows
+      # the publisher instead of "Unknown publisher". GitHub signs in to Azure with a short-lived
+      # token (no password stored): secrets AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID.
+      # The certificate profile is the repository variable WINDOWS_CERT_PROFILE (Settings ->
+      # Secrets and variables -> Actions -> Variables). Only version tags are signed, and a tag
+      # without these fails here, so every released Windows build is signed.
+      - name: Signing settings (Windows)
+        id: winsign
+        if: runner.os == 'Windows'
+        env:
+          PROFILE: ${{ vars.WINDOWS_CERT_PROFILE }}
+          CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "Branch build: not signed (only releases are)."
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$PROFILE" ] || [ -z "$CLIENT" ]; then
+            echo "::error::Releases must be signed: the WINDOWS_CERT_PROFILE variable or the AZURE_* secrets are missing."
+            exit 1
+          else
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign in to Azure (Windows)
+        if: steps.winsign.outputs.sign == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign (Windows)
+        if: steps.winsign.outputs.sign == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: taddeilathesigning
+          certificate-profile-name: ${{ vars.WINDOWS_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\build\Lathe_artefacts\Release
+          files-folder-filter: exe
+          description: Lathe
+          description-url: https://getlathe.app
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+
+      - name: Check the signatures (Windows)
+        if: steps.winsign.outputs.sign == 'true'
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($exe in 'Lathe','LatheScanner','LatheHost','LatheMCP','LathePatcher') {
+            $sig = Get-AuthenticodeSignature "build/Lathe_artefacts/Release/$exe.exe"
+            Write-Host "$exe.exe: $($sig.Status) ($($sig.SignerCertificate.Subject))"
+            if ($sig.Status -ne 'Valid') { $bad++ }
+          }
+          if ($bad -gt 0) { Write-Error "$bad of Lathe's programs aren't signed properly."; exit 1 }
 
       # Package the app ourselves so file permissions and the macOS signature
       # survive the download. LatheScanner (the plug-in scan helper), LatheHost (runs a
