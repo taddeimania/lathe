@@ -4155,6 +4155,36 @@ int main (int argc, char** argv)
             check (r7.wasOk() && pitchesAt (v7, 0.0) == std::vector<int> { 12, 16, 19 }
                        && std::all_of (v7.begin(), v7.end(), [] (auto& n) { return n.velocity == 80; }),
                    "{C}-1:80 is octave -1 at velocity 80 (" + r7.getErrorMessage() + ")");
+            // Every quality chordPitches knows, on C3 (60): the notes it plays, as steps from the root.
+            {
+                const std::vector<std::pair<String, std::vector<int>>> qualities {
+                    { "", { 0, 4, 7 } }, { "maj", { 0, 4, 7 } }, { "m", { 0, 3, 7 } }, { "min", { 0, 3, 7 } },
+                    { "dim", { 0, 3, 6 } }, { "aug", { 0, 4, 8 } }, { "+", { 0, 4, 8 } }, { "5", { 0, 7 } },
+                    { "sus2", { 0, 2, 7 } }, { "sus4", { 0, 5, 7 } }, { "sus", { 0, 5, 7 } },
+                    { "6", { 0, 4, 7, 9 } }, { "m6", { 0, 3, 7, 9 } },
+                    { "7", { 0, 4, 7, 10 } }, { "maj7", { 0, 4, 7, 11 } }, { "M7", { 0, 4, 7, 11 } }, { "m7", { 0, 3, 7, 10 } },
+                    { "mmaj7", { 0, 3, 7, 11 } }, { "m7b5", { 0, 3, 6, 10 } }, { "dim7", { 0, 3, 6, 9 } }, { "7sus4", { 0, 5, 7, 10 } },
+                    { "add9", { 0, 4, 7, 14 } }, { "madd9", { 0, 3, 7, 14 } },
+                    { "9", { 0, 4, 7, 10, 14 } }, { "maj9", { 0, 4, 7, 11, 14 } }, { "m9", { 0, 3, 7, 10, 14 } },
+                    { "11", { 0, 4, 7, 10, 14, 17 } }, { "m11", { 0, 3, 7, 10, 14, 17 } }, { "13", { 0, 4, 7, 10, 14, 21 } },
+                };
+                StringArray wrong;
+                for (auto& [quality, steps] : qualities)
+                {
+                    auto [rq, vq] = parsed ("keys: {C" + quality + "}", 1);
+                    std::vector<int> want;
+                    for (int st : steps)
+                        want.push_back (60 + st);
+                    if (! rq.wasOk() || pitchesAt (vq, 0.0) != want)
+                        wrong.add ("{C" + quality + "}" + (rq.wasOk() ? String() : ": " + rq.getErrorMessage()));
+                }
+                check (wrong.isEmpty(), "every chord quality plays its notes on C3 (wrong: " + wrong.joinIntoString (", ") + ")");
+            }
+            // A root spelled across a C: the pitch class wraps and the root stays in octave 3, so {Cb} is
+            // B3 (71) and {B#} is C3 (60). (The note names differ: Cb3 is 59 and B#3 is 72.)
+            auto [r8, v8] = parsed ("keys: {Cb} {B#}", 1);
+            check (r8.wasOk() && pitchesAt (v8, 0.0) == std::vector<int> { 71, 75, 78 } && pitchesAt (v8, 2.0) == std::vector<int> { 60, 64, 67 },
+                   "{Cb} plays B major from B3 and {B#} C major from C3 (" + r8.getErrorMessage() + ")");
             auto bad = [&] (const String& text, const String& expected)
             {
                 auto [rb, vb] = parsed (text, 1);
