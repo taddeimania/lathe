@@ -170,7 +170,11 @@ struct Track
     std::vector<std::shared_ptr<Send>> sends;
     std::vector<std::shared_ptr<PluginSlot>> plugins;
     std::vector<Clip> clips;
-    ChannelEq eq;                 // after the plug-ins, before the fader
+    ChannelEq eq;                 // among the plug-ins (eqPosition), before the fader
+    /** Where the channel EQ sits: after this many plug-ins. -1, the default (and every song from
+        before the EQ could move): after all of them, and it stays last when plug-ins are added at
+        the end. Change it with moveInChain; insertPluginAt and removePluginSlot keep it in place. */
+    int eqPosition = -1;
 
     // Peak meters: the audio thread raises them, the UI reads and clears them.
     std::atomic<float> meterL { 0.0f }, meterR { 0.0f };
@@ -184,6 +188,12 @@ struct Track
     std::atomic<double> measuredUs { 0.0 };
 
     bool isAudio() const noexcept   { return kind == TrackKind::audio; }
+    /** The EQ's place in the chain, 0 (before every plug-in) to plugins.size() (after them all).
+        On a MIDI track it's never before the instrument: there's no sound there yet. */
+    int eqIndex() const;
+    /** The earliest place the EQ may go: just after the instrument on a MIDI track, else 0. */
+    int eqEarliest() const;
+
     bool isMidi() const noexcept    { return kind == TrackKind::midi; }
     bool isBus() const noexcept     { return kind == TrackKind::bus; }
     bool isMaster() const noexcept  { return kind == TrackKind::master; }
@@ -394,6 +404,21 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE (Edit)
 };
+
+// The plug-in chain with the channel EQ in it, as the device panel shows it: chain index i is
+// the EQ if i == t.eqIndex(), else a plug-in. Adding, removing and moving keep the EQ where it is
+// among the other cards.
+
+/** Puts slot at plug-in index (0..plugins.size(); -1 = the end). afterEq: when it lands where the
+    EQ is, put it after the EQ instead of before. */
+void insertPluginAt (Track&, int index, std::shared_ptr<PluginSlot> slot, bool afterEq = false);
+/** Takes the slot out of the chain (the EQ stays between the same neighbours). */
+void removePluginSlot (Track&, const std::shared_ptr<PluginSlot>&);
+/** Moves the chain item at `from` (0..plugins.size(), the EQ included) so it ends up at `to`.
+    Returns false if nothing changed. On a MIDI track the EQ can't end up before the instrument. */
+bool moveInChain (Track&, int from, int to);
+/** A plug-in's place in the chain (counting the EQ), or -1. */
+int chainIndexOf (const Track&, const std::shared_ptr<PluginSlot>&);
 
 /** The fixed palette for track colours. Muted on purpose: they sit on dark grey. */
 const Array<Colour>& getTrackPalette();

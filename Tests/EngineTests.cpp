@@ -202,6 +202,18 @@ private:
     AudioBuffer<float> ring;
 };
 
+/** Clips everything to +-0.3: a plain nonlinear plug-in, so the order of things around it shows. */
+class ClipPlugin : public LatencyPlugin
+{
+public:
+    ClipPlugin() : LatencyPlugin (0) {}
+    void processBlock (AudioBuffer<float>& b, MidiBuffer&) override
+    {
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+            FloatVectorOperations::clip (b.getWritePointer (ch), b.getReadPointer (ch), -0.3f, 0.3f, b.getNumSamples());
+    }
+};
+
 File writeImpulseWav (const File& f, int length, int impulseAt)
 {
     AudioBuffer<float> b (1, length);
@@ -1432,6 +1444,62 @@ int main (int argc, char** argv)
         files.clear();
         engine.exportAudio (s, [] (double) { return true; }, files);
         check (files.size() == 3 && File (files[0]).getFileName() == "Song - " + first->name + " + " + second->name + ".wav", "two tracks: both names in the mix's file name");
+    }
+
+    std::cout << "The EQ's place in the chain" << std::endl;
+    {
+        // A clipper and a big EQ boost on the first track (its clip is one 0.5 impulse): boosting
+        // before the clipper is clipped away, boosting after it isn't, so where the EQ sits shows.
+        auto first = edit.tracks[0];
+        auto sat = std::make_shared<PluginSlot>();
+        sat->instance = std::make_unique<ClipPlugin>();
+        sat->description.name = "Clip";
+        engine.prepareSlot (*sat);
+        {
+            first->plugins.push_back (sat);
+            first->eq.bands[2].gainDb = 18.0f;
+            first->eq.bands[2].freq = 2000.0f;
+            first->eq.bands[2].q = 0.3f;
+            auto renderWith = [&] (int eqPosition, const String& folder)
+            {
+                first->eqPosition = eqPosition;
+                engine.rebuild();   // as the app does after every change
+                Engine::ExportSettings s;
+                s.mix = true;
+                s.startBeat = 0.0;
+                s.endBeat = 2.0;
+                s.tailSeconds = 0.5;
+                s.folder = dir.getChildFile (folder);
+                s.baseName = "Song";
+                s.trackIds = { first->id };
+                StringArray files;
+                engine.exportAudio (s, [] (double) { return true; }, files);
+                AudioFormatManager fm;
+                fm.registerBasicFormats();
+                std::unique_ptr<AudioFormatReader> r (files.isEmpty() ? nullptr : fm.createReaderFor (File (files[0])));
+                AudioBuffer<float> b (2, r == nullptr ? 0 : (int) r->lengthInSamples);
+                if (r != nullptr)
+                    r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+                return b;
+            };
+            const auto after = renderWith (-1, "EQ after"), before = renderWith (0, "EQ before"), again = renderWith (-1, "EQ after again");
+            auto biggestDifference = [] (const AudioBuffer<float>& x, const AudioBuffer<float>& y)
+            {
+                float most = x.getNumSamples() == y.getNumSamples() && x.getNumSamples() > 0 ? 0.0f : 99.0f;
+                for (int i = 0; i < jmin (x.getNumSamples(), y.getNumSamples()); ++i)
+                    most = jmax (most, std::abs (x.getSample (0, i) - y.getSample (0, i)));
+                return most;
+            };
+            const float differs = biggestDifference (after, before), same = biggestDifference (after, again);
+            const float peakBefore = before.getMagnitude (0, 0, before.getNumSamples()), peakAfter = after.getMagnitude (0, 0, after.getNumSamples());
+            check (peakBefore <= 0.301f && peakAfter > 0.4f && differs > 0.05f && same < 1.0e-4f,
+                   "the EQ before the clipper sounds different from after it (largest difference " + String (differs, 3)
+                   + ", the same order twice " + String (same, 6) + ", peaks " + String (peakBefore, 3) + " and " + String (peakAfter, 3) + ")");
+            removePluginSlot (*first, sat);
+            first->eqPosition = -1;
+            first->eq.reset();
+            engine.rebuild();
+        }
     }
 
     std::cout << "Project file round trip" << std::endl;
@@ -4298,6 +4366,15 @@ int main (int argc, char** argv)
             check (described["eq"]["bands"].toString().contains ("Bell 1 300 Hz -3.0 dB"), "describe_track shows the EQ it set");
             gen->eq.reset();
             e.commitUndoStep();
+            r = svc.runTool ("edit_session", change (R"([{"action":"add_plugin","track":"master","plugin":"Mastering"},
+                                                          {"action":"set_eq","track":"master","before":"Mastering"}])"));
+            check (! (bool) r["isError"] && e.master->eqIndex() == 0 && txt (r).contains ("EQ before Mastering"),
+                   "set_eq before: the master's EQ goes before Mastering (" + txt (r).substring (0, 240) + ")");
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_eq","track":"master","before":"end"}])"));
+            check (! (bool) r["isError"] && e.master->eqPosition == -1, "set_eq before end: back after the plug-ins");
+            e.undo();
+            e.undo();
+            check (e.master->plugins.empty() && e.master->eqPosition == -1, "and undo takes Mastering and the move back");
 
             synth->name = oldName;
             gen->pan = 0.0f;
@@ -5114,6 +5191,81 @@ int main (int argc, char** argv)
         engine.setEdit (&edit);
     }
 
+    // --- The channel EQ among the plug-ins -----------------------------------------------------------
+    {
+        auto named = [] (const String& name, bool instrument = false)
+        {
+            auto s = std::make_shared<PluginSlot>();
+            s->description.name = name;
+            s->description.isInstrument = instrument;
+            return s;
+        };
+        Track bus;
+        bus.kind = TrackKind::bus;
+        auto comp = named ("Comp"), master = named ("Mastering");
+        bus.plugins = { comp, master };
+        check (bus.eqIndex() == 2 && chainIndexOf (bus, master) == 1, "the EQ starts after every plug-in");
+        check (moveInChain (bus, 2, 1) && bus.eqIndex() == 1 && bus.eqPosition == 1, "moving the EQ one place left puts it before the last plug-in");
+        check (chainIndexOf (bus, master) == 2, "...and the plug-in after it counts the EQ in its place");
+        insertPluginAt (bus, -1, named ("Meter"));
+        check (bus.eqIndex() == 1, "a plug-in added at the end leaves the EQ where it was");
+        insertPluginAt (bus, 0, named ("Gate"));
+        check (bus.eqIndex() == 2 && bus.plugins[2] == master, "one added before it moves it along with its neighbours");
+        removePluginSlot (bus, comp);
+        check (bus.eqIndex() == 1 && bus.plugins[1] == master, "removing a plug-in before it keeps it just before Mastering");
+        check (moveInChain (bus, 1, 3) && bus.eqPosition == -1 && bus.eqIndex() == 3, "dragged to the end it goes back to after them all");
+        insertPluginAt (bus, -1, named ("Limiter"));
+        check (bus.eqIndex() == 4, "and stays last when another plug-in is added at the end");
+        check (! moveInChain (bus, 4, 4) && ! moveInChain (bus, 9, 0), "moving to the same place, or something that isn't there, changes nothing");
+        // A plug-in moved past the EQ swaps places with it, as the arrows do.
+        Track two;
+        two.kind = TrackKind::audio;
+        auto a = named ("A"), b = named ("B");
+        two.plugins = { a, b };
+        two.eqPosition = 1;   // A, EQ, B
+        check (moveInChain (two, 0, 1) && two.plugins[0] == a && two.eqIndex() == 0, "moving A right past the EQ puts the EQ first: EQ, A, B");
+
+        Track keys;
+        keys.kind = TrackKind::midi;
+        auto arp = named ("Arp"), synth = named ("Synth", true), delay = named ("Delay");
+        keys.plugins = { arp, synth, delay };
+        check (keys.eqEarliest() == 2, "on a MIDI track the EQ can go no earlier than just after the instrument");
+        check (moveInChain (keys, 3, 0) && keys.eqIndex() == 2 && keys.eqPosition == 2, "dragged before the instrument it lands just after it");
+        check (! moveInChain (keys, 2, 1), "and can't be moved further left");
+        keys.eqPosition = 0;   // a song saved by hand that says otherwise
+        check (keys.eqIndex() == 2, "an EQ position before the instrument reads as just after it");
+
+        // Saved, read back, undone and described.
+        Edit e;
+        auto m = e.master;
+        auto mastering = named ("Mastering");
+        m->plugins = { mastering };
+        e.changed();
+        e.commitUndoStep();
+        check (moveInChain (*m, 1, 0), "the master's EQ moves before Mastering");
+        e.changed();
+        e.commitUndoStep();
+        check (! e.getDoneSteps().empty() && e.getDoneSteps().back().label.contains ("EQ before its plug-ins"),
+               "history: \"Moved \"Master\" EQ before its plug-ins\" (" + (e.getDoneSteps().empty() ? String() : e.getDoneSteps().back().label) + ")");
+        const auto saved = e.toVar (false);
+        check (m->eqPosition == 0 && (int) saved["master"]["eq"]["position"] == 0, "the position is saved with the EQ");
+        const auto before = saved;
+        e.undo();
+        check (m->eqPosition == -1, "undo puts the EQ back after Mastering");
+        const auto lines = cloud::describeChanges (e.toVar (false), before);
+        check (lines.joinIntoString ("\n").contains ("EQ moved before the plug-ins"), "Lathe Cloud's summary says the EQ moved (" + lines.joinIntoString (" / ") + ")");
+
+        Edit loaded;
+        const auto result = loaded.loadFrom (before, File(), [named] (const PluginDescription& d, const MemoryBlock&, bool) { return named (d.name); });
+        check (result.wasOk() && loaded.master->eqPosition == 0 && loaded.master->eqIndex() == 0, "a saved song opens with the EQ where it was left");
+        auto old = before;
+        if (auto* mo = old["master"]["eq"].getDynamicObject())
+            mo->removeProperty ("position");
+        Edit older;
+        older.loadFrom (old, File(), [named] (const PluginDescription& d, const MemoryBlock&, bool) { return named (d.name); });
+        check (older.master->eqPosition == -1 && older.master->eqIndex() == 1, "a song from before keeps the EQ after its plug-ins");
+    }
+
     // --- First run: which device Lathe picks, and where it's running from ------------------------
     {
         check (Engine::isFirstRunCandidate ("Studio Interface 8", 8, 8), "an interface with 8 ins and outs is picked");
@@ -5140,11 +5292,13 @@ int main (int argc, char** argv)
                "Lathe.exe without its helpers (opened from inside the zip) says to extract the zip; with them, nothing");
         dir.deleteRecursively();
 
+       #if ! JUCE_WINDOWS   // Mac paths; Windows would read "/private/..." as a path on its own drive
         const auto translocated = PluginHost::installProblem (
             File ("/private/var/folders/xy/T/AppTranslocation/1234/d/Lathe.app/Contents/MacOS/Lathe"));
         const auto installed = PluginHost::installProblem (File ("/Applications/Lathe.app/Contents/MacOS/Lathe"));
         check (translocated.contains ("Applications") && installed.isEmpty(),
                "a Mac app run from where it was downloaded says to move it to Applications; one in Applications is fine");
+       #endif
     }
 
     engine.setEdit (nullptr);

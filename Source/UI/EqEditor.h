@@ -62,7 +62,7 @@ private:
 
     AppContext& ctx;
     std::shared_ptr<Track> track;
-    TextButton power, bandOn, resetButton { "Reset" };
+    TextButton power, bandOn, resetButton { "Reset" }, leftButton { "<" }, rightButton { ">" };
     EqEditor editor;
     Label readout;
 };

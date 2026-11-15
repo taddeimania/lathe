@@ -3,8 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
-## New in 0.12.17
+## New in 0.12.18
 
+- **Move the channel EQ anywhere in the chain.** Drag the EQ card by its name to a new place among
+  your plug-ins, or use its < and > buttons. Plug-in cards can be dragged too. On the master, put
+  the EQ before Mastering to shape the tone of the whole mix before the limiter. On a MIDI track the
+  EQ stays after the instrument. Moving it is one undo step and is saved with the song; songs from
+  before keep the EQ after their plug-ins. The AI assistant can move it as well.
 - **A smoother first launch.**
   - The first time Lathe opens, it no longer picks a device that can't play sound, such as one
     that routes audio between apps for screen recording or calls. So the welcome song plays when you

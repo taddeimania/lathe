@@ -59,12 +59,25 @@ String describeOutput (const var& o, const std::map<int, String>& returnNames)
     return "Master";
 }
 
-void diffEq (const var& a, const var& b, StringArray& changes)
+void diffEq (const var& a, const var& b, StringArray& changes, const var& pluginsAfter = {})
 {
     if (same (a, b))
         return;
     if ((bool) a["on"] != (bool) b["on"])
         changes.add (String ("EQ ") + ((bool) b["on"] ? "on" : "off"));
+    const int posA = a.hasProperty ("position") ? (int) a["position"] : -1;
+    const int posB = b.hasProperty ("position") ? (int) b["position"] : -1;
+    if (posA != posB)
+    {
+        String after = "plug-in " + String (posB);
+        if (posB > 0 && posB <= arrayOf (pluginsAfter).size())
+            if (auto xml = parseXML (arrayOf (pluginsAfter)[posB - 1]["description"].toString()))
+                if (auto n = xml->getStringAttribute ("name"); n.isNotEmpty())
+                    after = n;
+        changes.add (posB < 0 ? String ("EQ moved after the plug-ins")
+                     : posB == 0 ? String ("EQ moved before the plug-ins")
+                                 : "EQ moved after " + after);
+    }
 
     const auto& ba = arrayOf (a["bands"]);
     const auto& bb = arrayOf (b["bands"]);
@@ -258,7 +271,7 @@ StringArray channelChanges (const var& a, const var& b, const std::map<int, Stri
     if (a["colour"] != b["colour"])
         c.add ("new colour");
     diffSends (a["sends"], b["sends"], returnNames, c);
-    diffEq (a["eq"], b["eq"], c);
+    diffEq (a["eq"], b["eq"], c, b["plugins"]);
     diffPlugins (a["plugins"], b["plugins"], c);
     diffClips (a["clips"], b["clips"], c);
     return c;

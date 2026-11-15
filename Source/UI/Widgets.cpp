@@ -444,23 +444,16 @@ void openPluginEditor (AppContext& ctx, const std::shared_ptr<PluginSlot>& slot,
 void removePlugin (AppContext& ctx, Track& t, const std::shared_ptr<PluginSlot>& slot)
 {
     slot->window.reset();
-    t.plugins.erase (std::remove (t.plugins.begin(), t.plugins.end(), slot), t.plugins.end());
+    removePluginSlot (t, slot);
     ctx.edit.changed();
 }
 
 void movePlugin (AppContext& ctx, Track& t, const std::shared_ptr<PluginSlot>& slot, int delta)
 {
-    auto it = std::find (t.plugins.begin(), t.plugins.end(), slot);
-    if (it == t.plugins.end())
-        return;
-
-    const auto index = (int) std::distance (t.plugins.begin(), it);
-    const auto target = jlimit (0, (int) t.plugins.size() - 1, index + delta);
-    if (target == index)
-        return;
-
-    std::swap (t.plugins[(size_t) index], t.plugins[(size_t) target]);
-    ctx.edit.changed();
+    // One step along the chain as the device panel shows it, the EQ counted as a card.
+    const int from = chainIndexOf (t, slot);
+    if (from >= 0 && moveInChain (t, from, from + delta))
+        ctx.edit.changed();
 }
 
 void showAddPluginMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> track, int insertIndex)
@@ -521,8 +514,7 @@ std::shared_ptr<PluginSlot> insertPlugin (AppContext& ctx, std::shared_ptr<Track
 
     if (track->isBus())
         devices::startOnReturn (*slot->instance);
-    const auto index = (size_t) jlimit (0, (int) track->plugins.size(), insertIndex < 0 ? (int) track->plugins.size() : insertIndex);
-    track->plugins.insert (track->plugins.begin() + (long) index, slot);
+    insertPluginAt (*track, insertIndex, slot);
     ctx.edit.changed();
     ctx.showStatus (desc.name + " added to " + track->name);
     openPluginEditor (ctx, slot, track->name);

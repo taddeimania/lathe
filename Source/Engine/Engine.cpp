@@ -94,6 +94,7 @@ struct RenderTrack
     std::vector<RenderMidi> midiEvents;
     std::vector<RenderPlugin> plugins;
     std::vector<RenderSend> sends;
+    size_t eqAfter = 0;            // the channel EQ runs after this many of plugins (Track::eqIndex)
 
     int inputChannel = -1;
     bool inputStereo = false;
@@ -740,8 +741,12 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
         rt.kind = t->kind;
         rt.numChannels = 2;
 
-        for (auto& slot : t->plugins)
+        const int eqIndex = t->eqIndex();
+        for (size_t i = 0; i < t->plugins.size(); ++i)
         {
+            auto& slot = t->plugins[i];
+            if ((int) i == eqIndex)
+                rt.eqAfter = rt.plugins.size();
             if (slot->instance == nullptr)
                 continue;   // missing plug-in: audio passes through
 
@@ -757,6 +762,8 @@ std::unique_ptr<RenderGraph> Engine::buildGraph()
                 rt.latency += p.processor->getLatencySamples();
             rt.plugins.push_back (p);
         }
+        if (eqIndex >= (int) t->plugins.size())
+            rt.eqAfter = rt.plugins.size();
 
         rt.buffer.setSize (rt.numChannels, bs);
         rt.buffer.clear();
@@ -1919,14 +1926,18 @@ void Engine::renderChunk (RenderGraph& g, int64 pos, int len, int offset, bool r
     // master
     auto& m = g.master;
     m.midi.clear();
-    for (auto& p : m.plugins)
+    for (size_t i = 0; i < m.plugins.size(); ++i)
     {
+        if (i == m.eqAfter)
+            m.track->rtEq.process (m.track->eq, m.buffer, len, g.sampleRate);
+        auto& p = m.plugins[i];
         if (p.slot->bypassed.load())
             continue;
         AudioBuffer<float> view (m.buffer.getArrayOfWritePointers(), p.numChannels, len);
         p.processor->processBlock (view, m.midi);
     }
-    m.track->rtEq.process (m.track->eq, m.buffer, len, g.sampleRate);
+    if (m.eqAfter >= m.plugins.size())
+        m.track->rtEq.process (m.track->eq, m.buffer, len, g.sampleRate);
     applyFader (m, len, m.track->mute.load());
     addToOutput (m.buffer, len, offset, m.outChannel, true, outDev, numOut);
 
@@ -2226,9 +2237,11 @@ void Engine::renderTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, i
     if (rt.midiTapAfter < 0)
         captureMidi();
 
-    // inserts
+    // inserts, with the channel EQ at its place among them
     for (size_t i = 0; i < rt.plugins.size(); ++i)
     {
+        if (i == rt.eqAfter)
+            t.rtEq.process (t.eq, buf, len, g.sampleRate);
         auto& p = rt.plugins[i];
         if (! p.slot->bypassed.load())
         {
@@ -2239,7 +2252,8 @@ void Engine::renderTrack (RenderGraph& g, RenderTrack& rt, int64 pos, int len, i
             captureMidi();
     }
 
-    t.rtEq.process (t.eq, buf, len, g.sampleRate);
+    if (rt.eqAfter >= rt.plugins.size())
+        t.rtEq.process (t.eq, buf, len, g.sampleRate);
     if (rt.tap.getNumSamples() >= len)   // an audio track takes this one's sound as its input
         for (int ch = 0; ch < 2; ++ch)
             rt.tap.copyFrom (ch, 0, buf, ch, 0, len);
@@ -2320,15 +2334,19 @@ void Engine::renderBus (RenderGraph& g, RenderTrack& rt, int len)
     auto& t = *rt.track;
     rt.midi.clear();
 
-    for (auto& p : rt.plugins)
+    for (size_t i = 0; i < rt.plugins.size(); ++i)
     {
+        if (i == rt.eqAfter)
+            t.rtEq.process (t.eq, rt.buffer, len, g.sampleRate);
+        auto& p = rt.plugins[i];
         if (p.slot->bypassed.load())
             continue;
         AudioBuffer<float> view (rt.buffer.getArrayOfWritePointers(), p.numChannels, len);
         p.processor->processBlock (view, rt.midi);
     }
 
-    t.rtEq.process (t.eq, rt.buffer, len, g.sampleRate);
+    if (rt.eqAfter >= rt.plugins.size())
+        t.rtEq.process (t.eq, rt.buffer, len, g.sampleRate);
     rt.align.process (rt.buffer, len);
 }
 

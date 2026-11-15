@@ -408,6 +408,7 @@ var toolDefinitions()
             { "gain_db", prop ("number", "set_eq: boost or cut in dB, -18 to +18 (shelves and bells; cuts have no gain)") },
             { "q", prop ("number", "set_eq (bells): width, 0.1 (wide) to 10 (narrow); 1 is about an octave and a third") },
             { "flat", prop ("boolean", "set_eq: true puts every band back to flat first") },
+            { "before", prop ("string", "set_eq: move the EQ to just before this plug-in (name or 1-based position), or \"end\" for after them all") },
             { "monitor", prop ("string", "set_track (also set_input): \"auto\", \"in\" or \"off\"") },
             { "arm", prop ("boolean", "set_track: arm for recording") },
             { "midi_channel", prop ("integer", "set_track (MIDI tracks): 1-16") },
@@ -430,13 +431,15 @@ var toolDefinitions()
                          "{\"action\":\"set_input\",\"track\":\"<instrument track>\",\"from_track\":\"<generator track>\"}. "
                          "A reverb return: {\"action\":\"add_track\",\"kind\":\"return\",\"name\":\"Verb\",\"plugins\":[\"Reverb\"]}, "
                          "then set_send from each track. Lathe's own effects start 100% wet on a return.\n"
-                         "Every track, return and the master has a six-band channel EQ after its plug-ins (low cut, low shelf, "
-                         "bell 1, bell 2, high shelf, high cut; describe_track shows what's active). set_eq changes one band: "
+                         "Every track, return and the master has a six-band channel EQ (low cut, low shelf, bell 1, bell 2, high "
+                         "shelf, high cut), after its plug-ins unless it was moved in among them (describe_track shows what's "
+                         "active and where it sits). set_eq changes one band: "
                          "{\"action\":\"set_eq\",\"track\":\"Guitar\",\"band\":\"bell 1\",\"freq_hz\":300,\"gain_db\":-3,\"q\":1.4} "
                          "or {\"action\":\"set_eq\",\"track\":\"Vocal\",\"band\":\"low cut\",\"freq_hz\":100}. Changing a band "
-                         "switches it on. Prefer this to adding an EQ plug-in for corrective cuts. On the master the EQ comes "
-                         "after Mastering or any limiter, so a boost there can push the output past the limiter's ceiling; for "
-                         "tonal moves on the whole mix, add an EQ plug-in before the limiter instead.\n"
+                         "switches it on. Prefer this to adding an EQ plug-in for corrective cuts. \"before\" moves the EQ in the chain: "
+                         "{\"action\":\"set_eq\",\"track\":\"Master\",\"before\":\"Mastering\"}. On the master, put the EQ "
+                         "before Mastering (or any limiter) for tonal moves on the whole mix: after it, a boost can push the "
+                         "output past the limiter's ceiling. On a MIDI track it can't go before the instrument.\n"
                          "Volume, pan, send levels and the EQ are part of the undo step; mute, solo, monitoring and arm change "
                          "live and aren't.",
                          schema ({ { "changes", object ({ { "type", "array" }, { "items", change },

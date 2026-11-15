@@ -58,7 +58,7 @@ A monitor mix is a second mix of the same channels, on its own pair of outputs. 
 
 ## Channel EQ
 
-Every track, return and the master has a built-in EQ after its plug-ins and before its fader. It has six bands: a low cut (24 dB/oct), a low shelf, two bells, a high shelf and a high cut.
+Every track, return and the master has a built-in EQ before its fader. It starts after the plug-ins, and you can move it in among them. It has six bands: a low cut (24 dB/oct), a low shelf, two bells, a high shelf and a high cut.
 
 - Each mixer strip shows the EQ curve. Click it to open the EQ in the device panel.
 - **Drag** a numbered point to set its frequency and gain.
@@ -66,7 +66,10 @@ Every track, return and the master has a built-in EQ after its plug-ins and befo
 - **Double-click** a bell or shelf to set it back to 0 dB, or double-click a cut to turn it on or off.
 - The power button bypasses the whole EQ. **Reset** flattens it.
 - A flat EQ uses no CPU: Lathe skips any band at 0 dB and any cut that's off.
-- On the master, the EQ comes after Mastering or any limiter on it. A boost there can go past the limiter's ceiling, so for tonal moves on the whole mix, put an EQ plug-in before the limiter.
+- **Move it** like a plug-in: drag the EQ card by its name to another place in the chain (a line shows where it will land; Esc leaves it where it was), or use its **<** and **>** buttons. Plug-in cards drag the same way. Moving it is one undo step and is saved with the song.
+- On the master, move the EQ before Mastering (or any limiter) for tone changes on the whole mix. After the limiter, a boost can go past its ceiling.
+- On a MIDI track, the EQ can't go before the instrument: there's no sound there yet.
+- Adding or removing a plug-in leaves the EQ between the same neighbours. If it's last, it stays last as plug-ins are added.
 
 ## Compare (View > Compare, Cmd/Ctrl+K)
 

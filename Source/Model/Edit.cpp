@@ -2,6 +2,94 @@
 
 namespace lathe
 {
+int Track::eqEarliest() const
+{
+    if (isMidi())
+        for (size_t i = 0; i < plugins.size(); ++i)
+            if (plugins[i]->isInstrument())
+                return (int) i + 1;
+    return 0;
+}
+
+int Track::eqIndex() const
+{
+    const int n = (int) plugins.size();
+    const int at = eqPosition < 0 ? n : jmin (eqPosition, n);
+    return jmax (at, jmin (eqEarliest(), n));
+}
+
+static void settleEq (Track& t, int at)
+{
+    at = jlimit (0, (int) t.plugins.size(), at);
+    at = jmax (at, t.eqEarliest());
+    t.eqPosition = at >= (int) t.plugins.size() ? -1 : at;   // last: stays last as plug-ins are added
+}
+
+void insertPluginAt (Track& t, int index, std::shared_ptr<PluginSlot> slot, bool afterEq)
+{
+    const int n = (int) t.plugins.size();
+    index = index < 0 ? n : jmin (index, n);
+    if (t.eqPosition >= 0)
+    {
+        const int eq = t.eqIndex();
+        t.plugins.insert (t.plugins.begin() + index, std::move (slot));
+        settleEq (t, (index < eq || (index == eq && ! afterEq)) ? eq + 1 : eq);
+        return;
+    }
+    t.plugins.insert (t.plugins.begin() + index, std::move (slot));
+    if (afterEq && index == n)
+        settleEq (t, n);   // after an EQ that was last: the EQ stays where it was
+}
+
+void removePluginSlot (Track& t, const std::shared_ptr<PluginSlot>& slot)
+{
+    auto it = std::find (t.plugins.begin(), t.plugins.end(), slot);
+    if (it == t.plugins.end())
+        return;
+    const int index = (int) std::distance (t.plugins.begin(), it);
+    const int eq = t.eqIndex();
+    const bool wasLast = t.eqPosition < 0;
+    t.plugins.erase (it);
+    if (! wasLast)
+        settleEq (t, index < eq ? eq - 1 : eq);
+}
+
+int chainIndexOf (const Track& t, const std::shared_ptr<PluginSlot>& slot)
+{
+    auto it = std::find (t.plugins.begin(), t.plugins.end(), slot);
+    if (it == t.plugins.end())
+        return -1;
+    const int i = (int) std::distance (t.plugins.begin(), it);
+    return i < t.eqIndex() ? i : i + 1;
+}
+
+bool moveInChain (Track& t, int from, int to)
+{
+    const int count = (int) t.plugins.size() + 1;
+    if (! isPositiveAndBelow (from, count))
+        return false;
+    to = jlimit (0, count - 1, to);
+    const int eq = t.eqIndex();
+    std::vector<std::shared_ptr<PluginSlot>> chain;   // nullptr = the EQ
+    for (int i = 0, p = 0; i < count; ++i)
+        chain.push_back (i == eq ? nullptr : t.plugins[(size_t) p++]);
+    auto item = chain[(size_t) from];
+    chain.erase (chain.begin() + from);
+    chain.insert (chain.begin() + to, item);
+
+    const auto oldPlugins = t.plugins;
+    const int oldPosition = t.eqPosition;
+    t.plugins.clear();
+    int newEq = 0;
+    for (size_t i = 0; i < chain.size(); ++i)
+    {
+        if (chain[i] == nullptr) newEq = (int) i;
+        else                     t.plugins.push_back (chain[i]);
+    }
+    settleEq (t, newEq);
+    return t.plugins != oldPlugins || t.eqIndex() != eq || t.eqPosition != oldPosition;
+}
+
 const Array<Colour>& getTrackPalette()
 {
     static const Array<Colour> palette {
@@ -629,6 +717,7 @@ struct TrackState
     std::vector<std::shared_ptr<Send>> sends;
     std::vector<std::shared_ptr<PluginSlot>> plugins;
     std::vector<bool> bypassed;
+    int eqPosition = -1;
     std::vector<Clip> clips;
     // The mix controls: fader, pan, send levels (parallel to sends) and the channel EQ.
     float volumeDb = 0.0f, pan = 0.0f;
@@ -675,6 +764,7 @@ static TrackState captureTrack (const std::shared_ptr<Track>& t)
     s.output = t->output;
     s.sends = t->sends;
     s.plugins = t->plugins;
+    s.eqPosition = t->eqPosition;
     for (auto& p : t->plugins)
         s.bypassed.push_back (p->bypassed.load());
     s.clips = t->clips;
@@ -707,6 +797,7 @@ static void restoreTrack (const TrackState& s)
     t.output = s.output;
     t.sends = s.sends;
     t.plugins = s.plugins;
+    t.eqPosition = s.eqPosition;
     for (size_t i = 0; i < s.plugins.size() && i < s.bypassed.size(); ++i)
         s.plugins[i]->bypassed = s.bypassed[i];
     t.clips = s.clips;
@@ -781,7 +872,7 @@ static bool sameTrack (const TrackState& a, const TrackState& b)
         && a.groupId == b.groupId
         && a.output.kind == b.output.kind && a.output.busId == b.output.busId
         && a.output.channel == b.output.channel && a.output.stereo == b.output.stereo
-        && a.sends == b.sends && a.plugins == b.plugins && a.bypassed == b.bypassed
+        && a.sends == b.sends && a.plugins == b.plugins && a.bypassed == b.bypassed && a.eqPosition == b.eqPosition
         && sameClips (a.clips, b.clips)
         && exactlyEqual (a.volumeDb, b.volumeDb) && exactlyEqual (a.pan, b.pan) && a.sendLevels == b.sendLevels
         && sameEq (a.eq, b.eq);
@@ -882,6 +973,15 @@ static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
             out.add (q (name) + " sends");
         else if (x.sendLevels != y.sendLevels)
             out.add (q (name) + " send level");
+        if (x.plugins == y.plugins && x.eqPosition != y.eqPosition)
+        {
+            String where = "after its plug-ins";
+            if (y.eqPosition == 0)
+                where = "before its plug-ins";
+            else if (y.eqPosition > 0 && y.eqPosition <= (int) y.plugins.size())
+                where = "after " + y.plugins[(size_t) y.eqPosition - 1]->getName();
+            out.add ("Moved " + q (name) + " EQ " + where);
+        }
         if (x.plugins != y.plugins)
         {
             int added = 0, removed = 0;
@@ -1368,7 +1468,13 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
         plugins.add (var (po.get()));
     }
     o->setProperty ("plugins", plugins);
-    o->setProperty ("eq", t.eq.toVar());
+    {
+        auto eq = t.eq.toVar();
+        if (t.eqPosition >= 0)   // moved in among the plug-ins; absent = after them all, as before
+            if (auto* eo = eq.getDynamicObject())
+                eo->setProperty ("position", t.eqPosition);
+        o->setProperty ("eq", eq);
+    }
 
     if (! asTemplate && t.holdsClips())
     {
@@ -1456,6 +1562,9 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
     }
 
     t->eq.fromVar (v["eq"]);
+    t->eqPosition = v["eq"].hasProperty ("position") ? jmax (-1, (int) v["eq"]["position"]) : -1;
+    if (t->eqPosition >= (int) t->plugins.size())
+        t->eqPosition = -1;
 
     if (auto* clips = v["clips"].getArray())
         for (auto& c : *clips)

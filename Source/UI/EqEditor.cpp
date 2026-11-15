@@ -292,6 +292,23 @@ EqDevice::EqDevice (AppContext& c, std::shared_ptr<Track> t)
     };
     addAndMakeVisible (bandOn);
 
+    // Move the EQ along the chain, like a plug-in (or drag it by its name).
+    for (auto* b : { &leftButton, &rightButton })
+    {
+        b->setWantsKeyboardFocus (false);
+        addAndMakeVisible (b);
+    }
+    leftButton.setTooltip ("Move earlier in the chain");
+    rightButton.setTooltip ("Move later in the chain");
+    auto move = [this] (int delta)
+    {
+        const int at = track->eqIndex();
+        if (moveInChain (*track, at, at + delta))
+            ctx.edit.changed();
+    };
+    leftButton.onClick = [move] { move (-1); };
+    rightButton.onClick = [move] { move (1); };
+
     resetButton.setTooltip ("Flatten the EQ");
     resetButton.setWantsKeyboardFocus (false);
     resetButton.onClick = [this] { track->eq.reset(); ctx.edit.touched(); };
@@ -310,6 +327,8 @@ EqDevice::EqDevice (AppContext& c, std::shared_ptr<Track> t)
 void EqDevice::update()
 {
     power.setToggleState (track->eq.enabled.load(), dontSendNotification);
+    leftButton.setEnabled (track->eqIndex() > track->eqEarliest());
+    rightButton.setEnabled (track->eqIndex() < (int) track->plugins.size());
     updateReadout();
     editor.repaint();
     repaint();
@@ -358,6 +377,10 @@ void EqDevice::resized()
     auto top = r.removeFromTop (18);
     power.setBounds (top.removeFromLeft (20));
     top.removeFromLeft (30);
+    rightButton.setBounds (top.removeFromRight (20));
+    top.removeFromRight (2);
+    leftButton.setBounds (top.removeFromRight (20));
+    top.removeFromRight (6);
     resetButton.setBounds (top.removeFromRight (46));
     top.removeFromRight (4);
     bandOn.setBounds (top.removeFromRight (32));

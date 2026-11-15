@@ -335,6 +335,12 @@ var Tools::describeTrack (const Track& t) const
         active.add (d);
     }
     set (eq, "bands", active.isEmpty() ? String ("flat") : active.joinIntoString ("; "));
+    {
+        const int at = t.eqIndex();
+        set (eq, "position", at >= (int) t.plugins.size() ? String ("after the plug-ins")
+                             : at == 0 ? String ("before the plug-ins")
+                                       : "before " + t.plugins[(size_t) at]->getName());
+    }
     set (o, "eq", eq);
 
     // Who takes this track's notes or sound as their input.
@@ -1135,7 +1141,7 @@ var Tools::editSession (const var& args, String& status)
 
         if (t->isBus())
             devices::startOnReturn (*slot->instance);
-        t->plugins.insert (t->plugins.begin() + index, slot);
+        insertPluginAt (*t, index, slot);   // the channel EQ keeps its place among the plug-ins
         if (added != nullptr)
             *added = slot;
         return "Added " + desc->name + " to " + quoted (t->name) + " at position " + String (index + 1)
@@ -1255,15 +1261,15 @@ var Tools::editSession (const var& args, String& status)
             if (action == "remove_plugin")
             {
                 slot->window.reset();
-                t->plugins.erase (std::find (t->plugins.begin(), t->plugins.end(), slot));
+                removePluginSlot (*t, slot);
                 return "Removed " + slot->getName() + " from " + quoted (t->name);
             }
             if (action == "move_plugin")
             {
                 if (! hasKey (c, "position")) { error = "give \"position\" (1 = first in the chain)."; return {}; }
-                t->plugins.erase (std::find (t->plugins.begin(), t->plugins.end(), slot));
+                removePluginSlot (*t, slot);
                 const int index = jlimit (0, (int) t->plugins.size(), (int) c["position"] - 1);
-                t->plugins.insert (t->plugins.begin() + index, slot);
+                insertPluginAt (*t, index, slot);
                 return "Moved " + slot->getName() + " on " + quoted (t->name) + " to position " + String (index + 1);
             }
             if (! hasKey (c, "on")) { error = "give \"on\": true to switch it on, false to bypass it."; return {}; }
@@ -1474,6 +1480,27 @@ var Tools::editSession (const var& args, String& status)
                 eq.reset();
                 what.add ("EQ flat");
             }
+            // Where the EQ sits: just before a plug-in, or "end" for after them all.
+            if (hasKey (c, "before"))
+            {
+                const auto key = c["before"];
+                int at = (int) t->plugins.size();
+                if (! key.toString().trim().equalsIgnoreCase ("end"))
+                {
+                    auto slot = findPluginOn (*t, key, error);
+                    if (slot == nullptr) return {};
+                    at = (int) std::distance (t->plugins.begin(), std::find (t->plugins.begin(), t->plugins.end(), slot));
+                    if (at < t->eqEarliest())
+                    {
+                        error = "on a MIDI track the EQ goes after the instrument: it has no sound to work on before it.";
+                        return {};
+                    }
+                }
+                moveInChain (*t, t->eqIndex(), at);   // just before plug-in `at`: that's its place in the chain
+                const int now = t->eqIndex();
+                what.add (now >= (int) t->plugins.size() ? String ("EQ after the plug-ins")
+                          : "EQ before " + t->plugins[(size_t) now]->getName());
+            }
             if (! hasKey (c, "band"))
             {
                 if (hasKey (c, "freq_hz") || hasKey (c, "gain_db") || hasKey (c, "q"))
@@ -1486,7 +1513,7 @@ var Tools::editSession (const var& args, String& status)
                     eq.enabled = (bool) c["on"];
                     what.add ((bool) c["on"] ? "EQ on" : "EQ off");
                 }
-                if (what.isEmpty()) { error = "give a band with freq_hz, gain_db, q or on; or on, or flat."; return {}; }
+                if (what.isEmpty()) { error = "give a band with freq_hz, gain_db, q or on; or on, flat or before."; return {}; }
                 return quoted (t->name) + ": " + what.joinIntoString (", ");
             }
 

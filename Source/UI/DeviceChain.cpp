@@ -130,6 +130,10 @@ DeviceChainView::DeviceChainView (AppContext& c) : ctx (c)
     browseButton.setTooltip ("Your plug-ins on GitHub, and everything installed  (Cmd/Ctrl+B)");
     browseButton.onClick = [this] { if (ctx.openPluginBrowser) ctx.openPluginBrowser(); };
     content.addAndMakeVisible (browseButton);
+
+    dropLine.setColour (Label::backgroundColourId, theme::accent);
+    dropLine.setInterceptsMouseClicks (false, false);
+    content.addChildComponent (dropLine);
 }
 
 DeviceChainView::~DeviceChainView() = default;
@@ -144,6 +148,7 @@ void DeviceChainView::setTrack (std::shared_ptr<Track> t)
     if (track != nullptr)
     {
         eqDevice = std::make_unique<EqDevice> (ctx, track);
+        eqDevice->addMouseListener (this, false);   // dragging it by its name
         content.addAndMakeVisible (*eqDevice);
     }
     refresh();
@@ -153,8 +158,11 @@ void DeviceChainView::refresh()
 {
     String sig;
     if (track != nullptr)
+    {
         for (auto& p : track->plugins)
             sig << String::toHexString ((pointer_sized_int) p.get()) << ",";
+        sig << "eq" << track->eqIndex();
+    }
 
     if (sig != signature)
     {
@@ -162,7 +170,11 @@ void DeviceChainView::refresh()
         boxes.clear();
         if (track != nullptr)
             for (auto& p : track->plugins)
-                content.addAndMakeVisible (boxes.add (new DeviceBox (ctx, track, p)));
+            {
+                auto* box = boxes.add (new DeviceBox (ctx, track, p));
+                box->addMouseListener (this, false);   // dragging it by its name
+                content.addAndMakeVisible (box);
+            }
         resized();
     }
 
@@ -211,19 +223,147 @@ void DeviceChainView::resized()
     viewport.setBounds (r);
     const int h = jmax (100, r.getHeight() - 12);
     int x = 10;
-    for (auto* b : boxes)
+    // "+ Add plug-in" sits where a new plug-in lands: after the last plug-in, so before an EQ
+    // that's last (as it always was), or at the end when the EQ was moved in among them.
+    const bool eqLast = track != nullptr && track->eqIndex() >= (int) track->plugins.size();
+    auto placeAdd = [&]
     {
-        b->setBounds (x, 2, 190, jmin (h, 120));
-        x += 196;
-    }
-    addButton.setBounds (x, 2, 120, 26);
-    browseButton.setBounds (x, 32, 120, 26);
-    x += 130;
-    if (eqDevice != nullptr)
+        addButton.setBounds (x, 2, 120, 26);
+        browseButton.setBounds (x, 32, 120, 26);
+        x += 130;
+    };
+    for (auto* c : chainCards())
     {
-        eqDevice->setBounds (x, 2, 380, jmin (h, 150));
-        x += 386;
+        if (c == eqDevice.get())
+        {
+            if (eqLast)
+                placeAdd();
+            c->setBounds (x, 2, 380, jmin (h, 150));
+            x += 386;
+        }
+        else
+        {
+            c->setBounds (x, 2, 190, jmin (h, 120));
+            x += 196;
+        }
     }
+    if (! eqLast || eqDevice == nullptr)
+        placeAdd();
     content.setSize (jmax (r.getWidth(), x + 10), h + 4);
+}
+
+std::vector<Component*> DeviceChainView::chainCards() const
+{
+    std::vector<Component*> cards;
+    if (track == nullptr)
+        return cards;
+    const int eq = track->eqIndex();
+    for (int i = 0; i < boxes.size(); ++i)
+    {
+        if (i == eq && eqDevice != nullptr)
+            cards.push_back (eqDevice.get());
+        cards.push_back (boxes[i]);
+    }
+    if (eq >= boxes.size() && eqDevice != nullptr)
+        cards.push_back (eqDevice.get());
+    return cards;
+}
+
+int DeviceChainView::gapAt (int contentX) const
+{
+    const auto cards = chainCards();
+    for (size_t i = 0; i < cards.size(); ++i)
+        if (contentX < cards[i]->getBounds().getCentreX())
+            return (int) i;
+    return (int) cards.size();
+}
+
+void DeviceChainView::mouseDown (const MouseEvent& e)
+{
+    dragCard = nullptr;
+    dragging = false;
+    if (track == nullptr || ! e.mods.isLeftButtonDown())
+        return;
+    const auto cards = chainCards();
+    for (size_t i = 0; i < cards.size(); ++i)
+        if (e.eventComponent == cards[i] && e.getEventRelativeTo (cards[i]).y < 28)
+        {
+            dragCard = cards[i];
+            dragFrom = (int) i;
+        }
+}
+
+void DeviceChainView::mouseDrag (const MouseEvent& e)
+{
+    if (dragCard == nullptr || track == nullptr)
+        return;
+    if (! dragging)
+    {
+        if (e.getDistanceFromDragStart() < 5)
+            return;
+        dragging = true;
+        dragCard->setAlpha (0.5f);
+        setWantsKeyboardFocus (true);
+        grabKeyboardFocus();   // for Esc
+    }
+
+    const auto here = e.getEventRelativeTo (this).position;
+    const auto inContent = e.getEventRelativeTo (&content).position;
+    viewport.autoScroll ((int) e.getEventRelativeTo (&viewport).position.x, (int) e.getEventRelativeTo (&viewport).position.y, 40, 12);
+
+    dragTo = -1;
+    if (getLocalBounds().toFloat().contains (here))
+    {
+        const int gap = gapAt ((int) inContent.x);
+        int to = gap > dragFrom ? gap - 1 : gap;
+        if (dragCard == eqDevice.get())
+            to = jmax (to, track->eqEarliest());   // a MIDI track's EQ stays after the instrument
+        if (to != dragFrom)
+            dragTo = to;
+    }
+
+    const auto cards = chainCards();
+    if (dragTo < 0 || cards.empty())
+    {
+        dropLine.setVisible (false);
+        return;
+    }
+    const int gap = dragTo > dragFrom ? dragTo + 1 : dragTo;
+    const int lineX = gap < (int) cards.size() ? cards[(size_t) gap]->getX() - 4 : cards.back()->getRight() + 2;
+    dropLine.setBounds (lineX, 2, 3, cards.front()->getHeight());
+    dropLine.setVisible (true);
+    dropLine.toFront (false);
+}
+
+void DeviceChainView::mouseUp (const MouseEvent&)
+{
+    if (dragging)
+        endDrag (true);
+    dragCard = nullptr;
+}
+
+bool DeviceChainView::keyPressed (const KeyPress& key)
+{
+    if (dragging && key == KeyPress::escapeKey)
+    {
+        endDrag (false);
+        return true;
+    }
+    return false;
+}
+
+void DeviceChainView::endDrag (bool drop)
+{
+    if (dragCard != nullptr)
+        dragCard->setAlpha (1.0f);
+    dropLine.setVisible (false);
+    const int from = dragFrom, to = dragTo;
+    dragging = false;
+    dragCard = nullptr;
+    dragTo = -1;
+    setWantsKeyboardFocus (false);
+    giveAwayKeyboardFocus();
+    if (drop && to >= 0 && track != nullptr && moveInChain (*track, from, to))
+        ctx.edit.changed();
 }
 } // namespace lathe
