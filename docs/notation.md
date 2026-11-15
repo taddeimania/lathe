@@ -30,7 +30,7 @@ on any note, so a plain part stays short and a detailed one costs only what it n
   line fails.
 - The JSON note list stays for anything the notation can't say.
 
-Not covered yet: controller data (CC), pitch bend, per-note expression (MPE), chord symbols, and
+Not covered yet: controller data (CC), pitch bend, per-note expression (MPE), and
 tempo or time-signature changes inside a pattern (Lathe has one tempo per song). See "Later".
 
 ## The format
@@ -92,6 +92,7 @@ is a token line: four quarter notes.
 ```
 bass:  c2:110 ~ [c2:80 c2:70-6ms] ~ | f1:105=2 _ ~ g1:90+4ms
 keys:  [c3,e3,g3] _ _ ~ | <[a2,c3,e3] [f2,a2,c3]> _ _ ~
+pad:   {Am7} _ {Fmaj7} _ | {Cmaj7} _ {G6}:90 _
 snare: ~ x:96+6ms ~ x:100+8ms
 ```
 
@@ -109,6 +110,7 @@ A line without `|` is one bar.
 | `_` | hold: the note before lasts one more step |
 | `[a b c]` | the three share one step |
 | `[a,b,c]` | played together (a chord); `[a b, c d]` two sequences at once |
+| `{Am7}` `{C/E}` `{Bbmaj7}2` | a chord by name, as `[ , ]` would play it. The root is in octave 3 (or the octave right after the brace), the rest stacked closely above it; a `/` note goes below. Known: `maj m dim aug sus2 sus4 5 6 m6 7 maj7 m7 mmaj7 m7b5 dim7 7sus4 add9 madd9 9 maj9 m9 11 m11 13`. Braces, because `G6` or `C7` on their own are notes |
 | `<a b>` | in turn, each time the line plays: a the first time, b the second, then a again. A one-bar line plays every bar, so it alternates bar by bar |
 | `a*3` | a, three times in its step |
 
@@ -202,6 +204,6 @@ velocities exact.
 ## Later
 
 - Controller lanes: `cc74  0 . . 64 . . 127` (a grid of values) and pitch bend.
-- Chord symbols in token lines: `Am7`, `F/A`.
+- Read-back that names chords (`{Am7}` instead of `[a3,c4,e4,g4]`) and chord inversions.
 - Compact read-back of repeated bars (`!` or a repeat count).
 - Measure: tokens and mistakes per song in the weekly videos task, before and after.

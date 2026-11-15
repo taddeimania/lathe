@@ -4117,6 +4117,42 @@ int main (int argc, char** argv)
                        + r.getErrorMessage() + ")");
         }
 
+        {
+            // Chord symbols: {Am7} is A3 C4 E4 G4 (root in octave 3, C3 = middle C), an octave may follow.
+            auto pitchesAt = [] (const std::vector<nt::Note>& v, double beat)
+            {
+                std::vector<int> p;
+                for (auto& n : v)
+                    if (std::abs (n.start - beat) < 1.0e-6)
+                        p.push_back (n.pitch);
+                std::sort (p.begin(), p.end());
+                return p;
+            };
+            auto [r, v] = parsed ("keys: {Am7} _ {Fmaj7} _", 1);
+            check (r.wasOk() && pitchesAt (v, 0.0) == std::vector<int> { 69, 72, 76, 79 } && pitchesAt (v, 2.0) == std::vector<int> { 65, 69, 72, 76 }
+                       && std::all_of (v.begin(), v.end(), [] (auto& n) { return std::abs (n.length - 2.0) < 1.0e-6; }),
+                   "chord symbols: {Am7} and {Fmaj7} play their notes together, held with _ (" + r.getErrorMessage() + ")");
+            auto [r2, v2] = parsed ("keys: {Am7}2:80 {C/E} {G6} {Bbsus4}", 1);
+            check (r2.wasOk() && pitchesAt (v2, 0.0) == std::vector<int> { 57, 60, 64, 67 }
+                       && std::all_of (v2.begin(), v2.end(), [] (auto& n) { return n.start > 0.5 || n.velocity == 80; })
+                       && pitchesAt (v2, 1.0) == std::vector<int> { 52, 60, 64, 67 } && pitchesAt (v2, 2.0) == std::vector<int> { 67, 71, 74, 76 }
+                       && pitchesAt (v2, 3.0) == std::vector<int> { 70, 75, 77 },
+                   "an octave and a velocity after the brace, a slash bass below the chord, 6 and sus chords (" + r2.getErrorMessage() + ")");
+            auto [r3, v3] = parsed ("keys: <{Am7} {Dm7}> _ _ _", 2);
+            check (r3.wasOk() && pitchesAt (v3, 0.0) == std::vector<int> { 69, 72, 76, 79 } && pitchesAt (v3, 4.0) == std::vector<int> { 62, 65, 69, 72 },
+                   "chord symbols take turns inside < >");
+            auto [r4, v4] = parsed ("lead: G6", 1);
+            check (r4.wasOk() && v4.size() == 1 && v4[0].pitch == 103, "without braces, G6 is still the note G6");
+            auto bad = [&] (const String& text, const String& expected)
+            {
+                auto [rb, vb] = parsed (text, 1);
+                return rb.failed() && vb.empty() && rb.getErrorMessage().contains (expected);
+            };
+            check (bad ("keys: {Hm7}", "start with the root") && bad ("keys: {Amaj13x}", "isn't a chord I know")
+                       && bad ("keys: {Am7 ~", "isn't closed") && bad ("keys: {C/H}", "bass note") && bad ("keys: {C}9", "outside MIDI"),
+                   "chord symbol mistakes say what's wrong");
+        }
+
         // Round trips: format, parse, and the notes come back.
         auto roundTrip = [&] (std::vector<nt::Note> notes, double bars, double bpb, bool drums, String& text)
         {

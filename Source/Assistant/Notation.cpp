@@ -99,7 +99,7 @@ private:
 
     void fail (const String& message) { if (error.isEmpty()) error = message; }
     void skipSpaces()                 { while (i < s.length() && CharacterFunctions::isWhitespace (s[i])) ++i; }
-    static bool isBreak (juce_wchar c){ return CharacterFunctions::isWhitespace (c) || String ("[]<>,|").containsChar (c); }
+    static bool isBreak (juce_wchar c){ return CharacterFunctions::isWhitespace (c) || String ("[]<>{},|").containsChar (c); }
 
     std::vector<Item> sequence (juce_wchar closer, bool commasEnd)
     {
@@ -112,7 +112,7 @@ private:
             const auto c = s[i];
             if (c == closer || (commasEnd && c == ','))
                 break;
-            if (c == ']' || c == '>' || c == ',')
+            if (c == ']' || c == '>' || c == ',' || c == '}')
             {
                 fail ("unexpected '" + String::charToString (c) + "'");
                 break;
@@ -150,6 +150,48 @@ private:
             it.mods = suffix();
             return it;
         }
+        if (c == '{')
+        {
+            // A chord symbol: {Am7}, {G6}, {C/E}; an octave for the root may follow ({Am7}2).
+            ++i;
+            const int start = i;
+            while (i < s.length() && s[i] != '}' && ! CharacterFunctions::isWhitespace (s[i]))
+                ++i;
+            if (i >= s.length() || s[i] != '}')
+            {
+                fail ("a { isn't closed");
+                return it;
+            }
+            const auto symbol = s.substring (start, i);
+            ++i;
+            int octave = 3;
+            if (i < s.length() && (CharacterFunctions::isDigit (s[i]) || (s[i] == '-' && i + 1 < s.length() && CharacterFunctions::isDigit (s[i + 1])
+                                                                            && (i + 2 >= s.length() || isBreak (s[i + 2]) || String (":=*+").containsChar (s[i + 2])))))
+            {
+                const bool negative = s[i] == '-';
+                if (negative) ++i;
+                const int from = i;
+                while (i < s.length() && CharacterFunctions::isDigit (s[i]))
+                    ++i;
+                octave = s.substring (from, i).getIntValue() * (negative ? -1 : 1);
+            }
+            std::vector<int> pitches;
+            if (auto e = chordPitches (symbol, octave, pitches); e.isNotEmpty())
+            {
+                fail ("\"{" + symbol + "}\" " + e);
+                return it;
+            }
+            it.kind = Item::Kind::group;
+            for (int p : pitches)
+            {
+                Item note;
+                note.kind = Item::Kind::note;
+                note.pitch = p;
+                it.parallel.push_back ({ note });
+            }
+            it.mods = suffix();
+            return it;
+        }
         if (c == '<')
         {
             ++i;
@@ -175,6 +217,74 @@ private:
             ++i;
         word (s.substring (start, i), it);
         return it;
+    }
+
+    /** "Am7" -> its notes, root in `octave` (C3 = middle C), the rest stacked above it; "C/E" adds
+        E below the chord. "" if fine, else what's wrong. */
+    static String chordPitches (const String& symbol, int octave, std::vector<int>& out)
+    {
+        struct Quality { const char* name; std::initializer_list<int> steps; };
+        static const Quality qualities[] = {
+            { "", { 0, 4, 7 } }, { "maj", { 0, 4, 7 } }, { "m", { 0, 3, 7 } }, { "min", { 0, 3, 7 } },
+            { "dim", { 0, 3, 6 } }, { "aug", { 0, 4, 8 } }, { "+", { 0, 4, 8 } }, { "5", { 0, 7 } },
+            { "sus2", { 0, 2, 7 } }, { "sus4", { 0, 5, 7 } }, { "sus", { 0, 5, 7 } },
+            { "6", { 0, 4, 7, 9 } }, { "m6", { 0, 3, 7, 9 } },
+            { "7", { 0, 4, 7, 10 } }, { "maj7", { 0, 4, 7, 11 } }, { "M7", { 0, 4, 7, 11 } }, { "m7", { 0, 3, 7, 10 } },
+            { "mmaj7", { 0, 3, 7, 11 } }, { "m7b5", { 0, 3, 6, 10 } }, { "dim7", { 0, 3, 6, 9 } }, { "7sus4", { 0, 5, 7, 10 } },
+            { "add9", { 0, 4, 7, 14 } }, { "madd9", { 0, 3, 7, 14 } },
+            { "9", { 0, 4, 7, 10, 14 } }, { "maj9", { 0, 4, 7, 11, 14 } }, { "m9", { 0, 3, 7, 10, 14 } },
+            { "11", { 0, 4, 7, 10, 14, 17 } }, { "m11", { 0, 3, 7, 10, 14, 17 } }, { "13", { 0, 4, 7, 10, 14, 21 } },
+        };
+        auto pitchClass = [] (const String& t, int& used) -> int
+        {
+            static const int semis[] { 9, 11, 0, 2, 4, 5, 7 };   // A B C D E F G
+            used = 0;
+            if (t.isEmpty() || t[0] < 'A' || t[0] > 'G')
+                return -1;
+            int pc = semis[t[0] - 'A'];
+            used = 1;
+            while (used < t.length() && (t[used] == '#' || t[used] == 'b'))
+                pc += t[used++] == '#' ? 1 : -1;
+            return (pc + 12) % 12;
+        };
+
+        auto main = symbol, bass = String();
+        if (symbol.containsChar ('/'))
+        {
+            main = symbol.upToFirstOccurrenceOf ("/", false, false);
+            bass = symbol.fromFirstOccurrenceOf ("/", false, false);
+        }
+        int used = 0;
+        const int root = pitchClass (main, used);
+        if (root < 0)
+            return "isn't a chord: start with the root, a capital A-G (like {Am7}, {F#m}, {Bbmaj7}, {C/E})";
+        const auto qualityName = main.substring (used);
+        const Quality* quality = nullptr;
+        for (auto& q : qualities)
+            if (qualityName == q.name || (qualityName.equalsIgnoreCase ("maj7") && String (q.name) == "maj7"))
+                quality = &q;
+        if (quality == nullptr)
+            return "isn't a chord I know. Known: maj m dim aug sus2 sus4 5 6 m6 7 maj7 m7 mmaj7 m7b5 dim7 7sus4 add9 madd9 9 maj9 m9 11 m11 13, "
+                   "with a /bass note (C/E). Or write the notes: [a2,c3,e3]";
+        const int rootPitch = (octave + 2) * 12 + root;
+        out.clear();
+        if (bass.isNotEmpty())
+        {
+            int bassUsed = 0;
+            const int b = pitchClass (bass, bassUsed);
+            if (b < 0 || bassUsed != bass.length())
+                return "has a bass note that isn't one (after / comes a note name without an octave, like C/E)";
+            int bassPitch = rootPitch - 12 + ((b - root + 12) % 12);   // the nearest one below the root
+            if (bassPitch >= rootPitch)
+                bassPitch -= 12;
+            out.push_back (bassPitch);
+        }
+        for (int step : quality->steps)
+            out.push_back (rootPitch + step);
+        for (int p : out)
+            if (p < 0 || p > 127)
+                return "goes outside MIDI notes 0-127 at octave " + String (octave);
+        return {};
     }
 
     /** Suffixes right after ] or >. */
@@ -1133,11 +1243,15 @@ drum or pitch, x X o in the line play it. | separates bars; each bar is split ev
 tokens (no | = a one-bar line).
   bass:  c2:110 ~ [c2:80 c2:70-6ms] ~ | f1:105=2 _ ~ g1:90+4ms
   keys:  [c3,e3,g3] _ _ ~ | <[a2,c3,e3] [f2,a2,c3]> _ _ ~
+  pad:   {Am7} _ {Fmaj7} _ | {Cmaj7} _ {G6}:90 _
   snare: ~ x:96+6ms ~ x:100+8ms
   c3 F#2 36 snare  a note          x X o  a hit on the label's lane
   ~       rest                     _      hold: the note before lasts one more step
   [a b]   share one step           [a,b]  together (chord)    [a b, c d]  two sequences at once
   <a b>   a the 1st time the line plays, b the 2nd... (a one-bar line: bar by bar)   a*3  three times in its step
+  {Am7} {C/E} {Bbmaj7}2  a chord by name: root in octave 3 (or the octave after the brace), the rest
+          stacked above, a /note below. maj m dim aug sus2 sus4 5 6 m6 7 maj7 m7 mmaj7 m7b5 dim7
+          7sus4 add9 madd9 9 maj9 m9 11 m11 13. Without braces G6 is a note.
 
 SUFFIXES on any note, hit or group, no spaces, in this order:
   :96      velocity 1-127 (default 100)
