@@ -1,21 +1,47 @@
-# Lathe documentation
+# The Lathe guide
 
-How to use Lathe, and how it's put together. Start with **Getting started**.
+Everything Lathe does, one task at a time: setting it up, recording, arranging, mixing, sharing a song and working with an AI assistant. New to Lathe? Start with **Getting started**, then **A tour of the window**.
+
+![Lathe with the Night Drive demo song open: the transport along the top, tracks and clips in the middle, and the selected track's plug-ins and EQ at the bottom.](https://getlathe.app/img/docs/docs-window.jpg)
+
+## Start here
 
 | Page | What's in it |
 |---|---|
-| [Getting started](getting-started.md) | First run: your audio interface, the plug-in scan, templates |
-| [Recording and mixing](recording-and-mixing.md) | Recording, track groups, routing, monitor mixes, the channel EQ, export |
-| [Keys](keys.md) | Keyboard and mouse shortcuts, the piano roll |
-| [Performance](performance.md) | Processing cores, buffer size, the CPU meter, and the benchmark |
-| [Sharing projects with Lathe Cloud](lathe-cloud.md) | The Cloud menu: sharing, push and pull, history, comments |
-| [AI assistant (MCP)](ai-assistant.md) | Letting your AI assistant read and build the session, control playback, and measure CPU use |
-| [Note notation](notation.md) | The short text form the assistant writes and reads parts in: drum grids, token lines, timing and velocity |
-| [Built-in devices and the plug-in browser](plugin-browser.md) | Lathe's own synths, drums, effects and Random Notes, and finding installed plug-ins |
-| [Updating Lathe](updating.md) | Lathe Patcher and the automatic update check |
-| [Project files](project-files.md) | What's in a project folder, saves, autosave and recovery |
-| [Code map](code-map.md) | For contributors: where things live in `Source/`, and the audio-thread rules |
-| [Follow-up: explicit state machines](state-machines.md) | For contributors: a planned refactor, not started |
-| [Multi-core audio](multicore.md) | For contributors: how tracks are spread over the cores, and how that's tested |
+| [Getting started](getting-started.md) | Installing, the first launch, your audio interface, plug-ins and templates |
+| [A tour of the window](tour.md) | What each part of Lathe's window is for |
 
-These pages live with the code: a change that alters how Lathe behaves updates its page in the same commit.
+## Make a song
+
+| Page | What's in it |
+|---|---|
+| [Arranging](arranging.md) | Tracks and clips: selecting, moving, copying, splitting and joining, the loop, track groups |
+| [Recording](recording.md) | Arming, count-in, latency, recording one track into another, recording a note generator |
+| [MIDI and the piano roll](midi.md) | Writing and editing notes, importing and exporting MIDI files |
+| [Instruments and effects](devices.md) | Lathe's own synths, drums and effects, your VST3 plug-ins, and the plug-in browser |
+| [Mixing](mixing.md) | The mixer, routing, sends and returns, group buses, monitor mixes and the channel EQ |
+| [Compare and Undo History](compare-and-undo.md) | Hearing what a change did, and going back to any step |
+| [Exporting](exporting.md) | Mixes and stems in WAV, AIFF, FLAC, MP3 or Ogg |
+
+## With other people
+
+| Page | What's in it |
+|---|---|
+| [Lathe Cloud](lathe-cloud.md) | Sharing songs, push and pull, history, comments, invite and listening links |
+| [The AI assistant](ai-assistant.md) | Letting an AI app read, play, build and mix your session |
+| [Note notation](notation.md) | The short text form the assistant writes and reads parts in |
+
+## Reference
+
+| Page | What's in it |
+|---|---|
+| [Keys and mouse](keys.md) | Every shortcut in one table |
+| [Performance](performance.md) | Processing cores, buffer size, the CPU meter and the benchmark |
+| [Project files](project-files.md) | What's in a project folder, saving, autosave and recovery |
+| [Updating Lathe](updating.md) | Lathe Patcher and the automatic update check |
+
+## For contributors
+
+These pages are about Lathe's code rather than using it, and live on GitHub: the [code map](code-map.md), [multi-core audio](multicore.md) and a planned refactor, [explicit state machines](state-machines.md).
+
+These pages live with Lathe's code: a change that alters how Lathe behaves updates its page in the same commit. The pictures are drawn by Lathe itself from a demo song each time the site is published, so they always show the current version.

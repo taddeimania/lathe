@@ -35,6 +35,9 @@ public:
     /** The pictures for the site's DAW page (daw-*.jpg): the piano roll with a loop, Lathe's
         own devices, Compare and Undo History, from Night Drive with some built-ins added. */
     void runDawShots (const File& outDir, const File& work, const File& song, std::function<void (bool, StringArray)> done);
+    /** The pictures in the user guide (getlathe.app/docs): parts of the window, a group with its bus,
+        the channel EQ, the plug-in browser, the export dialog, and every built-in device, as docs-*.jpg. */
+    void runDocShots (const File& outDir, const File& song, std::function<void (bool, StringArray)> done);
 
     void newProject (const File& templateFile);
     void openProject (const File&);

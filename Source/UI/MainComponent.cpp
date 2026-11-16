@@ -1639,6 +1639,26 @@ bool saveShot (Component& c, const File& f, Rectangle<int> area = {})
     return jpeg.writeImageToStream (image, out);
 }
 
+/** The site must never show this computer's folders (they name the user). Labels inside `c` that
+    show a path get the run's scratch folder shown as ~/Music/Lathe, and the home folder as ~. */
+void hideHomeFolder (Component& c)
+{
+    if (auto* label = dynamic_cast<Label*> (&c))
+    {
+        auto text = label->getText();
+        const int scratch = text.indexOf ("lathe-screenshots-");
+        if (scratch >= 0)
+        {
+            const int slash = text.indexOfChar (scratch, File::getSeparatorChar());
+            text = "~/Music/Lathe" + (slash >= 0 ? text.substring (slash) : String());
+        }
+        text = text.replace (File::getSpecialLocation (File::userHomeDirectory).getFullPathName(), "~");
+        label->setText (text, dontSendNotification);
+    }
+    for (auto* child : c.getChildren())
+        hideHomeFolder (*child);
+}
+
 /** The AI assistant demo on getlathe.app/ai.html: what an agent does, step by step, through
     the same tool calls it makes over MCP. After each step Lathe draws ai-<n>.jpg; ai-session.json
     lists every call with the status line Lathe showed for it. The chat on the page goes with it. */
@@ -1874,11 +1894,17 @@ void MainComponent::runScreenshots (const File& outDir)
                             run->ok = run->ok && dawOk;
                             run->written.addArray (dawWritten);
                             if (self == nullptr) return;
-                            self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                            self->runDocShots (run->out, run->songs.plain, [self, run, finish] (bool docsOk, StringArray docsWritten)
                             {
-                                run->ok = run->ok && ok;
-                                run->written.addArray (written);
-                                finish();
+                                run->ok = run->ok && docsOk;
+                                run->written.addArray (docsWritten);
+                                if (self == nullptr) return;
+                                self->runAssistantShots (run->out, run->work, [run, finish] (bool ok, StringArray written)
+                                {
+                                    run->ok = run->ok && ok;
+                                    run->written.addArray (written);
+                                    finish();
+                                });
                             });
                         });
                     });
@@ -2105,6 +2131,139 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                 if (rn.failed()) { fail ("Compare Now: " + rn.getErrorMessage()); done (false, run->written); }
             });
             if (r.failed()) { fail ("Compare Before: " + r.getErrorMessage()); done (false, run->written); }
+        });
+    });
+}
+
+void MainComponent::runDocShots (const File& outDir, const File& song, std::function<void (bool, StringArray)> done)
+{
+    struct Run { StringArray written; bool ok = true; };
+    auto run = std::make_shared<Run>();
+    auto shot = [outDir, run] (Component& c, const String& name, Rectangle<int> area = {})
+    {
+        if (saveShot (c, outDir.getChildFile (name), area))
+            run->written.add (name);
+        else
+        {
+            run->ok = false;
+            std::cerr << "Couldn't draw " << name << std::endl;
+        }
+    };
+
+    // Every built-in device's own panel, as it opens (docs-device-<id>.jpg).
+    for (auto& info : devices::all())
+    {
+        auto device = info.create();
+        device->prepareToPlay (48000.0, 256);
+        std::unique_ptr<AudioProcessorEditor> editor (device->createEditor());
+        if (editor == nullptr)
+            continue;
+        shot (*editor, "docs-device-" + info.id + ".jpg");
+        editor.reset();
+    }
+
+    loadProjectFile (song, song);
+    auto named = [this] (const String& name) -> std::shared_ptr<Track>
+    {
+        for (auto& t : edit.tracks)
+            if (t->name == name)
+                return t;
+        return {};
+    };
+    edit.master->volumeDb = -9.0f;
+    detailShown = true;
+    detailHeight = 250;
+    if (auto vocal = named ("Vocal"))
+    {
+        ctx.selection = {};
+        ctx.selection.trackId = vocal->id;
+        if (ctx.selectionChanged)
+            ctx.selectionChanged();
+    }
+    resized();
+    arrangement.refresh();
+
+    Component::SafePointer<MainComponent> self (this);
+    Timer::callAfterDelay (1500, [self, run, shot, named, done]
+    {
+        if (self == nullptr) return;
+        auto& me = *self;
+        me.setStatus ("Opened Night Drive");
+        shot (me, "docs-window.jpg");
+        shot (me, "docs-transport.jpg", me.transport.getBounds());
+        const auto lanes = me.arrangement.getBounds();
+        shot (me, "docs-tracks.jpg", { lanes.getX(), lanes.getY(), jmin (lanes.getWidth(), 820), jmin (lanes.getHeight(), 360) });
+        shot (me, "docs-devices.jpg", me.devices.getBounds());
+
+        // The channel EQ, with a low cut and a dip on the bass.
+        if (auto bass = named ("Bass"))
+        {
+            bass->eq.bands[0].on = true;
+            bass->eq.bands[0].freq = 40.0f;
+            bass->eq.bands[2].freq = 250.0f;
+            bass->eq.bands[2].gainDb = -3.0f;
+            bass->eq.bands[2].q = 1.2f;
+            bass->eq.bands[3].freq = 900.0f;
+            bass->eq.bands[3].gainDb = 2.5f;
+            me.edit.adjusted();
+            me.ctx.selection = {};
+            me.ctx.selection.trackId = bass->id;
+            if (me.ctx.selectionChanged)
+                me.ctx.selectionChanged();
+        }
+        else
+            run->ok = false;
+
+        // A group of the keys and the lead, with its own bus.
+        auto keys = named ("Keys"), lead = named ("Lead");
+        if (keys != nullptr && lead != nullptr)
+        {
+            if (auto g = me.edit.createGroup ({ keys->id, lead->id }, "Synths"))
+                me.edit.makeGroupBus (g->id);
+            me.edit.changed();
+        }
+        else
+            run->ok = false;
+        me.arrangement.refresh();
+        me.resized();
+
+        Timer::callAfterDelay (800, [self, run, shot, done]
+        {
+            if (self == nullptr) return;
+            auto& me = *self;
+            shot (me, "docs-eq.jpg", me.devices.getBounds());
+            const auto lanes = me.arrangement.getBounds();
+            shot (me, "docs-group.jpg", { lanes.getX(), lanes.getY(), jmin (lanes.getWidth(), 820), jmin (lanes.getHeight(), 420) });
+            me.setMixerShown (true);
+            me.openPluginBrowser();
+            showExportDialog (me.ctx);
+
+            Timer::callAfterDelay (800, [self, run, shot, done]
+            {
+                if (self == nullptr) return;
+                auto& me = *self;
+                shot (me, "docs-mixer.jpg");
+                if (me.browserWindow != nullptr)
+                {
+                    shot (*me.browserWindow->getContentComponent(), "docs-browser.jpg");
+                    me.browserWindow.reset();
+                }
+                for (int i = TopLevelWindow::getNumTopLevelWindows(); --i >= 0;)
+                    if (auto* w = dynamic_cast<DialogWindow*> (TopLevelWindow::getTopLevelWindow (i)))
+                        if (w->getName() == "Export")
+                        {
+                            hideHomeFolder (*w->getContentComponent());
+                            shot (*w->getContentComponent(), "docs-export.jpg");
+                            w->exitModalState (0);
+                        }
+                me.setMixerShown (false);
+                me.detailShown = false;
+                me.detailHeight = 190;
+                me.edit.clearUndo();
+                me.edit.dirty = false;
+                me.resized();
+                done (run->ok, run->written);
+            });
         });
     });
 }

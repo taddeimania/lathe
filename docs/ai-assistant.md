@@ -1,4 +1,4 @@
-# AI assistant (MCP)
+# The AI assistant
 
 Lathe can let an AI app on your computer, like Claude Desktop or Claude Code, look at the open project, play any stretch of it, build the session, and measure how hard your computer is working. It talks to Lathe through MCP (the Model Context Protocol). Ask it things like:
 
@@ -10,13 +10,17 @@ Lathe can let an AI app on your computer, like Claude Desktop or Claude Code, lo
 
 Everything it changes in one go is a single undo step: Cmd/Ctrl+Z takes it all back. Edit > Undo History (Cmd/Ctrl+Alt+Z) lists every step with who made it, you or the assistant, in its own words, and when; click a step to go back to just before it, or use "Undo the assistant's last changes" to take back its latest run.
 
-**Turn it on:** Options > **AI Assistant...** > *Let AI apps on this computer connect to Lathe*. It's off until you do, and Lathe remembers your choice. The same window shows the setup to copy:
+![Partway through a session the assistant built: drums, bass, keys and a sparkly lead written, a reverb return, and the Keys track's synth open below.](https://getlathe.app/img/ai/ai-2.jpg)
+
+## Turn it on
+
+Options > **AI Assistant...** > *Let AI apps on this computer connect to Lathe*. It's off until you do, and Lathe remembers your choice. The same window shows the setup to copy:
 
 - **Claude Desktop:** Settings > Developer > Edit Config, add the `"lathe"` entry the window shows to `claude_desktop_config.json`, then restart Claude Desktop. It runs `LatheMCP`, a small helper inside Lathe (`Lathe.app/Contents/MacOS/LatheMCP` on the Mac).
 - **Claude Code:** run the `claude mcp add lathe -- .../LatheMCP` command the window shows.
 - **Other MCP apps:** add `LatheMCP` as a local (stdio) server.
 
-What it can do:
+## What it can do
 
 | Tool | |
 |---|---|
@@ -45,14 +49,22 @@ What it can do:
 
 New project and open project replace what's open, so if there are unsaved changes they stop and ask: the assistant has to say whether to save them first or throw them away. Ask it to check with you before it throws anything away.
 
-**Building a session.** Plug-ins go where they work: a note generator (an arpeggiator, a step sequencer, a chord generator) before the instrument it drives, an instrument before the effects. A MIDI track plays one instrument. "An arpeggiator into a synth" can be one track with both plug-ins, or two tracks, the synth's track taking the arpeggiator's notes as its input, which lets you record the arpeggiator's part or drive several instruments from it. A track that takes another track as its input gets monitoring set to In, so it plays without being armed. Fader, pan and send levels are part of the undo step, as when you move them yourself; mute, solo, monitoring and arm change live and stay where they are on undo.
+## Building a session
 
-**Working at the same time.** You can keep working in Lathe while the assistant does. Lathe remembers the song as the assistant last saw it, and before each change it makes, checks whether you changed anything in between:
+Plug-ins go where they work: a note generator (an arpeggiator, a step sequencer, a chord generator) before the instrument it drives, an instrument before the effects. A MIDI track plays one instrument. "An arpeggiator into a synth" can be one track with both plug-ins, or two tracks, the synth's track taking the arpeggiator's notes as its input, which lets you record the arpeggiator's part or drive several instruments from it. A track that takes another track as its input gets monitoring set to In, so it plays without being armed. Fader, pan and send levels are part of the undo step, as when you move them yourself; mute, solo, monitoring and arm change live and stay where they are on undo.
+
+## Working at the same time
+
+You can keep working in Lathe while the assistant does. Lathe remembers the song as the assistant last saw it, and before each change it makes, checks whether you changed anything in between:
 - If you changed the tracks it's about to change (their plug-ins and settings, clips or notes, routing), or the song as a whole (tempo, time signature, adding, removing or moving tracks), its change is held back and nothing happens. It's told what you changed, in the words History uses ("\"Bass\": fader -8.0 dB -> -6.0 dB"), so it can look again and decide whether its plan still fits, or ask you. A change that adds tracks or sets the tempo is held back by any change of yours.
 - If your changes were on other tracks (you turned a knob on the drums while it wrote the bass), its change goes ahead. It's told what you changed, so it looks again before it touches those tracks.
 - Faders, pans, mutes, solos, sends, record arm, monitoring and the loop don't stop it (you move those while listening). It's told about them, and its change is made on top of yours.
 - While it works, a bar under the transport says what it did last, with **Pause**. Paused, every tool answers that it's paused and nothing changes: it tells you where it got to and waits. Press **Continue**, then tell it to carry on. The bar goes away a little after its last step.
 
-**Measuring.** While it measures, Lathe plays the bars (the loop if it's on, otherwise the first four), so you hear them. The figures are the time each block took as a share of the time it lasts, the same thing Lathe's CPU meter shows. To compare with another app, use the same buffer size, sample rate, plug-ins and bars, and read that app's meter while it plays.
+## Measuring
 
-**Privacy and safety:** Lathe only listens on this computer (127.0.0.1), never the network. Every request needs a secret key, which Lathe makes fresh each time the connection starts and writes to `assistant.json` in its settings folder, readable only by you. Requests from web pages (or anything claiming another host name) are refused. When you turn it off, or quit Lathe, the key is deleted. **New key** in the same window disconnects anything that had the old one. You see what the assistant does in the status bar ("AI assistant: playing bars 9 to 13").
+While it measures, Lathe plays the bars (the loop if it's on, otherwise the first four), so you hear them. The figures are the time each block took as a share of the time it lasts, the same thing Lathe's CPU meter shows. To compare with another app, use the same buffer size, sample rate, plug-ins and bars, and read that app's meter while it plays.
+
+## Privacy and safety
+
+Lathe only listens on this computer (127.0.0.1), never the network. Every request needs a secret key, which Lathe makes fresh each time the connection starts and writes to `assistant.json` in its settings folder, readable only by you. Requests from web pages (or anything claiming another host name) are refused. When you turn it off, or quit Lathe, the key is deleted. **New key** in the same window disconnects anything that had the old one. You see what the assistant does in the status bar ("AI assistant: playing bars 9 to 13").

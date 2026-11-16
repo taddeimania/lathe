@@ -1,4 +1,6 @@
-# Keys
+# Keys and mouse
+
+Every shortcut in one place. On the Mac use Cmd; on Windows and Linux, Ctrl.
 
 | | |
 |---|---|
