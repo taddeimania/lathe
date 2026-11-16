@@ -1,6 +1,6 @@
 # Project files
 
-A project is a folder:
+A Lathe project is a folder you can copy, move or back up whole: the project file, its audio and its exports, with nothing kept anywhere else.
 
 ```
 Song/

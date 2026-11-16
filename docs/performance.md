@@ -1,5 +1,7 @@
 # Performance: cores, buffer size and the CPU meter
 
+How Lathe spreads a session across your computer's cores, how to choose a buffer size, what the CPU meter tells you, and how to measure your own computer.
+
 ## Processing cores
 
 Lathe plays tracks and their plug-ins on several cores at once. While one core works on
