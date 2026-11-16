@@ -3,6 +3,17 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.3
+
+- **Import MIDI files.** Drag a .mid file onto the arrangement, or choose **File > Import MIDI File...**.
+  Dropped on a MIDI track, the whole file lands there as one clip (a drum groove from a library, say);
+  anywhere else, each part of the file gets its own new MIDI track. The AI assistant can import one too.
+- **The assistant keeps going while you work elsewhere.** If you change one track while the assistant is
+  changing another (a knob on the drums while it writes the bass), its change now goes ahead instead of
+  being held back. It's still told what you did, and anything on the same tracks still stops it.
+- **A swing that does nothing is pointed out.** When the assistant writes a part with a swing line that
+  moves no notes (16th swing on a part in 8ths), Lathe tells it, with the fix.
+
 ## New in 0.13.2
 
 - **A built-in tuner.** Add **Tuner** to the track you're tuning, arm it and play: it shows the note, a
