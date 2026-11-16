@@ -75,6 +75,7 @@ private:
     var getNotes (const var& args) const;
     var writeNotes (const var& args, String& status);
     var importMidi (const var& args, String& status);
+    var exportMidi (const var& args, String& status);
     var play (const var& args, String& status);
     var stop (String& status);
     var setLoop (const var& args, String& status);

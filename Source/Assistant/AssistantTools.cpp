@@ -1,6 +1,7 @@
 #include "AssistantTools.h"
 #include "Notation.h"
 #include "../Model/MidiImport.h"
+#include "../Model/MidiExport.h"
 #include "../Engine/Mp3Writer.h"
 #include "AssistantShared.h"
 #include "../Devices/Device.h"
@@ -95,6 +96,8 @@ var Tools::call (const String& name, const var& args, String& status)
         return writeNotes (args, status);
     if (name == "import_midi")
         return importMidi (args, status);
+    if (name == "export_midi")
+        return exportMidi (args, status);
     if (name == "play")
         return play (args, status);
     if (name == "stop")
@@ -793,6 +796,92 @@ var Tools::importMidi (const var& args, String& status)
         text << "The file was " << about.joinIntoString (", ") << ".\n";
     text << "In Lathe this is one undo step (Cmd/Ctrl+Z).";
     status = "AI assistant: imported " + file.getFileName() + " (" + String (notes) + " notes)";
+    return toolText (text);
+}
+
+var Tools::exportMidi (const var& args, String& status)
+{
+    std::vector<midiexport::Item> items;
+    double fromBeat = 0.0;
+    String name = edit.getName();
+    const bool oneClip = args.hasProperty ("clip") && ! args["clip"].isVoid();
+
+    if (args.hasProperty ("track") && ! args["track"].isVoid())
+    {
+        auto t = findTrack (args["track"]);
+        if (t == nullptr)
+            return toolText ("No track called \"" + args["track"].toString() + "\". describe_session lists them.", true);
+        if (! t->isMidi())
+            return toolText ("\"" + t->name + "\" isn't a MIDI track: only MIDI tracks have notes to export.", true);
+        midiexport::Item item { t->name, jlimit (1, 16, t->midiChannel), {} };
+        if (oneClip)
+        {
+            const auto* c = t->findClip ((int) args["clip"]);
+            if (c == nullptr || c->kind != ClipKind::midi)
+                return toolText ("\"" + t->name + "\" has no clip " + args["clip"].toString() + ". describe_track lists its clips.", true);
+            item.clips.push_back (*c);
+            fromBeat = std::floor (c->start / edit.beatsPerBar() + 1.0e-9) * edit.beatsPerBar();
+            name = c->name.isNotEmpty() ? c->name : t->name;
+        }
+        else
+        {
+            for (auto& c : t->clips)
+                if (c.kind == ClipKind::midi)
+                    item.clips.push_back (c);
+            name = edit.getName() + " - " + t->name;
+        }
+        items.push_back (std::move (item));
+    }
+    else if (oneClip)
+        return toolText ("clip needs track too: the MIDI track the clip is on.", true);
+    else
+        items = midiexport::songItems (edit);
+
+    const int notes = midiexport::countNotes (items);
+    if (notes == 0)
+        return toolText (items.empty() ? String ("No MIDI track in this song has notes, so there's nothing to export.")
+                                        : String ("There are no notes there to export."), true);
+
+    File file;
+    auto asked = args.getProperty ("path", {}).toString().trim();
+    if (asked.isNotEmpty())
+    {
+        if (asked.startsWith ("~"))
+            asked = File::getSpecialLocation (File::userHomeDirectory).getFullPathName() + asked.substring (1);
+        if (! File::isAbsolutePath (asked))
+            return toolText ("path must be a full path (or ~/...).", true);
+        file = File (asked);
+        if (! file.hasFileExtension ("mid;midi"))
+            file = file.withFileExtension ("mid");
+        if (file.exists())
+            return toolText ("There's already a file at " + file.getFullPathName() + ". Pick another name; Lathe doesn't replace files.", true);
+    }
+    else
+    {
+        edit.ensureWorkDir();
+        file = edit.getExportsDir().getChildFile (midiexport::fileNameFor (name) + ".mid").getNonexistentSibling();
+    }
+
+    const auto error = midiexport::write (midiexport::build (edit, items, fromBeat, name), file);
+    if (error.isNotEmpty())
+        return toolText (error, true);
+
+    String text = "Saved " + file.getFullPathName() + " (" + String (notes) + (notes == 1 ? " note" : " notes") + "):\n";
+    for (auto& item : items)
+    {
+        double first = 1.0e12, last = 0.0;
+        for (auto& c : item.clips)
+        {
+            first = jmin (first, c.start);
+            last = jmax (last, c.end());
+        }
+        text << "- \"" << item.name << "\" on MIDI channel " << item.channel << ": " << midiexport::countNotes ({ item })
+             << " notes, from bar " << barText (first) << " to " << barText (last) << "\n";
+    }
+    text << "Bar " << barText (fromBeat) << " of the song is the file's first bar. "
+         << "Tempo " << String (edit.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") << " BPM, "
+         << edit.timeSigNum << "/" << edit.timeSigDen << ".";
+    status = "AI assistant: exported " + file.getFileName();
     return toolText (text);
 }
 

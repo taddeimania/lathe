@@ -891,6 +891,55 @@ public:
         ctx.setClipSelection (selection);
     }
 
+    /** MIDI clips dragged out of Lathe's window (to the Finder or Explorer, or another program):
+        they go back where they were and leave as a .mid file instead. */
+    bool dragOutOfWindow (const MouseEvent& e)
+    {
+        auto* top = getTopLevelComponent();
+        if (top == nullptr || top->getLocalBounds().contains (e.getEventRelativeTo (top).getPosition()))
+            return false;
+        if (drag.original.kind != ClipKind::midi)
+            return false;
+
+        // Put the moved clips back first: dragging out copies, it doesn't move.
+        if (drag.started)
+        {
+            auto putBack = [this] (int clipId, int originalTrackIndexOrId, bool isIndex, const Clip& original)
+            {
+                for (auto& t : ctx.edit.tracks)
+                {
+                    const int at = t->indexOfClip (clipId);
+                    if (at >= 0)
+                        t->clips.erase (t->clips.begin() + at);
+                }
+                auto home = isIndex ? ctx.edit.tracks[(size_t) originalTrackIndexOrId] : ctx.edit.findTrack (originalTrackIndexOrId);
+                if (home != nullptr)
+                    home->clips.push_back (original);
+            };
+            if (drag.group.empty())
+                putBack (drag.clipId, drag.originalTrackId, false, drag.original);
+            else
+                for (auto& g : drag.group)
+                    putBack (g.clipId, g.originalTrackIndex, true, g.original);
+            if (drag.group.empty())
+                ctx.selectClip (drag.originalTrackId, drag.clipId);
+            else
+            {
+                std::set<std::pair<int, int>> selection;
+                for (auto& g : drag.group)
+                    selection.insert ({ ctx.edit.tracks[(size_t) g.originalTrackIndex]->id, g.clipId });
+                ctx.setClipSelection (selection);
+            }
+        }
+
+        drag = {};
+        owner.repaint();
+        const auto file = owner.writeSelectedMidiForDrag();
+        if (file.existsAsFile())
+            DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);
+        return true;
+    }
+
     /** Clears [start, end) on a track, leaving the clips in `keep` alone (clearRange keeps only one). */
     void clearAroundExcept (Track& t, double start, double end, const std::set<int>& keep)
     {
@@ -1103,6 +1152,7 @@ public:
 
         drag.mode = h.zone == Hit::left ? Drag::trimStart : h.zone == Hit::right ? Drag::trimEnd : Drag::move;
         drag.trackId = track->id;
+        drag.originalTrackId = track->id;
         drag.clipId = h.clipId;
         drag.original = *track->findClip (h.clipId);
         drag.grabBeat = owner.xToBeat ((float) e.x);
@@ -1140,6 +1190,9 @@ public:
                 startTimerHz (60);
             return;
         }
+
+        if (drag.mode == Drag::move && dragOutOfWindow (e))
+            return;
 
         if (drag.mode == Drag::move && ! drag.group.empty())
         {
@@ -1436,9 +1489,13 @@ private:
             return;
 
         PopupMenu m;
-        if (c->kind == ClipKind::midi)
-            m.addItem (10, "Edit notes...");
         const int numSelected = owner.numSelectedClips();
+        if (c->kind == ClipKind::midi)
+        {
+            m.addItem (10, "Edit notes...");
+            const int numMidi = owner.numSelectedMidiClips();
+            m.addItem (12, numMidi > 1 ? "Export " + String (numMidi) + " Clips as MIDI File..." : String ("Export as MIDI File..."));
+        }
         m.addItem (1, "Rename...", numSelected <= 1);
         m.addItem (20, numSelected > 1 ? "Copy " + String (numSelected) + " Clips" : String ("Copy"));
         m.addItem (21, "Paste at Start Marker", owner.canPaste());
@@ -1474,6 +1531,8 @@ private:
 
             if (r == 10 && context->openClipEditor)
                 context->openClipEditor (track->id, clipId);
+            else if (r == 12)
+                view->exportMidi (true);
             else if (r == 1)
                 askForText ("Rename clip", {}, clip->name, [context, track, clipId] (const String& name)
                 {
@@ -1500,6 +1559,7 @@ private:
     {
         enum Mode { none, move, trimStart, trimEnd, marquee } mode = none;
         int trackId = -1, clipId = -1;
+        int originalTrackId = -1;                         // where the grabbed clip was (drag.trackId follows it)
         Clip original;
         double grabBeat = 0.0;
         bool started = false;
@@ -2209,6 +2269,109 @@ void ArrangementView::importMidiFiles (const Array<File>& files, int trackIndex,
     else
         status << ".";
     ctx.showStatus (status + tempoNote + (problem.isNotEmpty() ? " (" + problem + ")" : String()));
+}
+
+//==============================================================================
+std::vector<midiexport::Item> ArrangementView::selectedMidi (double& fromBeat, String& name) const
+{
+    std::vector<midiexport::Item> items;
+    const Clip* first = nullptr;
+    const Track* firstTrack = nullptr;
+    const Track* lastTrack = nullptr;
+    int numClips = 0;
+    for (auto& s : getSelectedClips())   // track by track, each track's clips in order
+    {
+        if (s.clip->kind != ClipKind::midi)
+            continue;
+        if (s.track.get() != lastTrack)
+        {
+            items.push_back ({ s.track->name, jlimit (1, 16, s.track->midiChannel), {} });
+            lastTrack = s.track.get();
+        }
+        items.back().clips.push_back (*s.clip);
+        if (first == nullptr || s.clip->start < first->start)
+        {
+            first = s.clip;
+            firstTrack = s.track.get();
+        }
+        ++numClips;
+    }
+    if (first == nullptr)
+        return items;
+
+    // From the bar the first clip starts in, so bar lines stay where they were.
+    const double bar = ctx.edit.beatsPerBar();
+    fromBeat = std::floor (first->start / bar + 1.0e-9) * bar;
+    name = numClips == 1 ? (first->name.isNotEmpty() ? first->name : firstTrack->name)
+                         : ctx.edit.getName() + " (" + String (numClips) + " clips)";
+    return items;
+}
+
+int ArrangementView::numSelectedMidiClips() const
+{
+    int n = 0;
+    for (auto& s : getSelectedClips())
+        if (s.clip->kind == ClipKind::midi)
+            ++n;
+    return n;
+}
+
+void ArrangementView::exportMidi (bool selectedOnly)
+{
+    double fromBeat = 0.0;
+    String name = ctx.edit.getName();
+    auto items = selectedOnly ? selectedMidi (fromBeat, name) : midiexport::songItems (ctx.edit);
+    const int notes = midiexport::countNotes (items);
+    if (notes == 0)
+    {
+        ctx.showStatus (selectedOnly ? String ("None of the selected clips has notes to export.")
+                                     : String ("There are no MIDI notes in this song to export."));
+        return;
+    }
+
+    File folder (ctx.settings.getValue ("midiExportFolder"));
+    if (! folder.isDirectory())
+        folder = File (ctx.settings.getValue ("exportFolder"));
+    if (! folder.isDirectory())
+        folder = File::getSpecialLocation (File::userMusicDirectory);
+
+    midiChooser = std::make_unique<FileChooser> ("Export MIDI file", folder.getChildFile (midiexport::fileNameFor (name) + ".mid"), "*.mid");
+    auto* context = &ctx;
+    const String title = name;
+    midiChooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
+                              [context, items, fromBeat, title, notes] (const FileChooser& fc)
+    {
+        auto file = fc.getResult();
+        if (file == File())
+            return;
+        if (! file.hasFileExtension ("mid;midi"))
+            file = file.withFileExtension ("mid");
+        const auto error = midiexport::write (midiexport::build (context->edit, items, fromBeat, title), file);
+        if (error.isNotEmpty())
+        {
+            context->showStatus (error);
+            return;
+        }
+        context->settings.setValue ("midiExportFolder", file.getParentDirectory().getFullPathName());
+        context->showStatus ("Exported " + file.getFileName() + ": " + String (notes) + (notes == 1 ? " note" : " notes")
+                             + (items.size() > 1 ? " on " + String ((int) items.size()) + " tracks" : String()) + ".");
+    });
+}
+
+File ArrangementView::writeSelectedMidiForDrag()
+{
+    double fromBeat = 0.0;
+    String name;
+    auto items = selectedMidi (fromBeat, name);
+    if (midiexport::countNotes (items) == 0)
+        return {};
+    // A fresh folder each time, so a drop never picks up an older file of the same name.
+    auto folder = File::getSpecialLocation (File::tempDirectory).getChildFile ("Lathe MIDI");
+    folder.deleteRecursively();
+    const auto file = folder.getChildFile (midiexport::fileNameFor (name) + ".mid");
+    if (midiexport::write (midiexport::build (ctx.edit, items, fromBeat, name), file).isNotEmpty())
+        return {};
+    return file;
 }
 
 void ArrangementView::importFiles (const Array<File>& files, int trackIndex, double atBeat)

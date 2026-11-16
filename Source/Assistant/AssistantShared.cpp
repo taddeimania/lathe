@@ -357,6 +357,19 @@ var toolDefinitions()
                                { "one_track", prop ("boolean", "Without track: put every part on one new track (default false)") } },
                              { "path" }),
                      false, true));
+    tools.add (tool ("export_midi", "Export a MIDI file",
+                     "Saves MIDI clips as a Standard MIDI File (.mid), like File > Export MIDI File: for another program, "
+                     "or for someone to play. Without track: every MIDI track that has notes, one track each in the file, "
+                     "from the start of the song. With track: just that track; with clip too, just that clip, measured from "
+                     "the bar it starts in. The file has the song's tempo and time signature, each track's name and MIDI "
+                     "channel, and the clips' notes, controllers and pitch bend: notes, not sound (an instrument's sound "
+                     "isn't in a MIDI file). Without path it goes in the song's Exports folder. A file already there is "
+                     "never replaced. Doesn't change the song.",
+                     schema ({ { "track", prop ("string", "A MIDI track (name or id). Without it: every MIDI track") },
+                               { "clip", prop ("integer", "With track: one clip's id (describe_track lists them)") },
+                               { "path", prop ("string", "Optional: the .mid file's full path (or ~/...), only when the person "
+                                                         "asks for a place. Default: the song's Exports folder") } }),
+                     false));
     tools.add (tool ("notation_guide", "Note notation guide",
                      "The full reference for Lathe's note notation, used by write_notes' pattern and get_notes: every symbol, "
                      "velocities, timing, swing and humanize, with examples. Read it before writing a detailed part.",

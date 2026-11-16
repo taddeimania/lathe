@@ -19,7 +19,7 @@ namespace menu
 {
     enum
     {
-        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome, importMidi,
+        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome, importMidi, exportMidi,
         undo = 100, redo, undoHistory, compareMixes, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, followPlayhead, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
@@ -1254,6 +1254,7 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::importAudio, "Import Audio...", cmd + "I");
         item (menu::importMidi, "Import MIDI File...");
         item (menu::exportAudio, "Export Audio...", cmd + "Shift+E");
+        item (menu::exportMidi, "Export MIDI File...");
         m.addSeparator();
         item (menu::showFolder, "Show Project Folder", {}, edit.workDir.isDirectory());
        #if ! JUCE_MAC
@@ -1411,6 +1412,7 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::importAudio:   importAudio(); break;
         case menu::importMidi:    importMidi(); break;
         case menu::exportAudio:   showExportDialog (ctx); break;
+        case menu::exportMidi:    arrangement.exportMidi (false); break;
         case menu::showFolder:    edit.workDir.revealToUser(); break;
         case menu::quit:          JUCEApplication::getInstance()->systemRequestedQuit(); break;
 

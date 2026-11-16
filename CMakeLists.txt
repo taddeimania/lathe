@@ -163,6 +163,7 @@ target_sources(Lathe PRIVATE
     Source/Main.cpp
     Source/Model/Edit.cpp
     Source/Model/MidiImport.cpp
+    Source/Model/MidiExport.cpp
     Source/Model/ChannelEq.cpp
     Source/Cloud/CloudClient.cpp
     Source/Cloud/Packing.cpp
@@ -384,6 +385,7 @@ if(LATHE_BUILD_TESTS)
         Source/Assistant/SessionWatch.cpp
         Source/Model/Edit.cpp
         Source/Model/MidiImport.cpp
+        Source/Model/MidiExport.cpp
         Source/Model/ChannelEq.cpp
         Source/Cloud/CloudClient.cpp
         Source/Cloud/Packing.cpp

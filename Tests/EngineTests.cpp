@@ -21,6 +21,7 @@
 #include "Assistant/AssistantService.h"
 #include "Assistant/Notation.h"
 #include "Model/MidiImport.h"
+#include "Model/MidiExport.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
 #include "Demo/Welcome.h"
@@ -4878,6 +4879,70 @@ int main (int argc, char** argv)
             midiFile.deleteFile();
         }
 
+        // --- MIDI export: what the clips play, read back by the importer
+        {
+            auto lead = e.addTrack (TrackKind::midi, "Lead");
+            lead->midiChannel = 3;
+            Clip c;
+            c.id = e.newId();
+            c.kind = ClipKind::midi;
+            c.name = "Hook";
+            c.start = 4.0;
+            c.length = 4.0;
+            c.notes = { { 60, 0.0, 1.0, 0.8f }, { 62, 1.0, 4.0, 0.5f }, { 67, 2.0, 1.0, 1.0f }, { 67, 3.0, 1.0, 1.0f }, { 64, 5.0, 1.0, 0.8f } };
+            MidiEvent cc;
+            cc.beat = 0.5;
+            cc.size = 3;
+            cc.data[0] = 0xb0; cc.data[1] = 1; cc.data[2] = 90;
+            c.events.push_back (cc);
+            lead->clips.push_back (c);
+            auto empty = e.addTrack (TrackKind::midi, "Empty");
+
+            // The test song has other MIDI tracks: keep just Lead (and check Empty was left out).
+            auto all = midiexport::songItems (e);
+            std::vector<midiexport::Item> items;
+            bool emptyListed = false;
+            for (auto& it : all)
+            {
+                if (it.name == "Lead")
+                    items.push_back (it);
+                emptyListed = emptyListed || it.name == "Empty";
+            }
+            check (items.size() == 1 && items[0].channel == 3 && ! emptyListed && midiexport::countNotes (items) == 4,
+                   "MIDI export: MIDI tracks with notes, counting only notes the clip plays");
+
+            MemoryOutputStream mo;
+            midiexport::build (e, items, 0.0, "Song").writeTo (mo, 1);
+            MemoryInputStream mi (mo.getData(), mo.getDataSize(), false);
+            const auto back = midiimport::read (mi, "x");
+            const auto* p = back.parts.empty() ? nullptr : &back.parts[0];
+            check (back.error.isEmpty() && back.parts.size() == 1 && p->name == "Lead" && p->channel == 3 && p->notes.size() == 4
+                       && std::abs (back.tempo - e.tempo) < 0.01 && back.timeSigNum == e.timeSigNum && back.timeSigDen == e.timeSigDen
+                       && std::abs (p->notes[0].start - 4.0) < 1.0e-9 && std::abs (p->notes[1].length - 3.0) < 1.0e-9
+                       && std::abs (p->notes[0].velocity - 102.0f / 127.0f) < 0.01f
+                       && std::abs (p->notes[2].length - 1.0) < 1.0e-9 && std::abs (p->notes[3].start - 7.0) < 1.0e-9
+                       && p->events.size() == 1 && std::abs (p->events[0].beat - 4.5) < 1.0e-9 && (p->events[0].data[0] & 0x0f) == 2,
+                   "MIDI export: notes, lengths cut at the clip's end, repeats, velocity, a controller on the track's channel, tempo and meter come back");
+
+            const auto out = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-test-export.mid");
+            out.deleteFile();
+            auto w = tools.call ("export_midi", args2 ({ { "track", "Lead" }, { "clip", c.id }, { "path", out.getFullPathName() } }), status);
+            const auto oneClip = midiimport::read (out);
+            check (! (bool) w["isError"] && out.existsAsFile() && oneClip.parts.size() == 1 && std::abs (oneClip.parts[0].notes[0].start) < 1.0e-9
+                       && text (w).contains ("4 notes"),
+                   "export_midi: one clip, from the bar it starts in (" + text (w) + ")");
+            check ((bool) tools.call ("export_midi", args2 ({ { "track", "Lead" }, { "path", out.getFullPathName() } }), status)["isError"]
+                       && (bool) tools.call ("export_midi", args2 ({ { "track", "Empty" }, { "path", out.getFullPathName() + "2" } }), status)["isError"]
+                       && (bool) tools.call ("export_midi", args2 ({ { "clip", c.id } }), status)["isError"]
+                       && (bool) tools.call ("export_midi", args2 ({ { "track", "Master" } }), status)["isError"],
+                   "export_midi: never replaces a file; a track with no notes, a clip without its track, or a track that isn't MIDI is refused");
+            check (midiexport::fileNameFor ("Verse / Chorus") == "Verse - Chorus" && midiexport::fileNameFor ("  ") == "MIDI",
+                   "MIDI export: names made safe for files");
+            out.deleteFile();
+            e.removeTrack (lead->id);
+            e.removeTrack (empty->id);
+        }
+
         // --- write_notes says when a swing line moved nothing
         {
             auto sw = e.addTrack (TrackKind::midi, "Swung");
@@ -5628,7 +5693,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 21 && listed["id"].toString() == "a", "tools/list has the twenty-one tools");
+        check (listed["result"]["tools"].size() == 22 && listed["id"].toString() == "a", "tools/list has the twenty-two tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

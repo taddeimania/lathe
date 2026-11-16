@@ -5,6 +5,7 @@ Source/
   Model/Edit.*          project model, clip split/trim/clear, undo (with step labels and who), JSON, monitor (cue) mixes
   Model/ChannelEq.*     the built-in channel EQ: settings, biquads, response curve
   Model/MidiImport.*    reads .mid files into parts and places them as MIDI clips (drag and drop, import_midi)
+  Model/MidiExport.*    writes MIDI clips as a .mid file (File menu, clip menu, dragging out, export_midi)
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
   Engine/Mp3Writer.*    MP3 export through LAME (fetched by CMake, cmake/lame/config.h)
   Cloud/Milestones.*    the opt-in, anonymous one-time milestones (asked once, MilestonesPanel in UI/Dialogs.cpp)

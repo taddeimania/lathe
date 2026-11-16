@@ -34,6 +34,19 @@ Clips run to the end of the bar their last note ends in. Notes keep their place 
 plays at the song's tempo; if the file was written at another tempo the status bar says so. Notes, velocities, controllers, pitch
 bend and aftertouch come in. Import is one undo step.
 
+To take MIDI the other way, out to another program or to someone else:
+
+- **File > Export MIDI File...** saves every MIDI track that has notes, one track each in the file,
+  from the start of the song.
+- **Right-click a MIDI clip → Export as MIDI File...** saves that clip, or every selected MIDI clip, from
+  the bar the first one starts in.
+- **Drag MIDI clips out of Lathe's window** (to the Finder or Explorer, or into another program) to
+  drop them there as a .mid file. The clips stay where they were.
+
+The file has the song's tempo and time signature, each track's name and MIDI channel, and the notes,
+controllers and pitch bend the clips play (a clip's hidden notes past its end are left out). It holds
+notes, not sound: export audio for that.
+
 ## Track groups
 
 Select tracks (Cmd/Ctrl-click or Shift-click their names), then press **Cmd/Ctrl+G** or right-click → **Group**. A group gets a header row in the arrangement with:

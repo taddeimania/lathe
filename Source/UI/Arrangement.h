@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Widgets.h"
+#include "../Model/MidiExport.h"
 
 namespace lathe
 {
@@ -39,6 +40,12 @@ public:
     /** MIDI files: onto the MIDI track at trackIndex as one clip each, else onto new MIDI tracks
         (one per part of the file). */
     void importMidiFiles (const Array<File>&, int trackIndex, double atBeat);
+    /** Saves a .mid file: of the selected MIDI clips, or (selectedOnly false) of every MIDI track. */
+    void exportMidi (bool selectedOnly);
+    /** The selected MIDI clips as a .mid file in a temporary folder, for dragging out of Lathe;
+        a non-existent File when none of the selected clips is MIDI. */
+    File writeSelectedMidiForDrag();
+    int numSelectedMidiClips() const;
     void zoom (double factor, float anchorX);
     void scrollToPlayhead();
     /** Shows a spot: scrolls to the track and beat, selects the track, moves the start marker there. */
@@ -100,6 +107,9 @@ private:
         TrackKind kind = TrackKind::audio;
     };
     std::vector<CopiedClip> clipboard;
+    std::unique_ptr<FileChooser> midiChooser;
+    /** The selected MIDI clips grouped by track, measured from the bar the first one starts in. */
+    std::vector<midiexport::Item> selectedMidi (double& fromBeat, String& name) const;
     double clipboardLength = 0.0;
 
     struct SelectedClip { std::shared_ptr<Track> track; int trackIndex = -1; Clip* clip = nullptr; };
