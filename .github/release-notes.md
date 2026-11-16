@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.4
+
+- **Export MIDI files.** Choose **File > Export MIDI File...** for every MIDI track, right-click a clip for
+  just that clip (or the selected ones), or drag MIDI clips out of Lathe's window to drop them in the
+  Finder, Explorer or another program as a .mid file. The tempo, time signature, track names and
+  channels go with them. The AI assistant can export one too.
+
 ## New in 0.13.3
 
 - **Import MIDI files.** Drag a .mid file onto the arrangement, or choose **File > Import MIDI File...**.
