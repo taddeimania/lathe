@@ -139,7 +139,9 @@ humanize off
 ```
 
 They apply to the lines after them until changed. Swing moves notes that start exactly on the
-off-beat it names, before any `+ms`. Humanize nudges timing by up to ± the given milliseconds and
+off-beat it names, before any `+ms`. A `swing` line that moves no notes is almost always a slip
+(`swing 58%` swings 16ths, so a part in 8ths comes out straight): write_notes' reply points it out
+under "Check:", with the fix (`swing 58% 8`) when the part is in 8ths. Humanize nudges timing by up to ± the given milliseconds and
 velocity by up to ± the given amount, but leaves alone what a note sets itself (its own offset,
 its own velocity). With `all`, it varies those too, around what the note set: a lead with written
 dynamics and pushed notes (`c4:96+6ms`) can still be played a little loose. The same text and seed always give the same notes, so undo, the cloud and a

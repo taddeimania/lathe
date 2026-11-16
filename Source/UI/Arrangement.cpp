@@ -1,6 +1,7 @@
 #include "Arrangement.h"
 #include "Notes.h"
 #include "../Engine/ClipJoin.h"
+#include "../Model/MidiImport.h"
 #include <set>
 
 namespace lathe
@@ -2140,7 +2141,7 @@ void ArrangementView::splitSelectedClip()
 bool ArrangementView::isInterestedInFileDrag (const StringArray& files)
 {
     for (auto& f : files)
-        if (File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"))
+        if (File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg;mid;midi"))
             return true;
     return false;
 }
@@ -2148,12 +2149,66 @@ bool ArrangementView::isInterestedInFileDrag (const StringArray& files)
 void ArrangementView::filesDropped (const StringArray& files, int x, int y)
 {
     auto p = lanes->getLocalPoint (this, Point<int> (x, y));
-    Array<File> list;
+    Array<File> audio, midi;
     for (auto& f : files)
         if (File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"))
-            list.add (File (f));
+            audio.add (File (f));
+        else if (File (f).hasFileExtension ("mid;midi"))
+            midi.add (File (f));
 
-    importFiles (list, trackIndexAtY (p.y), jmax (0.0, snap (xToBeat ((float) p.x), false)));
+    const int trackIndex = trackIndexAtY (p.y);
+    const double at = jmax (0.0, snap (xToBeat ((float) p.x), false));
+    importFiles (audio, trackIndex, at);
+    importMidiFiles (midi, trackIndex, at);
+}
+
+void ArrangementView::importMidiFiles (const Array<File>& files, int trackIndex, double atBeat)
+{
+    if (files.isEmpty())
+        return;
+
+    auto& edit = ctx.edit;
+    edit.beginClipEdit();
+
+    std::shared_ptr<Track> onto;
+    if (trackIndex >= 0 && trackIndex < (int) edit.tracks.size() && edit.tracks[(size_t) trackIndex]->isMidi())
+        onto = edit.tracks[(size_t) trackIndex];
+
+    int clips = 0, newTracks = 0;
+    double at = atBeat;
+    String problem, tempoNote;
+    for (auto& f : files)
+    {
+        const auto contents = midiimport::read (f);
+        if (contents.error.isNotEmpty())
+        {
+            problem = f.getFileName() + ": " + contents.error;
+            continue;
+        }
+        const auto used = midiimport::place (edit, contents, onto, at, f.getFileNameWithoutExtension());
+        if (onto != nullptr && ! onto->clips.empty())
+            at = onto->clips.back().end();   // several files onto one track play one after another
+        clips += (int) used.size();
+        if (onto == nullptr)
+            newTracks += (int) used.size();
+        if (contents.tempo > 0.0 && std::abs (contents.tempo - edit.tempo) > 0.05 && tempoNote.isEmpty())
+            tempoNote = " The file was written at " + String (contents.tempo, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".")
+                        + " BPM; it plays at the song's " + String (edit.tempo, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + ".";
+    }
+
+    if (clips == 0)
+    {
+        ctx.showStatus (problem.isNotEmpty() ? problem : "Nothing to import.");
+        return;
+    }
+    edit.labelNextStep (files.size() == 1 ? "Imported " + files[0].getFileName() : "Imported " + String (files.size()) + " MIDI files", false);
+    edit.changed();
+    String status = "Imported " + String (clips) + (clips == 1 ? " MIDI clip" : " MIDI clips");
+    if (newTracks > 0)
+        status << " on " << newTracks << (newTracks == 1 ? " new track: add an instrument to hear it." : " new tracks: add instruments to hear them.");
+    else
+        status << ".";
+    ctx.showStatus (status + tempoNote + (problem.isNotEmpty() ? " (" + problem + ")" : String()));
 }
 
 void ArrangementView::importFiles (const Array<File>& files, int trackIndex, double atBeat)

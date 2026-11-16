@@ -15,6 +15,17 @@ struct SessionChange
     String otherProject;   // set when a different project is open now
     StringArray words;     // as in Lathe's History: "\"Bass\": fader -8.0 dB -> -6.0 dB"
 
+    /** Where the structural change is. `songWide`: anything outside one channel (tempo, the
+        list or order of tracks, groups, another project). Otherwise `channels` holds the ids of
+        the tracks, returns or master whose own contents changed (clips, plug-ins, routing...). */
+    bool songWide = false;
+    Array<int> channels;
+
+    /** True when the person's structural change could clash with a call that changes the
+        channels `targets` (track ids), or the whole song (`targetsSongWide`). False when there's
+        no structural change, or it stayed inside other channels. */
+    bool overlaps (const Array<int>& targets, bool targetsSongWide) const;
+
     /** The changes as a short list for the assistant (at most `maxLines`). */
     String list (int maxLines = 12) const;
 };

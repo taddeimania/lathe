@@ -1,5 +1,6 @@
 #include "AssistantTools.h"
 #include "Notation.h"
+#include "../Model/MidiImport.h"
 #include "../Engine/Mp3Writer.h"
 #include "AssistantShared.h"
 #include "../Devices/Device.h"
@@ -92,6 +93,8 @@ var Tools::call (const String& name, const var& args, String& status)
         return toolText (notation::guide());
     if (name == "write_notes")
         return writeNotes (args, status);
+    if (name == "import_midi")
+        return importMidi (args, status);
     if (name == "play")
         return play (args, status);
     if (name == "stop")
@@ -626,6 +629,7 @@ var Tools::writeNotes (const var& args, String& status)
 
     std::vector<Note> notes;
     String looped;   // which pattern lines looped to fill the bars, for the reply
+    StringArray warnings;
     const auto pattern = args.getProperty ("pattern", {});
     auto* list = args.getProperty ("notes", {}).getArray();
     if (! pattern.isVoid() && list != nullptr)
@@ -634,7 +638,7 @@ var Tools::writeNotes (const var& args, String& status)
     {
         std::vector<notation::Note> parsed;
         std::vector<notation::LineSummary> lines;
-        const auto r = notation::parse (pattern.toString(), { edit.beatsPerBar(), edit.tempo, span }, parsed, &lines);
+        const auto r = notation::parse (pattern.toString(), { edit.beatsPerBar(), edit.tempo, span }, parsed, &lines, &warnings);
         if (r.failed())
             return toolText (r.getErrorMessage() + " Nothing was changed. (notation_guide has the full reference.)", true);
         if (parsed.size() * (size_t) repeat > 4000)
@@ -728,7 +732,111 @@ var Tools::writeNotes (const var& args, String& status)
     return toolText ("Wrote " + String (count) + (count == 1 ? " note" : " notes") + " on " + ("\"" + t->name + "\"")
                      + ", bars " + barText (from) + " to " + barText (to) + " (clip " + String (clipId) + "). "
                      + (looped.isNotEmpty() ? "Looped to fill bars " + barText (from) + " to " + barText (from + span) + ": " + looped + ". " : String())
-                     + "In Lathe this is one undo step (Cmd/Ctrl+Z).");
+                     + "In Lathe this is one undo step (Cmd/Ctrl+Z)."
+                     + (warnings.isEmpty() ? String() : "\nCheck: " + warnings.joinIntoString ("\nCheck: ")));
+}
+
+var Tools::importMidi (const var& args, String& status)
+{
+    auto asked = args.getProperty ("path", {}).toString().trim();
+    if (asked.startsWith ("~"))
+        asked = File::getSpecialLocation (File::userHomeDirectory).getFullPathName() + asked.substring (1);
+    if (asked.isEmpty() || ! File::isAbsolutePath (asked))
+        return toolText ("path must be the .mid file's full path (or ~/...).", true);
+    const File file (asked);
+    if (! file.existsAsFile())
+        return toolText ("There's no file at " + file.getFullPathName() + ".", true);
+    if (engine.isRecording() || engine.isCountingIn())
+        return toolText ("Lathe is recording. Stop first (the stop tool keeps the take).", true);
+
+    std::shared_ptr<Track> onto;
+    if (args.hasProperty ("track") && ! args["track"].isVoid())
+    {
+        onto = findTrack (args["track"]);
+        if (onto == nullptr)
+            return toolText ("No track called \"" + args["track"].toString() + "\". describe_session lists them.", true);
+        if (! onto->isMidi())
+            return toolText ("\"" + onto->name + "\" isn't a MIDI track. Leave track out to put the file on new MIDI tracks.", true);
+    }
+    const double bar = (double) args.getProperty ("bar", 1.0);
+    if (! (bar >= 1.0) || bar > 100000.0)
+        return toolText ("bar must be 1 or more.", true);
+
+    const auto contents = midiimport::read (file);
+    if (contents.error.isNotEmpty())
+        return toolText (contents.error + " Nothing was changed.", true);
+
+    edit.commitUndoStep();   // what was done before this call stays a step of its own
+    const auto name = file.getFileNameWithoutExtension();
+    const auto used = midiimport::place (edit, contents, onto, toBeats (bar), name, (bool) args.getProperty ("one_track", false));
+    edit.changed();
+    edit.labelNextStep ("Imported " + file.getFileName(), true);
+    edit.commitUndoStep();
+
+    String text = "Imported " + file.getFileName() + ":\n";
+    int notes = 0;
+    for (auto& t : used)
+    {
+        const auto& c = t->clips.back();
+        notes += (int) c.notes.size();
+        text << "- \"" << t->name << "\": " << (int) c.notes.size() << " notes, bars " << barText (c.start) << " to "
+             << barText (c.end()) << " (clip " << c.id << ")" << (onto == nullptr ? ", a new MIDI track with no instrument yet" : "") << "\n";
+    }
+    StringArray about;
+    if (contents.tempo > 0.0)
+        about.add ("written at " + String (contents.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + " BPM (the song is at "
+                   + String (edit.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + ")");
+    if (contents.timeSigNum > 0)
+        about.add ("in " + String (contents.timeSigNum) + "/" + String (contents.timeSigDen) + " (the song is in "
+                   + String (edit.timeSigNum) + "/" + String (edit.timeSigDen) + ")");
+    if (! about.isEmpty())
+        text << "The file was " << about.joinIntoString (", ") << ".\n";
+    text << "In Lathe this is one undo step (Cmd/Ctrl+Z).";
+    status = "AI assistant: imported " + file.getFileName() + " (" + String (notes) + " notes)";
+    return toolText (text);
+}
+
+bool Tools::channelsTouched (const String& tool, const var& args, Array<int>& ids) const
+{
+    auto add = [&] (const var& key)
+    {
+        auto t = findTrack (key);
+        if (t == nullptr)
+            return false;
+        ids.addIfNotAlreadyThere (t->id);
+        return true;
+    };
+
+    if (tool == "write_notes" || tool == "set_plugin_params")
+        return add (args.getProperty ("track", {}));
+    if (tool == "import_midi")
+        return args.hasProperty ("track") && ! args["track"].isVoid() && add (args["track"]);   // new tracks: song-wide
+
+    if (tool != "edit_session")
+        return false;
+    auto* changes = args.getProperty ("changes", {}).getArray();
+    if (changes == nullptr)
+        return false;
+    for (auto& c : *changes)
+    {
+        const auto action = c.getProperty ("action", {}).toString().trim().toLowerCase();
+        // These change one channel (and say which); the rest (adding, removing or moving tracks,
+        // tempo, time signature) change the song as a whole.
+        static const StringArray oneChannel { "rename_track", "add_plugin", "remove_plugin", "move_plugin", "set_plugin_on",
+                                              "set_input", "set_output", "set_send", "set_mixer", "set_eq", "set_track" };
+        if (! oneChannel.contains (action) || ! add (c.getProperty ("track", {})))
+            return false;
+        // A track's input or output names a second one; its contents don't change, but the
+        // assistant should know about it as it is now.
+        if (action == "set_input" && c.hasProperty ("from_track") && ! add (c["from_track"]))
+            return false;
+        if (action == "set_send" && ! add (c.getProperty ("return", {})))
+            return false;
+        if (action == "set_output" && c.hasProperty ("to") && ! c["to"].toString().equalsIgnoreCase ("master")
+            && c["to"].toString().trim().isNotEmpty() && ! add (c["to"]))
+            return false;
+    }
+    return true;
 }
 
 String Tools::barText (double beats) const

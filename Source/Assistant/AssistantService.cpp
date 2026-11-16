@@ -221,8 +221,16 @@ var Service::runTool (const String& name, const var& args)
 
     // Never change the song on an out-of-date picture of it: the person edited it since the
     // assistant last looked. Faders, pans, mutes, sends and the like don't stop it (people move
-    // those while listening); the assistant is just told.
+    // those while listening), and neither does a change on other tracks than the ones this call
+    // changes (a knob on the drums while it writes the bass); the assistant is just told.
+    bool overlaps = false;
     if (change.structural && SessionWatch::changesSong (name))
+    {
+        Array<int> targets;
+        const bool named = tools.channelsTouched (name, args, targets);
+        overlaps = change.overlaps (targets, ! named);
+    }
+    if (overlaps)
     {
         watch.seen (now, file);   // it knows now: the next try goes through
         noteActivity ("Assistant held back: you changed the session since it last looked");
@@ -245,7 +253,10 @@ var Service::runTool (const String& name, const var& args)
 
     if (change.any)
         result = withNote (result, "Since you last looked, the person changed:\n" + change.list()
-                                       + (SessionWatch::changesSong (name) ? "\n(Your change was made on top of theirs.)" : String()));
+                                       + (! SessionWatch::changesSong (name) ? String()
+                                          : change.structural ? "\n(Those were on other tracks than this call changes, so it went ahead on top of them. "
+                                                                "Look again before changing those tracks.)"
+                                                              : "\n(Your change was made on top of theirs.)"));
     return result;
 }
 

@@ -20,6 +20,7 @@
 #include "Assistant/SessionWatch.h"
 #include "Assistant/AssistantService.h"
 #include "Assistant/Notation.h"
+#include "Model/MidiImport.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
 #include "Demo/Welcome.h"
@@ -4667,12 +4668,27 @@ int main (int argc, char** argv)
             const auto oldName = synth->name;
             synth->name = "Lead";   // the person renames a track between the assistant's calls
             auto r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","volume_db":-4}])"));
-            check ((bool) r["isError"] && txt (r).contains ("Nothing was changed") && txt (r).contains ("Lead")
-                       && std::abs (gen->volumeDb.load() + 4.0f) > 0.01f,
-                   "working together: a change on an out-of-date picture is held back, saying what the person changed (" + txt (r).substring (0, 160) + ")");
+            check (! (bool) r["isError"] && txt (r).contains ("Lead") && txt (r).contains ("other tracks")
+                       && std::abs (gen->volumeDb.load() + 4.0f) < 0.01f,
+                   "working together: a change on another track doesn't stop it, but it's mentioned (" + txt (r).substring (0, 200) + ")");
+
+            const bool wasBypassed = gen->plugins[0]->bypassed.load();
+            gen->plugins[0]->bypassed = ! wasBypassed;   // now the person changes Dice itself
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","volume_db":-5}])"));
+            check ((bool) r["isError"] && txt (r).contains ("Nothing was changed") && std::abs (gen->volumeDb.load() + 4.0f) < 0.01f,
+                   "working together: a change to the same track is held back, saying what the person changed (" + txt (r).substring (0, 160) + ")");
             r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","volume_db":-4}])"));
             check (! (bool) r["isError"] && std::abs (gen->volumeDb.load() + 4.0f) < 0.01f,
                    "working together: once told, the same change goes through");
+
+            synth->name = "Lead 2";   // a change elsewhere, but the call changes the whole song
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_tempo","bpm":121}])"));
+            check ((bool) r["isError"] && std::abs (e.tempo - 120.0) < 0.001, "working together: a song-wide change is held back by any change");
+            synth->name = "Lead 3";
+            r = svc.runTool ("edit_session", change (R"([{"action":"set_input","track":"Lead 2","from_track":"Dice"}])"));
+            check ((bool) r["isError"], "working together: a track it names that's no longer there holds it back");
+            gen->plugins[0]->bypassed = wasBypassed;
+            svc.runTool ("describe_session", var (new DynamicObject()));
 
             synth->volumeDb = -9.0f;   // the person rides a fader
             r = svc.runTool ("edit_session", change (R"([{"action":"set_mixer","track":"Dice","pan":0.2}])"));
@@ -4769,6 +4785,115 @@ int main (int argc, char** argv)
             return o;
         };
         auto text = [] (const var& r) { return r["content"][0]["text"].toString(); };
+
+        // --- import_midi: a MIDI file onto new tracks, or onto one track as one clip
+        {
+            MidiFile mf;
+            mf.setTicksPerQuarterNote (480);
+            MidiMessageSequence conductor, kick, bass;
+            conductor.addEvent (MidiMessage::tempoMetaEvent (625000));   // 96 BPM
+            conductor.addEvent (MidiMessage::timeSignatureMetaEvent (4, 4));
+            kick.addEvent (MidiMessage::textMetaEvent (3, "Kick"));
+            for (int k = 0; k < 4; ++k)
+            {
+                kick.addEvent (MidiMessage::noteOn (10, 36, (uint8) 100), k * 480.0);
+                kick.addEvent (MidiMessage::noteOff (10, 36), k * 480.0 + 120.0);
+            }
+            bass.addEvent (MidiMessage::textMetaEvent (3, "Bass"));
+            bass.addEvent (MidiMessage::noteOn (2, 40, (uint8) 90), 0.0);
+            bass.addEvent (MidiMessage::noteOff (2, 40), 960.0);
+            bass.addEvent (MidiMessage::controllerEvent (2, 1, 64), 1000.0);
+            bass.addEvent (MidiMessage::noteOn (2, 43, (uint8) 90), 4.0 * 480.0 + 480.0);   // bar 2, beat 2
+            bass.addEvent (MidiMessage::noteOff (2, 43), 4.0 * 480.0 + 960.0);
+            for (auto* sq : { &conductor, &kick, &bass })
+            {
+                sq->updateMatchedPairs();
+                mf.addTrack (*sq);
+            }
+            const auto midiFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-test-groove.mid");
+            {
+                midiFile.deleteFile();
+                FileOutputStream os (midiFile);
+                mf.writeTo (os, 1);
+            }
+
+            const auto contents = midiimport::read (midiFile);
+            check (contents.error.isEmpty() && contents.parts.size() == 2 && contents.parts[0].name == "Kick" && contents.parts[1].name == "Bass"
+                       && std::abs (contents.tempo - 96.0) < 0.01 && contents.timeSigNum == 4 && contents.parts[1].events.size() == 1
+                       && std::abs (contents.parts[1].notes[1].start - 5.0) < 1.0e-9 && std::abs (contents.parts[0].notes[0].length - 0.25) < 1.0e-9,
+                   "MIDI file: a part per track, named, in beats, with its tempo, time signature and controllers");
+
+            const int tracksBefore = (int) e.tracks.size();
+            e.commitUndoStep();
+            auto w = tools.call ("import_midi", args2 ({ { "path", midiFile.getFullPathName() } }), status);
+            check (! (bool) w["isError"] && (int) e.tracks.size() == tracksBefore + 2 && e.tracks.back()->name == "Bass"
+                       && e.tracks.back()->isMidi() && e.tracks.back()->clips.size() == 1 && std::abs (e.tracks.back()->clips[0].length - 8.0) < 1.0e-9
+                       && e.tracks.back()->clips[0].events.size() == 1 && text (w).contains ("96 BPM") && text (w).contains ("no instrument"),
+                   "import_midi: a new MIDI track per part, clips to the end of the bar (" + text (w) + ")");
+            check (e.undo() && (int) e.tracks.size() == tracksBefore, "import_midi: one undo step");
+
+            auto onto = e.addTrack (TrackKind::midi, "Groove");
+            e.commitUndoStep();
+            w = tools.call ("import_midi", args2 ({ { "path", midiFile.getFullPathName() }, { "track", "Groove" }, { "bar", 3 } }), status);
+            check (! (bool) w["isError"] && (int) e.tracks.size() == tracksBefore + 1 && onto->clips.size() == 1 && onto->clips[0].notes.size() == 6
+                       && std::abs (onto->clips[0].start - 8.0) < 1.0e-9,
+                   "import_midi onto a track: the whole file as one clip, at the bar given (" + text (w) + ")");
+            check ((bool) tools.call ("import_midi", args2 ({ { "path", "relative.mid" } }), status)["isError"]
+                       && (bool) tools.call ("import_midi", args2 ({ { "path", midiFile.getFullPathName() }, { "track", "Master" } }), status)["isError"],
+                   "import_midi: a relative path or a track that isn't MIDI is refused");
+
+            // A one-track file playing on two channels splits by channel.
+            MidiFile flat;
+            flat.setTicksPerQuarterNote (96);
+            MidiMessageSequence both;
+            both.addEvent (MidiMessage::noteOn (10, 38, (uint8) 100), 0.0);
+            both.addEvent (MidiMessage::noteOff (10, 38), 24.0);
+            both.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 96.0);
+            both.addEvent (MidiMessage::noteOff (1, 60), 192.0);
+            both.updateMatchedPairs();
+            flat.addTrack (both);
+            MemoryOutputStream mo;
+            flat.writeTo (mo, 0);
+            MemoryInputStream mi (mo.getData(), mo.getDataSize(), false);
+            const auto split = midiimport::read (mi, "Song");
+            check (split.parts.size() == 2 && split.parts[0].name == "Song ch 1" && split.parts[1].name == "Song drums",
+                   "MIDI file: one track on two channels becomes a part per channel");
+            MemoryInputStream junk ("not midi", 8, false);
+            check (midiimport::read (junk, "x").error.isNotEmpty(), "MIDI file: something else is refused");
+
+            Array<int> ids;
+            check (tools.channelsTouched ("write_notes", args2 ({ { "track", "Groove" } }), ids) && ids == Array<int> { onto->id },
+                   "channels touched: write_notes changes its track");
+            ids.clear();
+            check (! tools.channelsTouched ("edit_session", JSON::parse (R"({"changes":[{"action":"set_eq","track":"Groove","band":"low cut","freq_hz":80},
+                                                                                      {"action":"set_tempo","bpm":100}]})"), ids),
+                   "channels touched: tempo is song-wide");
+            ids.clear();
+            check (tools.channelsTouched ("edit_session", JSON::parse (R"({"changes":[{"action":"set_eq","track":"Groove","band":"low cut","freq_hz":80},
+                                                                                     {"action":"set_send","track":"Groove","return":"Master","level_db":-6}]})"), ids)
+                       && ids.contains (onto->id) && ids.contains (e.master->id),
+                   "channels touched: a send names its return too");
+            check (! tools.channelsTouched ("import_midi", args2 ({ { "path", "/x.mid" } }), ids), "channels touched: new tracks are song-wide");
+            e.removeTrack (onto->id);
+            midiFile.deleteFile();
+        }
+
+        // --- write_notes says when a swing line moved nothing
+        {
+            auto sw = e.addTrack (TrackKind::midi, "Swung");
+            auto w = tools.call ("write_notes", args2 ({ { "track", "Swung" }, { "from_bar", 1 }, { "to_bar", 2 },
+                                                         { "pattern", "swing 60%\nhat x.x.x.x.x.x.x.x." } }), status);
+            check (! (bool) w["isError"] && text (w).contains ("moved no notes") && text (w).contains ("swing 60% 8"),
+                   "write_notes: swinging 16ths in an 8th-note part is pointed out, with the fix (" + text (w) + ")");
+            w = tools.call ("write_notes", args2 ({ { "track", "Swung" }, { "from_bar", 1 }, { "to_bar", 2 },
+                                                    { "pattern", "swing 60% 8\nhat x.x.x.x.x.x.x.x." } }), status);
+            check (! (bool) w["isError"] && ! text (w).contains ("Check:"), "write_notes: a swing that moves notes says nothing");
+            StringArray warnings;
+            std::vector<notation::Note> out;
+            notation::parse ("hat x...x...x...x...\nswing 58%", { 4.0, 120.0, 4.0 }, out, nullptr, &warnings);
+            check (warnings.size() == 1 && warnings[0].contains ("no notes come after it"), "notation: a swing line at the end is pointed out");
+            e.removeTrack (sw->id);
+        }
 
         // --- write_notes: a four-on-the-floor bar, repeated
         {
@@ -5503,7 +5628,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 20 && listed["id"].toString() == "a", "tools/list has the twenty tools");
+        check (listed["result"]["tools"].size() == 21 && listed["id"].toString() == "a", "tools/list has the twenty-one tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

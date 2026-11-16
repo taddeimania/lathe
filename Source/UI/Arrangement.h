@@ -36,6 +36,9 @@ public:
     int numSelectedClips() const;
     bool canPaste() const   { return ! clipboard.empty(); }
     void importFiles (const Array<File>&, int trackIndex, double atBeat);
+    /** MIDI files: onto the MIDI track at trackIndex as one clip each, else onto new MIDI tracks
+        (one per part of the file). */
+    void importMidiFiles (const Array<File>&, int trackIndex, double atBeat);
     void zoom (double factor, float anchorX);
     void scrollToPlayhead();
     /** Shows a spot: scrolls to the track and beat, selects the track, moves the start marker there. */

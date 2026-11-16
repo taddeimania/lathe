@@ -31,9 +31,11 @@ struct LineSummary
 };
 
 /** Text to notes, starts in [0, spanBeats). On failure, out is left empty and the Result says
-    which line, bar and step went wrong. lines, if given, gets one summary per line of notes. */
+    which line, bar and step went wrong. lines, if given, gets one summary per line of notes.
+    warnings, if given, gets what parsed but probably isn't what was meant (a swing line that
+    moved no notes). */
 juce::Result parse (const juce::String& text, const Context&, std::vector<Note>& out,
-                    std::vector<LineSummary>* lines = nullptr);
+                    std::vector<LineSummary>* lines = nullptr, juce::StringArray* warnings = nullptr);
 
 /** The lines that looped, in words: "kick and hat: 1 bar, played 16 times; bass: 4 bars, played
     2.5 times". Lines heard once are left out; "" if none looped. */

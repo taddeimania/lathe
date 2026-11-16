@@ -59,6 +59,11 @@ public:
     /** By id, or by name (any case); also "Master" and returns. */
     std::shared_ptr<Track> findTrack (const var& nameOrId) const;
 
+    /** The channels (track ids) a call to a song-changing tool would change, so a change the
+        person made elsewhere needn't hold it back. False when it reaches beyond named channels
+        (tempo, adding or removing tracks, a track it can't find, a new project). */
+    bool channelsTouched (const String& tool, const var& args, Array<int>& ids) const;
+
 private:
     var trackSummary (const Track&) const;
     var pluginList (const Track&) const;
@@ -69,6 +74,7 @@ private:
 
     var getNotes (const var& args) const;
     var writeNotes (const var& args, String& status);
+    var importMidi (const var& args, String& status);
     var play (const var& args, String& status);
     var stop (String& status);
     var setLoop (const var& args, String& status);

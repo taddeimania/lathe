@@ -80,6 +80,7 @@ private:
     Array<File> templateFiles();
     void deleteTemplate (const File&);
     void importAudio();
+    void importMidi();
     void openPluginBrowser();
     void openPatcher();
     void writeAutosave();

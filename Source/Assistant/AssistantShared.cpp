@@ -342,6 +342,21 @@ var toolDefinitions()
                                  { "track", "from_bar", "to_bar" }),
                          false, true));
     }
+    tools.add (tool ("import_midi", "Import a MIDI file",
+                     "Puts a Standard MIDI File (.mid) from the computer into the song as MIDI clips, like dragging it onto "
+                     "Lathe's arrangement: a groove from a drum library, a part exported from another program. Use this "
+                     "instead of reading a file and writing its notes out. With track (a MIDI track), the whole file goes "
+                     "onto it as one clip, clearing whatever was there in those bars. Without track, each part of the file "
+                     "(a track of it, or a channel of a one-track file) gets a new MIDI track named after it, or one new track "
+                     "with one_track; new tracks have no instrument, so add one with edit_session. Clips run to the end of "
+                     "the bar their last note ends in. Notes keep their place in beats: the song's tempo is not changed (the "
+                     "reply gives the file's tempo and time signature, so you can match them with edit_session). One undo step.",
+                     schema ({ { "path", prop ("string", "The .mid file: a full path or ~/...") },
+                               { "track", prop ("string", "A MIDI track (name or id) to put it all on. Without it: new tracks") },
+                               { "bar", prop ("number", "Where it starts (1-based bar, default 1)") },
+                               { "one_track", prop ("boolean", "Without track: put every part on one new track (default false)") } },
+                             { "path" }),
+                     false, true));
     tools.add (tool ("notation_guide", "Note notation guide",
                      "The full reference for Lathe's note notation, used by write_notes' pattern and get_notes: every symbol, "
                      "velocities, timing, swing and humanize, with examples. Read it before writing a detailed part.",

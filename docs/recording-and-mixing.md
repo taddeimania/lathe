@@ -19,6 +19,21 @@
   - **On its own track:** put the generator before the instrument on a MIDI track, arm it, and record. Lathe records the notes the generator hands to the instrument (not what you play into it), exactly in time. Afterwards, bypass the generator (the status bar reminds you), or it plays along with the new clip.
   - **From a track:** on another MIDI track, pick the generator's track under **From a track** in the input box, put your instrument there, arm it and record. That track plays and records the generator's notes live, and the generator's track stays as it is, so nothing doubles on playback.
 
+## MIDI files
+
+Drag a MIDI file (.mid) onto the arrangement, or choose **File > Import MIDI File...**:
+
+- **Onto a MIDI track:** the whole file becomes one clip on that track, where you dropped it (or at the
+  insert marker, from the menu, on the selected track). Anything already there in those bars is
+  replaced. This suits a drum groove from a library, even one spread over several tracks of the file.
+  Several files dropped together play one after another.
+- **Anywhere else:** each part of the file (a track of it, or a channel of a one-track file) gets its own
+  new MIDI track, named after it. New tracks have no instrument yet: add one to hear them.
+
+Clips run to the end of the bar their last note ends in. Notes keep their place in beats, so the file
+plays at the song's tempo; if the file was written at another tempo the status bar says so. Notes, velocities, controllers, pitch
+bend and aftertouch come in. Import is one undo step.
+
 ## Track groups
 
 Select tracks (Cmd/Ctrl-click or Shift-click their names), then press **Cmd/Ctrl+G** or right-click → **Group**. A group gets a header row in the arrangement with:

@@ -1,4 +1,5 @@
 #include "Notation.h"
+#include <list>
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -66,9 +67,19 @@ struct Item
     Mods mods;
 };
 
+/** A "swing" line and what it did, for a warning when it moved nothing. */
+struct SwingUse
+{
+    int line = 0;
+    String text;
+    double percent = 50.0, unit = 0.25;
+    int notes = 0, moved = 0, onOffbeatEighths = 0;
+};
+
 struct Feel
 {
     double swing = 50.0, swingUnit = 0.25;   // percent, beats
+    SwingUse* swingUse = nullptr;            // the swing line in force, if any
     double humanizeMs = 0.0;
     int humanizeVel = 0;
     bool humanizeAll = false;   // also vary what a note sets itself (its offset, its velocity)
@@ -443,8 +454,16 @@ public:
         if (std::abs (feel.swing - 50.0) > eps)
         {
             const double u = (t - barStart) / feel.swingUnit;
-            if (nearInt (u) && ((int) std::llround (u)) % 2 == 1)
+            const bool moves = nearInt (u) && ((int) std::llround (u)) % 2 == 1;
+            if (moves)
                 start += 2.0 * feel.swingUnit * feel.swing / 100.0 - feel.swingUnit;
+            if (auto* use = feel.swingUse)
+            {
+                ++use->notes;
+                use->moved += moves ? 1 : 0;
+                const double e = (t - barStart) / 0.5;
+                use->onOffbeatEighths += nearInt (e) && ((int) std::llround (e)) % 2 == 1 ? 1 : 0;
+            }
         }
         if (m.hasOffset)
             start += m.percent ? m.offsetPercent / 100.0 * slot : m.offsetMs / 1000.0 * ctx.tempo / 60.0;
@@ -644,13 +663,17 @@ String pitchName (int pitch)
 }
 
 //==============================================================================
-Result parse (const String& text, const Context& ctx, std::vector<Note>& out, std::vector<LineSummary>* lineSummaries)
+Result parse (const String& text, const Context& ctx, std::vector<Note>& out, std::vector<LineSummary>* lineSummaries,
+              StringArray* warnings)
 {
     out.clear();
     if (lineSummaries != nullptr)
         lineSummaries->clear();
+    if (warnings != nullptr)
+        warnings->clear();
     std::vector<Note> notes;
     std::vector<LineSummary> summaries;
+    std::list<SwingUse> swingUses;
     Feel feel;
     int grid = defaultGrid (ctx.beatsPerBar);
     const double bpb = ctx.beatsPerBar;
@@ -686,7 +709,7 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out, st
         }
         if (first == "swing")
         {
-            if (words.size() >= 2 && words[1].equalsIgnoreCase ("off")) { feel.swing = 50.0; continue; }
+            if (words.size() >= 2 && words[1].equalsIgnoreCase ("off")) { feel.swing = 50.0; feel.swingUse = nullptr; continue; }
             const auto p = words[1].trimCharactersAtEnd ("%");
             if (words.size() < 2 || words.size() > 3 || ! p.containsOnly ("0123456789.") || p.isEmpty()
                 || p.getDoubleValue() < 50.0 || p.getDoubleValue() > 80.0)
@@ -697,6 +720,12 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out, st
             {
                 if (words[2] == "8")        feel.swingUnit = 0.5;
                 else if (words[2] != "16")  return Result::fail (where + ": swing's second number is 16 or 8.");
+            }
+            feel.swingUse = nullptr;
+            if (std::abs (feel.swing - 50.0) > eps)
+            {
+                swingUses.push_back ({ ln + 1, line, feel.swing, feel.swingUnit });
+                feel.swingUse = &swingUses.back();
             }
             continue;
         }
@@ -849,6 +878,26 @@ Result parse (const String& text, const Context& ctx, std::vector<Note>& out, st
 
     if (! anyPart)
         return Result::fail ("The pattern has no notes in it (only settings or comments).");
+
+    // A swing line that moved nothing is almost always a mistake (swinging 16ths in a part
+    // written in 8ths), and it's silent: the notes come out straight.
+    if (warnings != nullptr)
+        for (auto& u : swingUses)
+        {
+            if (u.moved > 0)
+                continue;
+            auto w = "Line " + String (u.line) + " (\"" + u.text + "\") moved no notes";
+            if (u.notes == 0)
+                w << ": no notes come after it.";
+            else if (u.unit < 0.5 - eps && u.onOffbeatEighths > 0)
+                w << ": it swings the 2nd 16th of each 8th, and none of the " << u.notes << " notes after it is on one. To swing the "
+                  << "off-beat 8ths (" << u.onOffbeatEighths << " of them), add 8: \"swing " << number (u.percent, 3) << "% 8\".";
+            else
+                w << ": none of the " << u.notes << " notes after it is on an off-beat " << (u.unit < 0.5 - eps ? "16th" : "8th")
+                  << " (with notes timed by hand, +ms offsets, swing has nothing to move).";
+            warnings->add (w);
+        }
+
     std::stable_sort (notes.begin(), notes.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
     out = std::move (notes);
     if (lineSummaries != nullptr)

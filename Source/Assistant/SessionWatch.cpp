@@ -1,5 +1,6 @@
 #include "SessionWatch.h"
 #include "../Cloud/ProjectDiff.h"
+#include <map>
 
 namespace lathe::assistant
 {
@@ -48,7 +49,41 @@ bool same (const var& a, const var& b)
 {
     return JSON::toString (a, true) == JSON::toString (b, true);
 }
+
+/** Every channel (tracks, returns, master) by id, and the song with each channel replaced by
+    its id, so a change can be placed in one channel or the song as a whole. */
+void split (const var& comparableProject, std::map<int, String>& channels, String& song)
+{
+    auto copy = JSON::parse (JSON::toString (comparableProject, true));
+    for (auto* key : { "tracks", "returns" })
+        if (auto* a = copy[key].getArray())
+            for (auto& c : *a)
+            {
+                const int id = (int) c["id"];
+                channels[id] = JSON::toString (c, true);
+                c = id;
+            }
+    if (auto m = copy["master"]; m.isObject())
+    {
+        const int id = (int) m["id"];
+        channels[id] = JSON::toString (m, true);
+        copy.getDynamicObject()->setProperty ("master", id);
+    }
+    song = JSON::toString (copy, true);
+}
 } // namespace
+
+bool SessionChange::overlaps (const Array<int>& targets, bool targetsSongWide) const
+{
+    if (! structural)
+        return false;
+    if (songWide || targetsSongWide)
+        return true;
+    for (auto id : targets)
+        if (channels.contains (id))
+            return true;
+    return false;
+}
 
 String SessionChange::list (int maxLines) const
 {
@@ -78,20 +113,35 @@ SessionChange SessionWatch::compare (const var& project, const File& file) const
         return c;
     if (file != lastFile)
     {
-        c.any = c.structural = true;
+        c.any = c.structural = c.songWide = true;
         c.otherProject = file != File() ? file.getFileNameWithoutExtension() : String ("Untitled");
         return c;
     }
     if (same (comparable (last, false), comparable (project, false)))
         return c;
     c.any = true;
-    c.structural = ! same (comparable (last, true), comparable (project, true));
+    const auto before = comparable (last, true), after = comparable (project, true);
+    c.structural = ! same (before, after);
     c.words = cloud::describeChanges (last, project);
+    if (c.structural)
+    {
+        std::map<int, String> a, b;
+        String songA, songB;
+        split (before, a, songA);
+        split (after, b, songB);
+        c.songWide = songA != songB;   // ids in the same order, so the track list is the same too
+        for (auto& [id, text] : a)
+            if (auto it = b.find (id); it == b.end() || it->second != text)
+                c.channels.add (id);
+        for (auto& [id, text] : b)
+            if (a.find (id) == a.end())
+                c.channels.addIfNotAlreadyThere (id);
+    }
     return c;
 }
 
 bool SessionWatch::changesSong (const String& tool)
 {
-    return tool == "edit_session" || tool == "write_notes" || tool == "set_plugin_params";
+    return tool == "edit_session" || tool == "write_notes" || tool == "set_plugin_params" || tool == "import_midi";
 }
 } // namespace lathe::assistant

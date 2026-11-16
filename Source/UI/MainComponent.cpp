@@ -19,7 +19,7 @@ namespace menu
 {
     enum
     {
-        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome,
+        newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome, importMidi,
         undo = 100, redo, undoHistory, compareMixes, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
         toggleView = 300, toggleDetail, followPlayhead, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
@@ -895,6 +895,21 @@ void MainComponent::importAudio()
     });
 }
 
+void MainComponent::importMidi()
+{
+    chooser = std::make_unique<FileChooser> ("Import MIDI file", File::getSpecialLocation (File::userMusicDirectory), "*.mid;*.midi");
+    chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectMultipleItems,
+                          [this] (const FileChooser& fc)
+    {
+        // Onto the selected MIDI track at the insert marker; otherwise onto new tracks.
+        int trackIndex = -1;
+        for (size_t i = 0; i < edit.tracks.size(); ++i)
+            if (edit.tracks[i]->id == ctx.selection.trackId)
+                trackIndex = (int) i;
+        arrangement.importMidiFiles (fc.getResults(), trackIndex, edit.insertMarker);
+    });
+}
+
 //==============================================================================
 void MainComponent::changeListenerCallback (ChangeBroadcaster* source)
 {
@@ -1237,6 +1252,7 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::saveTemplate, "Save as Template...");
         m.addSeparator();
         item (menu::importAudio, "Import Audio...", cmd + "I");
+        item (menu::importMidi, "Import MIDI File...");
         item (menu::exportAudio, "Export Audio...", cmd + "Shift+E");
         m.addSeparator();
         item (menu::showFolder, "Show Project Folder", {}, edit.workDir.isDirectory());
@@ -1393,6 +1409,7 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::saveAs:        saveAs(); break;
         case menu::saveTemplate:  saveAsTemplate(); break;
         case menu::importAudio:   importAudio(); break;
+        case menu::importMidi:    importMidi(); break;
         case menu::exportAudio:   showExportDialog (ctx); break;
         case menu::showFolder:    edit.workDir.revealToUser(); break;
         case menu::quit:          JUCEApplication::getInstance()->systemRequestedQuit(); break;
