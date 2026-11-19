@@ -63,6 +63,22 @@ To take MIDI the other way, out to another program or to someone else:
 
 The file has the song's tempo and time signature, each track's name and MIDI channel, and the notes, controllers and pitch bend the clips play. A clip's hidden notes past its end are left out. A MIDI file holds notes, not sound: to send the sound, [export audio](exporting.md).
 
+## Converting audio to MIDI
+
+Turn a recording into notes: right-click an audio clip and choose **Convert to MIDI**, then what's on it:
+
+- **Melody**, for one note at a time: a voice, a bass, a lead line. Each note gets its pitch, where it starts, how long it is and how loud it was. Slides and vibrato are held as one note at the nearest pitch.
+- **Drums**, for a drum part: each hit becomes a kick, a snare or a closed hi-hat (General MIDI's notes 36, 38 and 42, which EZdrummer and other drum plug-ins follow). A hat played on a kick gives both notes.
+- **One Drum**, for a track of a single drum (a kick mic, a snare mic): every hit becomes the same note.
+
+The notes go on a new MIDI track right under the audio track, named after it ("Vocal MIDI"), one MIDI clip for each audio clip at the same place. Select several clips on a track first to convert them all. The audio is left as it is. Add an instrument to the new track to hear it: a drum plug-in for drums. It's one undo step.
+
+Timing is kept as played, not snapped to the grid, and softer notes get lower velocities.
+
+> **Note:** Convert to MIDI hears one note at a time, so chords (a strummed guitar, a piano) don't convert. On drums, toms and cymbals other than the hi-hat come out as one of the three, and a hi-hat hit at the same moment as the snare is usually missed: the snare's wires sound like it. Clean, separate recordings convert best; a full mix doesn't.
+
+The AI assistant can convert a track too (`convert_to_midi`), and then read and rework the notes.
+
 ## Writing parts in text
 
 The AI assistant writes and reads parts in a short text form, a drum grid or a line of notes per bar. You can read the same form: see [Note notation](notation.md).

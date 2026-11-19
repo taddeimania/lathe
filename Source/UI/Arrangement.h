@@ -46,6 +46,9 @@ public:
         a non-existent File when none of the selected clips is MIDI. */
     File writeSelectedMidiForDrag();
     int numSelectedMidiClips() const;
+    /** Convert to MIDI: finds the notes in an audio clip (and the other selected audio clips on its
+        track) and puts them on a new MIDI track under it. `kind` is an audiotomidi::Kind. */
+    void convertToMidi (int trackId, int clipId, int kind);
     void zoom (double factor, float anchorX);
     void scrollToPlayhead();
     /** Shows a spot: scrolls to the track and beat, selects the track, moves the start marker there. */

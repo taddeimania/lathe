@@ -1,6 +1,7 @@
 #include "AssistantTools.h"
 #include "Notation.h"
 #include "../Model/MidiImport.h"
+#include "../Model/AudioToMidi.h"
 #include "../Model/MidiExport.h"
 #include "../Engine/Mp3Writer.h"
 #include "AssistantShared.h"
@@ -96,6 +97,8 @@ var Tools::call (const String& name, const var& args, String& status)
         return writeNotes (args, status);
     if (name == "import_midi")
         return importMidi (args, status);
+    if (name == "convert_to_midi")
+        return convertToMidi (args, status);
     if (name == "export_midi")
         return exportMidi (args, status);
     if (name == "play")
@@ -799,6 +802,80 @@ var Tools::importMidi (const var& args, String& status)
     return toolText (text);
 }
 
+var Tools::convertToMidi (const var& args, String& status)
+{
+    auto source = findTrack (args.getProperty ("track", {}));
+    if (source == nullptr)
+        return toolText ("No track called \"" + args.getProperty ("track", {}).toString() + "\". describe_session lists them.", true);
+    if (! source->isAudio())
+        return toolText ("\"" + source->name + "\" isn't an audio track: convert_to_midi reads audio.", true);
+    audiotomidi::Kind kind;
+    if (! audiotomidi::parseKind (args.getProperty ("kind", {}).toString(), kind))
+        return toolText ("kind must be \"melody\", \"drums\" or \"one_drum\".", true);
+    if (engine.isRecording() || engine.isCountingIn())
+        return toolText ("Lathe is recording. Stop first (the stop tool keeps the take).", true);
+
+    std::vector<Clip> clips;
+    const bool oneClip = args.hasProperty ("clip") && ! args["clip"].isVoid();
+    for (auto& c : source->clips)
+        if (c.kind == ClipKind::audio && (! oneClip || c.id == (int) args["clip"]))
+            clips.push_back (c);
+    if (clips.empty())
+        return toolText (oneClip ? "\"" + source->name + "\" has no clip " + args["clip"].toString() + ". describe_track lists its clips."
+                                 : "\"" + source->name + "\" has no audio clips.", true);
+
+    AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::vector<std::pair<Clip, std::vector<Note>>> found;
+    String problem;
+    for (auto& c : clips)
+    {
+        auto r = audiotomidi::convertClip (c, kind, edit.tempo, formats);
+        if (r.notes.empty())
+            problem = r.error;
+        else
+            found.push_back ({ c, std::move (r.notes) });
+    }
+    if (found.empty())
+        return toolText ((problem.isNotEmpty() ? problem : String ("No notes found.")) + " Nothing was changed.", true);
+
+    edit.commitUndoStep();   // what was done before this call stays a step of its own
+    auto midi = audiotomidi::place (edit, *source, found);
+    edit.changed();
+    edit.labelNextStep ("Converted " + source->name + " to MIDI", true);
+    edit.commitUndoStep();
+
+    int notes = 0;
+    String text = "Made the MIDI track \"" + midi->name + "\" (id " + String (midi->id) + "), under \"" + source->name + "\", with no instrument yet:\n";
+    for (auto& c : midi->clips)
+    {
+        notes += (int) c.notes.size();
+        std::map<int, int> perPitch;
+        for (auto& n : c.notes) ++perPitch[n.pitch];
+        text << "- clip " << c.id << " \"" << c.name << "\", bars " << barText (c.start) << " to " << barText (c.end()) << ": "
+             << (int) c.notes.size() << " notes";
+        if (kind != audiotomidi::Kind::melody)
+        {
+            StringArray drums;
+            for (auto& [p, n] : perPitch)
+                drums.add (String (n) + " " + (p == audiotomidi::kick ? "kick (36)" : p == audiotomidi::snare ? "snare (38)" : p == audiotomidi::hihat ? "hi-hat (42)" : String (p)));
+            text << " (" << drums.joinIntoString (", ") << ")";
+        }
+        else if (! c.notes.empty())
+        {
+            int lo = 127, hi = 0;
+            for (auto& n : c.notes) { lo = jmin (lo, n.pitch); hi = jmax (hi, n.pitch); }
+            text << ", " << MidiMessage::getMidiNoteName (lo, true, true, 4) << " to " << MidiMessage::getMidiNoteName (hi, true, true, 4);
+        }
+        text << "\n";
+    }
+    if (problem.isNotEmpty())
+        text << "Some clips gave nothing: " << problem << "\n";
+    text << "Timing is as played, not snapped to the grid. In Lathe this is one undo step (Cmd/Ctrl+Z).";
+    status = "AI assistant: converted " + source->name + " to MIDI (" + String (notes) + " notes)";
+    return toolText (text);
+}
+
 var Tools::exportMidi (const var& args, String& status)
 {
     std::vector<midiexport::Item> items;
@@ -900,6 +977,8 @@ bool Tools::channelsTouched (const String& tool, const var& args, Array<int>& id
         return add (args.getProperty ("track", {}));
     if (tool == "import_midi")
         return args.hasProperty ("track") && ! args["track"].isVoid() && add (args["track"]);   // new tracks: song-wide
+    if (tool == "convert_to_midi")
+        return false;   // a new track: song-wide
 
     if (tool != "edit_session")
         return false;

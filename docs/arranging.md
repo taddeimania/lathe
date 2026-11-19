@@ -64,7 +64,7 @@ Paste goes to the **start marker** on the selected track: click an empty spot in
 
 ### More on a clip's menu
 
-Right-click a clip for **Rename...**, **Copy**, **Paste at Start Marker**, **Duplicate**, **Join**, **Split**, **Add Comment Here...** and **Delete**. An audio clip also has **Clip gain** (+6 to -12 dB) and **Show file**. A MIDI clip has **Edit notes...** and **Export as MIDI File...**.
+Right-click a clip for **Rename...**, **Copy**, **Paste at Start Marker**, **Duplicate**, **Join**, **Split**, **Add Comment Here...** and **Delete**. An audio clip also has **Clip gain** (+6 to -12 dB), **Convert to MIDI** (see [MIDI](midi.md#converting-audio-to-midi)) and **Show file**. A MIDI clip has **Edit notes...** and **Export as MIDI File...**.
 
 ## Importing audio
 

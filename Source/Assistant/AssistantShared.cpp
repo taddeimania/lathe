@@ -357,6 +357,19 @@ var toolDefinitions()
                                { "one_track", prop ("boolean", "Without track: put every part on one new track (default false)") } },
                              { "path" }),
                      false, true));
+    tools.add (tool ("convert_to_midi", "Convert audio to MIDI",
+                     "Finds the notes in an audio track's clips and puts them on a new MIDI track right under it, named "
+                     "\"<track> MIDI\", a MIDI clip for each audio clip at the same place, like the clip menu's Convert to MIDI. "
+                     "kind \"melody\" hears one note at a time (a voice, a bass, a lead; not chords): each note's pitch, start, "
+                     "length and velocity. kind \"drums\" finds each hit and makes it a kick (36), snare (38) or closed hi-hat (42), "
+                     "General MIDI's notes; \"one_drum\" makes every hit the same drum, for a track of one drum. The audio track is "
+                     "left as it is. The new track has no instrument: add one with edit_session (a drum plug-in for drums). "
+                     "Use get_notes to read what was found. One undo step.",
+                     schema ({ { "track", prop ("string", "The audio track (name or id)") },
+                               { "kind", prop ("string", "\"melody\", \"drums\" or \"one_drum\"") },
+                               { "clip", prop ("integer", "Just this clip (its id, from describe_track). Default: every audio clip on the track") } },
+                             { "track", "kind" }),
+                     false, true));
     tools.add (tool ("export_midi", "Export a MIDI file",
                      "Saves MIDI clips as a Standard MIDI File (.mid), like File > Export MIDI File: for another program, "
                      "or for someone to play. Without track: every MIDI track that has notes, one track each in the file, "

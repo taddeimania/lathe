@@ -29,6 +29,7 @@
 #include "UI/UndoHistory.h"
 #include "UI/GlobalKeys.h"
 #include "Model/StemFolder.h"
+#include "Model/AudioToMidi.h"
 #include "Compare/Compare.h"
 #include "Host/RemotePlugin.h"
 #if ! JUCE_WINDOWS
@@ -4930,6 +4931,163 @@ int main (int argc, char** argv)
                    + names + (files ? String() : " (files: " + audio.joinIntoString ("|") + ")"));
         }
 
+        // --- Convert to MIDI: a made-up melody and drum part, read back as notes
+        {
+            const double sr = 44100.0;
+            Random rnd (7);
+            // A sawtooth melody: E2 (a bass note), G2, a rest, A2 played twice (it dips between),
+            // then C4 with vibrato, and a quiet D4.
+            struct Part { double start, length, hz, gain, vibrato; };
+            const Part parts[] = { { 0.05, 0.30, 82.41, 0.6, 0 }, { 0.36, 0.30, 98.00, 0.6, 0 }, { 0.80, 0.25, 110.0, 0.6, 0 },
+                                   { 1.06, 0.25, 110.0, 0.6, 0 }, { 1.45, 0.50, 261.63, 0.6, 0.3 }, { 2.05, 0.30, 293.66, 0.06, 0 } };
+            std::vector<float> mel ((size_t) (sr * 2.6), 0.0f);
+            for (auto& p : parts)
+            {
+                double phase = 0.0;
+                for (int i = 0; i < (int) (p.length * sr); ++i)
+                {
+                    const double t = i / sr;
+                    const double hz = p.hz * std::pow (2.0, p.vibrato * std::sin (2.0 * MathConstants<double>::pi * 5.5 * t) / 12.0);
+                    phase += hz / sr;
+                    const double env = jmin (1.0, t / 0.01) * jmin (1.0, (p.length - t) / 0.02);
+                    mel[(size_t) (p.start * sr) + (size_t) i] += (float) (p.gain * env * (2.0 * (phase - std::floor (phase)) - 1.0));
+                }
+            }
+            for (auto& s : mel) s += (rnd.nextFloat() - 0.5f) * 0.002f;   // a little noise floor
+            const auto notes = audiotomidi::melody (mel.data(), (int) mel.size(), sr);
+            StringArray got;
+            bool timing = notes.size() == 6;
+            for (size_t i = 0; i < notes.size(); ++i)
+            {
+                got.add (String (notes[i].pitch) + "@" + String (notes[i].start, 3) + "+" + String (notes[i].length, 2) + " v" + String (notes[i].velocity, 2));
+                if (timing)
+                    timing = std::abs (notes[i].start - parts[i].start) < 0.03 && std::abs (notes[i].length - parts[i].length) < 0.06;
+            }
+            const bool pitches = notes.size() == 6 && notes[0].pitch == 40 && notes[1].pitch == 43 && notes[2].pitch == 45
+                                 && notes[3].pitch == 45 && notes[4].pitch == 60 && notes[5].pitch == 62;
+            const bool velocities = notes.size() == 6 && notes[0].velocity > 0.9f && notes[5].velocity < 0.6f && notes[5].velocity > 0.12f;
+            check (pitches && timing && velocities, "convert to MIDI, melody: bass and lead pitches, a note played twice, vibrato held as one note: "
+                                                     + got.joinIntoString (", "));
+
+            // Drums: a kick (a falling sine), a snare (a 190 Hz tone and noise), a closed hi-hat
+            // (bright noise), and a kick with a hat on top, over a quiet room.
+            auto kickAt = [&] (std::vector<float>& b, double at, float gain)
+            {
+                double phase = 0.0;
+                for (int i = 0; i < (int) (0.25 * sr); ++i)
+                {
+                    const double t = i / sr;
+                    phase += (50.0 + 70.0 * std::exp (-t * 30.0)) / sr;
+                    b[(size_t) (at * sr) + (size_t) i] += gain * (float) (jmin (1.0, (0.25 - t) / 0.01) * std::exp (-t * 14.0) * std::sin (2.0 * MathConstants<double>::pi * phase));
+                }
+            };
+            auto snareAt = [&] (std::vector<float>& b, double at, float gain)
+            {
+                IIRFilter hp;
+                hp.setCoefficients (IIRCoefficients::makeHighPass (sr, 1500.0));
+                for (int i = 0; i < (int) (0.2 * sr); ++i)
+                {
+                    const double t = i / sr;
+                    const float noise = hp.processSingleSampleRaw (rnd.nextFloat() * 2.0f - 1.0f);
+                    b[(size_t) (at * sr) + (size_t) i] += gain * (float) (jmin (1.0, (0.2 - t) / 0.01) * std::exp (-t * 18.0) * (0.5 * std::sin (2.0 * MathConstants<double>::pi * 190.0 * t) + 0.8 * noise));
+                }
+            };
+            auto hatAt = [&] (std::vector<float>& b, double at, float gain)
+            {
+                IIRFilter hp1, hp2;
+                hp1.setCoefficients (IIRCoefficients::makeHighPass (sr, 7000.0));
+                hp2.setCoefficients (IIRCoefficients::makeHighPass (sr, 7000.0));
+                for (int i = 0; i < (int) (0.06 * sr); ++i)
+                {
+                    const double t = i / sr;
+                    b[(size_t) (at * sr) + (size_t) i] += gain * (float) std::exp (-t * 60.0)
+                        * hp2.processSingleSampleRaw (hp1.processSingleSampleRaw (rnd.nextFloat() * 2.0f - 1.0f));
+                }
+            };
+            std::vector<float> kit ((size_t) (sr * 2.4), 0.0f);
+            kickAt (kit, 0.10, 0.9f); hatAt (kit, 0.35, 0.5f); snareAt (kit, 0.60, 0.7f); hatAt (kit, 0.85, 0.25f);
+            kickAt (kit, 1.10, 0.9f); hatAt (kit, 1.10, 0.5f); snareAt (kit, 1.60, 0.35f); kickAt (kit, 1.85, 0.45f);
+            for (auto& s : kit) s += (rnd.nextFloat() - 0.5f) * 0.001f;
+            const auto hits = audiotomidi::drums (kit.data(), (int) kit.size(), sr, false);
+            StringArray hitText;
+            for (auto& h : hits)
+                hitText.add (String (h.pitch) + "@" + String (h.start, 3) + " v" + String (h.velocity, 2));
+            struct Want { int pitch; double at; };
+            const Want want[] = { { 36, 0.10 }, { 42, 0.35 }, { 38, 0.60 }, { 42, 0.85 }, { 36, 1.10 }, { 42, 1.10 }, { 38, 1.60 }, { 36, 1.85 } };
+            bool kitOk = hits.size() == 8;
+            for (size_t i = 0; kitOk && i < 8; ++i)
+                kitOk = hits[i].pitch == want[i].pitch && std::abs (hits[i].start - want[i].at) < 0.008;
+            const bool kitVel = kitOk && hits[0].velocity > 0.9f && hits[7].velocity < hits[0].velocity - 0.1f
+                                && hits[6].velocity < hits[2].velocity - 0.1f;
+            check (kitOk && kitVel, "convert to MIDI, drums: kick, snare and hi-hat told apart, a kick and hat together, softer hits softer: "
+                                    + hitText.joinIntoString (", "));
+
+            // One drum: a snare track, every hit a snare, ghost notes included.
+            std::vector<float> sn ((size_t) (sr * 1.5), 0.0f);
+            for (int k = 0; k < 4; ++k)
+                snareAt (sn, 0.1 + k * 0.3, k == 2 ? 0.15f : 0.7f);
+            const auto snares = audiotomidi::drums (sn.data(), (int) sn.size(), sr, true);
+            bool allSnare = snares.size() == 4;
+            for (auto& h : snares)
+                allSnare = allSnare && h.pitch == 38;
+            check (allSnare && snares[2].velocity < snares[1].velocity, "convert to MIDI, one drum: every hit the same drum ("
+                                                                       + String ((int) snares.size()) + " hits)");
+
+            // A clip: its own stretch of the file, in beats at the song's tempo.
+            const auto wav = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-test-melody.wav");
+            {
+                wav.deleteFile();
+                WavAudioFormat format;
+                std::unique_ptr<AudioFormatWriter> w (format.createWriterFor (new FileOutputStream (wav), sr, 1, 24, {}, 0));
+                AudioBuffer<float> b (1, (int) mel.size());
+                b.copyFrom (0, 0, mel.data(), (int) mel.size());
+                w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+            }
+            AudioFormatManager formats;
+            formats.registerBasicFormats();
+            Clip clip;
+            clip.kind = ClipKind::audio;
+            clip.file = wav;
+            clip.sourceOffset = (int64) (0.70 * sr);     // starts at the rest before the two A2s
+            clip.length = 1.0 * 120.0 / 60.0;            // a second at 120 BPM
+            const auto r = audiotomidi::convertClip (clip, audiotomidi::Kind::melody, 120.0, formats);
+            const bool clipOk = r.error.isEmpty() && r.notes.size() >= 3 && r.notes[0].pitch == 45 && r.notes[1].pitch == 45
+                                && std::abs (r.notes[0].start - 0.2) < 0.06 && r.notes.back().start + r.notes.back().length <= clip.length + 1.0e-9;
+            AudioFormatManager none;
+            const auto unreadable = audiotomidi::convertClip (clip, audiotomidi::Kind::melody, 120.0, none);
+
+            // The assistant's tool: a new MIDI track right under the audio one, one undo step.
+            auto vox = e.addTrack (TrackKind::audio, "Lead Vox");
+            Clip whole = clip;
+            whole.id = e.newId();
+            whole.name = "Take 1";
+            whole.sourceOffset = 0;
+            whole.start = 8.0;
+            whole.length = 2.6 * e.tempo / 60.0;
+            vox->clips.push_back (whole);
+            e.changed();
+            const int before = (int) e.tracks.size();
+            auto cr = tools.call ("convert_to_midi", args2 ({ { "track", "Lead Vox" }, { "kind", "melody" } }), status);
+            int voxAt = -1;
+            for (size_t k = 0; k < e.tracks.size(); ++k)
+                if (e.tracks[k]->id == vox->id) voxAt = (int) k;
+            auto made = voxAt >= 0 && voxAt + 1 < (int) e.tracks.size() ? e.tracks[(size_t) voxAt + 1] : nullptr;
+            const bool toolOk = made != nullptr && made->name == "Lead Vox MIDI" && made->isMidi() && made->clips.size() == 1
+                                && made->clips[0].start == 8.0 && made->clips[0].name == "Take 1" && made->clips[0].notes.size() == 6
+                                && (int) e.tracks.size() == before + 1;
+            const bool undone = e.undo() && (int) e.tracks.size() == before;
+            const auto wrong = tools.call ("convert_to_midi", args2 ({ { "track", "Lead Vox" }, { "kind", "chords" } }), status);
+            e.removeTrack (vox->id);
+            e.changed();
+            check (toolOk && undone && text (wrong).contains ("kind must be"),
+                   "convert_to_midi: a MIDI track under the audio one, a clip per clip, one undo step (" + text (cr).upToFirstOccurrenceOf ("\n", false, false) + ")");
+            wav.deleteFile();
+            audiotomidi::Kind kind;
+            check (clipOk && unreadable.error.isNotEmpty() && audiotomidi::parseKind ("one drum", kind) && kind == audiotomidi::Kind::oneDrum,
+                   "convert to MIDI, a clip: from its offset, in beats, cut at its end (" + String ((int) r.notes.size()) + " notes"
+                   + (r.notes.empty() ? String() : ", first " + String (r.notes[0].pitch) + " at beat " + String (r.notes[0].start, 2)) + ")");
+        }
+
         // --- MIDI export: what the clips play, read back by the importer
         {
             auto lead = e.addTrack (TrackKind::midi, "Lead");
@@ -5744,7 +5902,7 @@ int main (int argc, char** argv)
                "initialize: agrees on the client's protocol version and offers tools");
         check (post (R"({"jsonrpc":"2.0","method":"notifications/initialized"})", bearer).status == 202, "notifications get 202, no body");
         const auto listed = JSON::parse (post (R"({"jsonrpc":"2.0","id":"a","method":"tools/list"})", bearer).body);
-        check (listed["result"]["tools"].size() == 22 && listed["id"].toString() == "a", "tools/list has the twenty-two tools");
+        check (listed["result"]["tools"].size() == 23 && listed["id"].toString() == "a", "tools/list has the twenty-three tools");
 
         String body;
         const int code = postToLathe (*ep, R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"describe_track","arguments":{"track":"Synth"}}})", body, 5000);

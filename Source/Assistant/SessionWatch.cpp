@@ -142,6 +142,6 @@ SessionChange SessionWatch::compare (const var& project, const File& file) const
 
 bool SessionWatch::changesSong (const String& tool)
 {
-    return tool == "edit_session" || tool == "write_notes" || tool == "set_plugin_params" || tool == "import_midi";
+    return tool == "edit_session" || tool == "write_notes" || tool == "set_plugin_params" || tool == "import_midi" || tool == "convert_to_midi";
 }
 } // namespace lathe::assistant

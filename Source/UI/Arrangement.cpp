@@ -2,6 +2,7 @@
 #include "Notes.h"
 #include "../Engine/ClipJoin.h"
 #include "../Model/MidiImport.h"
+#include "../Model/AudioToMidi.h"
 #include <set>
 
 namespace lathe
@@ -1510,6 +1511,11 @@ private:
             for (float db : { 6.0f, 3.0f, 0.0f, -3.0f, -6.0f, -12.0f })
                 gain.addItem (100 + (int) db, theme::formatDb (db) + " dB", true, std::abs (c->gainDb - db) < 0.01f);
             m.addSubMenu ("Clip gain", gain);
+            PopupMenu convert;
+            convert.addItem (40, "Melody (one note at a time: a voice, a bass, a lead)");
+            convert.addItem (41, "Drums (kick, snare and hi-hat)");
+            convert.addItem (42, "One Drum (every hit the same note)");
+            m.addSubMenu ("Convert to MIDI", convert);
             m.addItem (11, "Show file");
         }
         m.addSeparator();
@@ -1546,6 +1552,9 @@ private:
             else if (r == 3) view->splitSelectedClip();
             else if (r == 4) view->deleteSelectedClip();
             else if (r == 11) clip->file.revealToUser();
+            else if (r >= 40 && r <= 42)
+                view->convertToMidi (track->id, clipId, (int) (r == 40 ? audiotomidi::Kind::melody
+                                                             : r == 41 ? audiotomidi::Kind::drums : audiotomidi::Kind::oneDrum));
             else if (r >= 90 && r <= 110)
             {
                 context->edit.beginClipEdit();
@@ -2269,6 +2278,110 @@ void ArrangementView::importMidiFiles (const Array<File>& files, int trackIndex,
     else
         status << ".";
     ctx.showStatus (status + tempoNote + (problem.isNotEmpty() ? " (" + problem + ")" : String()));
+}
+
+//==============================================================================
+namespace
+{
+/** Finds the notes off the message thread, with a progress bar and Cancel, then hands them back. */
+class ConvertThread : public ThreadWithProgressWindow
+{
+public:
+    using Done = std::function<void (std::vector<std::pair<Clip, std::vector<Note>>>, String error)>;
+
+    ConvertThread (std::vector<Clip> c, audiotomidi::Kind k, double t, AudioFormatManager& f, Done d)
+        : ThreadWithProgressWindow ("Converting to MIDI...", true, true, 10000, "Cancel"),
+          clips (std::move (c)), kind (k), tempo (t), formats (f), done (std::move (d)) {}
+
+    void run() override
+    {
+        for (size_t i = 0; i < clips.size(); ++i)
+        {
+            const auto r = audiotomidi::convertClip (clips[i], kind, tempo, formats, [this, i] (double p)
+            {
+                setProgress ((i + p) / (double) clips.size());
+                return ! threadShouldExit();
+            });
+            if (r.cancelled || threadShouldExit())
+                return;
+            if (r.notes.empty())
+                error = r.error;
+            else
+                found.push_back ({ clips[i], r.notes });
+        }
+    }
+
+    void threadComplete (bool cancelled) override
+    {
+        if (! cancelled)
+            done (std::move (found), error);
+        MessageManager::callAsync ([this] { delete this; });
+    }
+
+private:
+    std::vector<Clip> clips;
+    audiotomidi::Kind kind;
+    double tempo;
+    AudioFormatManager& formats;
+    Done done;
+    std::vector<std::pair<Clip, std::vector<Note>>> found;
+    String error;
+};
+} // namespace
+
+void ArrangementView::convertToMidi (int trackId, int clipId, int kindValue)
+{
+    const auto kind = (audiotomidi::Kind) kindValue;
+    auto track = ctx.edit.findTrack (trackId);
+    if (track == nullptr || track->findClip (clipId) == nullptr)
+        return;
+
+    // The clicked clip, or every selected audio clip on its track if it's one of them.
+    std::vector<Clip> clips;
+    bool clickedIsSelected = false;
+    for (auto& s : getSelectedClips())
+        if (s.track == track && s.clip->id == clipId)
+            clickedIsSelected = true;
+    if (clickedIsSelected)
+    {
+        for (auto& s : getSelectedClips())
+            if (s.track == track && s.clip->kind == ClipKind::audio)
+                clips.push_back (*s.clip);
+    }
+    else
+        clips.push_back (*track->findClip (clipId));
+
+    auto* context = &ctx;
+    const String sourceName = track->name;
+    auto* thread = new ConvertThread (clips, kind, ctx.edit.tempo, ctx.pool.formats,
+                                      [context, trackId, sourceName, kind] (auto found, String error)
+    {
+        auto source = context->edit.findTrack (trackId);
+        if (source == nullptr || source->name != sourceName)
+        {
+            context->showStatus ("The track was changed while Lathe was converting it, so nothing was added.");
+            return;
+        }
+        if (found.empty())
+        {
+            context->showStatus (error.isNotEmpty() ? error : String ("No notes found."));
+            return;
+        }
+        auto& edit = context->edit;
+        edit.beginClipEdit();
+        auto midi = audiotomidi::place (edit, *source, found);
+        int notes = 0;
+        for (auto& [clip, n] : found)
+            notes += (int) n.size();
+        edit.labelNextStep ("Converted " + sourceName + " to MIDI", false);
+        edit.changed();
+        context->selection.trackId = midi->id;
+        context->showStatus ("Found " + String (notes) + (notes == 1 ? " note" : " notes") + " on the new track \"" + midi->name + "\". "
+                             + (kind == audiotomidi::Kind::melody ? "Add an instrument to hear it."
+                                                                 : "Add a drum plug-in (EZdrummer, say) to hear it: kick, snare and hi-hat are General MIDI's notes 36, 38 and 42.")
+                             + (error.isNotEmpty() ? " (" + error + ")" : String()));
+    });
+    thread->launchThread();
 }
 
 //==============================================================================

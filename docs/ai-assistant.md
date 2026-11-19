@@ -30,6 +30,7 @@ Options > **AI Assistant...** > *Let AI apps on this computer connect to Lathe*.
 | `write_notes` | Writes notes into a MIDI track's bars, as a [notation](notation.md) pattern or a JSON list, replacing what was there or adding to it, with an optional repeat. One undo step. |
 | `export_midi` | Saves MIDI clips as a .mid file, as File > Export MIDI File does: every MIDI track, one track, or one clip. Into the song's Exports folder unless you ask for a place; it never replaces a file. |
 | `import_midi` | Puts a MIDI file (.mid) from your computer into the song, as dragging it onto the arrangement does: onto one MIDI track as one clip, or onto new MIDI tracks, one per part of the file. It says the file's tempo and time signature, but doesn't change the song's. One undo step. |
+| `convert_to_midi` | Finds the notes in an audio track's clips, as the clip menu's Convert to MIDI does: a melody (one note at a time) or drums (kick, snare, hi-hat, or every hit one drum). They go on a new MIDI track under it. One undo step. |
 | `notation_guide` | The full reference for the note notation, for the assistant to read before writing a detailed part. |
 | `play` | Starts playback, optionally from a bar. With `to_bar`, Lathe stops by itself exactly at that bar. With `loop_times`, it plays the loop that many times and stops at the loop end. Either way the playhead then goes back to the insert marker, as Stop does. |
 | `stop` | Stops, like the Stop button. Stop while recording keeps the take. |
