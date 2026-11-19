@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.6
+
+- **Convert audio to MIDI.** Right-click an audio clip > **Convert to MIDI**: a sung or played melody becomes
+  its notes, and a drum recording becomes kick, snare and hi-hat notes for a drum plug-in such as EZdrummer.
+  They go on a new MIDI track under it, timed as played, with softer notes softer. One note at a time: chords
+  don't convert yet. The AI assistant can do it too.
+
 ## New in 0.13.5
 
 - **Save works with a plug-in's window in front.** With EZdrummer, an amp sim or any other plug-in's window
