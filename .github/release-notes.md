@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.7
+
+- **Bounce a group to one audio track.** Right-click a track group's header > **Bounce Group to Audio Track**:
+  five drum tracks become one stereo drum track, with the group bus's plug-ins and fader in it. It goes under
+  the group, and the group is muted but kept, so you can go back. One undo takes it back.
+
 ## New in 0.13.6
 
 - **Convert audio to MIDI.** Right-click an audio clip > **Convert to MIDI**: a sung or played melody becomes
