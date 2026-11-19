@@ -3,6 +3,19 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.5
+
+- **Save works with a plug-in's window in front.** With EZdrummer, an amp sim or any other plug-in's window
+  in front, Cmd/Ctrl+S went to the plug-in, which kept it, and nothing saved. Lathe now takes Save, Save As,
+  Open, New and Export Audio first, from any of its windows; everything else (a plug-in's own undo or copy)
+  still goes to the plug-in.
+- **Import a folder of stems as a new project.** **File > Import Folder as New Project...** puts every audio
+  and MIDI file in a folder on its own track, named after the file (without the song name they all start
+  with, or the number in front), in the files' order. The project runs at the stems' sample rate, and takes
+  the tempo from a MIDI file if there is one.
+- **The Lathe guide** at getlathe.app/docs walks through everything Lathe does, with pictures drawn from
+  the app.
+
 ## New in 0.13.4
 
 - **Export MIDI files.** Choose **File > Export MIDI File...** for every MIDI track, right-click a clip for
