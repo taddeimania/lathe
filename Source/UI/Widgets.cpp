@@ -3,6 +3,7 @@
 #include "Dialogs.h"
 #include "../Host/RemotePlugin.h"
 #include "GlobalKeys.h"
+#include "../Engine/Bounce.h"
 
 namespace lathe
 {
@@ -767,6 +768,82 @@ private:
 };
 
 constexpr int kOtherColour = 99;
+
+/** Bounce Group to Audio Track: the render off the message thread, with a progress bar and
+    Cancel, then the new track, as one undo step. */
+class BounceThread : public ThreadWithProgressWindow
+{
+public:
+    using Done = std::function<void (bounce::Bounced)>;
+
+    BounceThread (Engine& e, bounce::Plan p, File f, Done d)
+        : ThreadWithProgressWindow ("Bouncing \"" + p.groupName + "\"...", true, true, 10000, "Cancel"),
+          engine (e), plan (std::move (p)), folder (std::move (f)), done (std::move (d)) {}
+
+    void run() override
+    {
+        result = bounce::render (engine, plan, folder, 5.0, [this] (double p)
+        {
+            setProgress (p);
+            return ! threadShouldExit();
+        });
+    }
+
+    void threadComplete (bool) override
+    {
+        done (std::move (result));
+        MessageManager::callAsync ([this] { delete this; });
+    }
+
+private:
+    Engine& engine;
+    bounce::Plan plan;
+    File folder;
+    Done done;
+    bounce::Bounced result;
+};
+
+void bounceGroup (AppContext& ctx, int groupId)
+{
+    auto plan = bounce::plan (ctx.edit, groupId);
+    if (plan.problem.isNotEmpty())
+    {
+        ctx.showStatus (plan.problem);
+        return;
+    }
+    if (ctx.engine.isPlaying())
+        ctx.engine.stop();
+    ctx.edit.ensureWorkDir();
+
+    auto* context = &ctx;
+    auto* thread = new BounceThread (ctx.engine, plan, ctx.edit.getAudioDir(), [context, plan] (bounce::Bounced r)
+    {
+        if (r.error.isNotEmpty())
+        {
+            context->showStatus (r.error);
+            return;
+        }
+        auto& edit = context->edit;
+        if (edit.findGroup (plan.groupId) == nullptr)
+        {
+            r.file.deleteFile();
+            context->showStatus ("The group was removed while Lathe was bouncing it, so nothing was added.");
+            return;
+        }
+        edit.beginClipEdit();
+        auto track = bounce::place (edit, plan, r);
+        edit.labelNextStep ("Bounced " + plan.groupName + " to an audio track", false);
+        edit.changed();
+        context->selection.trackId = track->id;
+        context->selection.trackIds = { track->id };
+        if (context->selectionChanged)
+            context->selectionChanged();
+        context->showStatus ("Bounced \"" + plan.groupName + "\" onto \"" + track->name + "\" and muted the group (unmute it to go back)."
+                             + (plan.anySends ? " Its sends to returns aren't in the bounce: turn up the new track's sends for those."
+                                              : String()));
+    });
+    thread->launchThread();
+}
 } // namespace
 
 void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGroup> group)
@@ -798,6 +875,7 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
     }
     m.addSeparator();
     m.addItem (8, "Export This Group...");
+    m.addItem (9, "Bounce Group to Audio Track");
     m.addItem (4, "Ungroup (keep the tracks)");
 
     Component::SafePointer<Component> safeAnchor (&anchor);
@@ -825,6 +903,7 @@ void showGroupMenu (AppContext& ctx, Component& anchor, std::shared_ptr<TrackGro
                 ids.insert (group->busId);
             showExportDialog (*context, ids);
         }
+        else if (r == 9)   bounceGroup (*context, group->id);
         else if (r >= 100) { group->colour = getTrackPalette()[r - 100]; edit.touched(); }
     });
 }

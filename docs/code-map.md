@@ -9,6 +9,7 @@ Source/
   Model/StemFolder.h    File > Import Folder as New Project: which files in a folder, in what order, track names
   Model/AudioToMidi.*   Convert to MIDI: a melody's notes (the Tuner's YIN) and drum hits (three bands) in an audio clip
   Engine/Engine.*       audio callback, render snapshot, PDC, recording, metronome, export
+  Engine/Bounce.*       Bounce Group to Audio Track: a group's bus (or its tracks summed) rendered onto a new audio track
   Engine/Mp3Writer.*    MP3 export through LAME (fetched by CMake, cmake/lame/config.h)
   Cloud/Milestones.*    the opt-in, anonymous one-time milestones (asked once, MilestonesPanel in UI/Dialogs.cpp)
   Cloud/CrashReports.*  crash reports: written on a crash, sent next launch only if the person says so (CrashPanel in UI/Dialogs.cpp)

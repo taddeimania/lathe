@@ -1164,6 +1164,7 @@ void Edit::commitUndoStep()
         info.label = pendingLabel.isNotEmpty() ? pendingLabel : describeStep (*committed, *now);
         info.byAssistant = pendingByAssistant;
         info.timeMs = Time::currentTimeMillis();
+        info.groupsMuted = pendingGroupMutes;
         undoStack.push_back (committed);
         doneInfo.push_back (info);
         if (undoStack.size() > 100)
@@ -1177,6 +1178,7 @@ void Edit::commitUndoStep()
     }
     pendingLabel.clear();
     pendingByAssistant = false;
+    pendingGroupMutes.clear();
     committed = now;
 }
 
@@ -1184,6 +1186,15 @@ void Edit::labelNextStep (const String& label, bool byAssistant)
 {
     pendingLabel = label;
     pendingByAssistant = byAssistant;
+}
+
+void Edit::muteGroupInNextStep (int groupId)
+{
+    if (auto g = findGroup (groupId); g != nullptr && ! g->mute.load())
+    {
+        g->mute = true;
+        pendingGroupMutes.push_back (groupId);
+    }
 }
 
 bool Edit::goToDepth (int depth)
@@ -1219,6 +1230,7 @@ void Edit::clearUndo()
     undoneInfo.clear();
     pendingLabel.clear();
     pendingByAssistant = false;
+    pendingGroupMutes.clear();
     committed = capture();
     historyChanged.sendChangeMessage();
 }
@@ -1238,6 +1250,9 @@ bool Edit::undo()
     {
         const ScopedValueSetter<bool> busy (restoring, true);
         restore (*committed);
+        for (auto id : undoneInfo.back().groupsMuted)
+            if (auto g = findGroup (id))
+                g->mute = false;
         changed();
     }
     return true;
@@ -1258,6 +1273,9 @@ bool Edit::redo()
     {
         const ScopedValueSetter<bool> busy (restoring, true);
         restore (*committed);
+        for (auto id : doneInfo.back().groupsMuted)
+            if (auto g = findGroup (id))
+                g->mute = true;
         changed();
     }
     return true;

@@ -165,6 +165,7 @@ target_sources(Lathe PRIVATE
     Source/Model/MidiImport.cpp
     Source/Model/MidiExport.cpp
     Source/Model/AudioToMidi.cpp
+    Source/Engine/Bounce.cpp
     Source/Model/ChannelEq.cpp
     Source/Cloud/CloudClient.cpp
     Source/Cloud/Packing.cpp
@@ -388,6 +389,7 @@ if(LATHE_BUILD_TESTS)
         Source/Model/MidiImport.cpp
         Source/Model/MidiExport.cpp
         Source/Model/AudioToMidi.cpp
+        Source/Engine/Bounce.cpp
         Source/Model/ChannelEq.cpp
         Source/Cloud/CloudClient.cpp
         Source/Cloud/Packing.cpp

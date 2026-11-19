@@ -39,6 +39,7 @@ A [track group](arranging.md#track-groups) can have its own bus: a channel every
 - Tracks that join the group later play through it too; tracks that leave go back to the master.
 - The bus shows in the mixer with the returns.
 - Right-click the group header > **Remove Group Bus** to send the tracks straight to the master again.
+- Right-click the group header > **Bounce Group to Audio Track** to record what the bus plays onto one audio track (see [Bounce a group to one audio track](arranging.md#bounce-a-group-to-one-audio-track)).
 
 Without a bus, a group only controls its tracks together. With one, their sound is mixed and processed together too. In the mixer, members show the group's name above their own.
 

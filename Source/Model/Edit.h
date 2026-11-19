@@ -353,10 +353,15 @@ public:
         String label;
         bool byAssistant = false;
         int64 timeMs = 0;
+        std::vector<int> groupsMuted;   // groups this step muted (muteGroupInNextStep)
     };
     /** Names the next step and says who made it, instead of the description Lathe works out
         by comparing before and after. The AI assistant's tools call this before they commit. */
     void labelNextStep (const String& label, bool byAssistant);
+    /** Mutes a group as part of the next step: undo doesn't otherwise touch mutes, but undoing
+        this step unmutes it (and redo mutes it again). For Bounce Group to Audio Track, so taking
+        the bounce back doesn't leave the group silent. */
+    void muteGroupInNextStep (int groupId);
     /** The steps that can be undone, oldest first (the last one is what Cmd/Ctrl+Z undoes). */
     const std::vector<StepInfo>& getDoneSteps() const      { return doneInfo; }
     /** The steps that were undone and can be redone, the next redo first. */
@@ -385,6 +390,7 @@ private:
     std::vector<std::shared_ptr<const EditSnapshot>> undoStack, redoStack;
     std::vector<StepInfo> doneInfo, undoneInfo;   // parallel to undoStack and redoStack
     String pendingLabel;
+    std::vector<int> pendingGroupMutes;
     bool pendingByAssistant = false;
     std::shared_ptr<const EditSnapshot> committed;   // the state after the last step
     bool stepPending = false;

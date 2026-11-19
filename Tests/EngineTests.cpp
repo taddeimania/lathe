@@ -30,6 +30,7 @@
 #include "UI/GlobalKeys.h"
 #include "Model/StemFolder.h"
 #include "Model/AudioToMidi.h"
+#include "Engine/Bounce.h"
 #include "Compare/Compare.h"
 #include "Host/RemotePlugin.h"
 #if ! JUCE_WINDOWS
@@ -3580,6 +3581,115 @@ int main (int argc, char** argv)
         auto b2 = e.makeGroupBus (drums->id);
         e.removeTrack (b2->id);
         check (drums->busId == -1 && e.findGroupBus (drums->id) == nullptr, "deleting the bus channel itself is handled too");
+    }
+
+
+    std::cout << "Bounce Group to Audio Track" << std::endl;
+    {
+        const auto folder = dir.getChildFile ("bounce");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        auto writeDc = [&] (const String& name, float value, int samples)
+        {
+            const auto f = folder.getChildFile (name + ".wav");
+            AudioBuffer<float> b (1, samples);
+            FloatVectorOperations::fill (b.getWritePointer (0), value, samples);
+            std::unique_ptr<OutputStream> stream (f.createOutputStream());
+            WavAudioFormat wav;
+            auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (48000.0).withNumChannels (1).withBitsPerSample (32)
+                                                       .withSampleFormat (AudioFormatWriterOptions::SampleFormat::floatingPoint));
+            w->writeFromAudioSampleBuffer (b, 0, samples);
+            return f;
+        };
+        Edit e;
+        e.sampleRate = 48000.0;
+        e.setTempo (120.0);   // a beat is 24000 samples
+        auto kick = e.addTrack (TrackKind::audio, "Kick");
+        auto snare = e.addTrack (TrackKind::audio, "Snare");
+        auto bass = e.addTrack (TrackKind::audio, "Bass");
+        auto addClip = [&] (Track& t, const File& f, double start)
+        {
+            Clip c;
+            c.id = e.newId();
+            c.kind = ClipKind::audio;
+            c.name = f.getFileNameWithoutExtension();
+            c.file = f;
+            c.start = start;
+            c.length = 1.0;
+            t.clips.push_back (c);
+        };
+        addClip (*kick, writeDc ("kick", 0.2f, 24000), 1.0);
+        addClip (*snare, writeDc ("snare", 0.3f, 24000), 1.0);
+        addClip (*bass, writeDc ("bass", 0.4f, 24000), 1.0);
+        auto pad = e.addTrack (TrackKind::audio, "Pad");
+        auto empty = e.createGroup ({ pad->id }, "Empty");
+        auto drums = e.createGroup ({ kick->id, snare->id }, "Drums");
+
+        Engine eng (host, pool, props);
+        eng.setEdit (&e);
+        FakeDevice dev (2, 2, 0, 0);
+        eng.audioDeviceAboutToStart (&dev);
+        eng.rebuild();
+
+        AudioFormatManager fm;
+        fm.registerBasicFormats();
+        auto sampleAt = [&] (const File& f, int at)
+        {
+            std::unique_ptr<AudioFormatReader> r (fm.createReaderFor (f));
+            if (r == nullptr || at >= r->lengthInSamples) return -1.0f;
+            AudioBuffer<float> b (2, 1);
+            r->read (&b, 0, 1, at, true, true);
+            return b.getSample (0, 0);
+        };
+
+        check (bounce::plan (e, empty->id).problem.isNotEmpty(), "a group with no clips can't be bounced");
+
+        // No bus: the members added up after their faders, and not the bass.
+        kick->volumeDb = -6.0206f;
+        auto p = bounce::plan (e, drums->id);
+        check (p.problem.isEmpty() && p.taps.size() == 2 && std::abs (p.startBeat - 1.0) < 1e-9 && std::abs (p.endBeat - 2.0) < 1e-9,
+               "the plan covers the group's tracks from its first clip to its last");
+        auto r = bounce::render (eng, p, folder, 1.0);
+        check (r.error.isEmpty() && r.file.existsAsFile(), "the bounce renders " + r.error);
+        const float noBus = sampleAt (r.file, 1000);
+        check (std::abs (noBus - 0.4f) < 0.005f, "without a bus it's the tracks added up after their faders: 0.1 + 0.3 (got " + String (noBus, 4) + ")");
+        check (std::abs (r.startBeat - 1.0) < 1e-9 && std::abs (r.lengthBeats - 1.0) < 0.01,
+               "it starts at the first clip and stops where the sound does, not at the tail (" + String (r.lengthBeats, 3) + " beats)");
+
+        // Placing it: under the group, outside it, in its colour, and the group muted.
+        e.beginClipEdit();
+        auto t = bounce::place (e, p, r);
+        e.changed();
+        check (t->name == "Drums (bounced)" && t->isAudio() && t->groupId == -1 && t->colour == drums->colour && t->input.channel < 0 && ! t->input.isTrack()
+                 && e.tracks.size() == 5 && e.tracks[2] == t && e.tracks[3] == bass,
+               "the new track goes right under the group's last track, outside the group, in its colour");
+        check (t->clips.size() == 1 && std::abs (t->clips[0].start - 1.0) < 1e-9 && drums->mute.load(),
+               "it has the bounce as one clip at the same place, and the group is muted");
+        e.commitUndoStep();
+        e.undo();
+        check (e.tracks.size() == 4 && e.findGroup (drums->id) != nullptr && ! e.findGroup (drums->id)->mute.load(), "one undo takes the track away and unmutes the group (" + String ((int) e.tracks.size()) + " tracks, muted " + String (e.findGroup (drums->id) != nullptr && e.findGroup (drums->id)->mute.load() ? 1 : 0) + ")");
+        e.redo();
+        drums = e.findGroup (drums->id);
+        kick = e.findTrack (kick->id);
+        check (e.tracks.size() == 5 && drums->mute.load(), "and redo brings them back");
+
+        // With a bus (its fader counts), and bouncing again while the group is muted.
+        auto bus = e.makeGroupBus (drums->id);
+        bus->volumeDb = -6.0206f;
+        eng.rebuild();
+        p = bounce::plan (e, drums->id);
+        check (p.taps == std::set<int> { bus->id }, "with a bus, the bounce is the bus");
+        auto r2 = bounce::render (eng, p, folder, 1.0);
+        const float withBus = sampleAt (r2.file, 1000);
+        check (r2.error.isEmpty() && std::abs (withBus - 0.2f) < 0.005f,
+               "the bus fader is in the bounce, and a muted group still bounces (got " + String (withBus, 4) + ") " + r2.error);
+        check (r2.file != r.file, "a second bounce gets its own file");
+
+        bus->mute = true;
+        auto r3 = bounce::render (eng, p, folder, 1.0);
+        check (r3.error.contains ("silent") && ! r3.file.existsAsFile(), "a muted bus gives no bounce, and no file is left behind");
+        eng.setEdit (nullptr);
+        folder.deleteRecursively();
     }
 
     std::cout << "Cloud: change summaries" << std::endl;
