@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.8
+
+- **A progress bar when importing audio.** Importing used to freeze Lathe until every file was copied and
+  converted. Now the copying happens in the background, with a progress bar that names the file it's on
+  ("Bass.wav (2 of 5)") and a **Cancel** button. Importing a folder of stems works the same way.
+
 ## New in 0.13.7
 
 - **Bounce a group to one audio track.** Right-click a track group's header > **Bounce Group to Audio Track**:
