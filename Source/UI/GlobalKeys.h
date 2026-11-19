@@ -30,4 +30,19 @@ bool handleSpace();
 
 /** Lathe's own part of the decision: false while a dialog is open or a text field has focus. */
 bool spaceIsForPlayback();
+
+//==============================================================================
+// The file shortcuts (Cmd/Ctrl+S, Shift+S, O, N, Shift+E) from Lathe's other windows. A plug-in's
+// window keeps the keys it's given, so with EZdrummer or an amp sim in front, Cmd+S used to go
+// to the plug-in and nothing saved. The same hook as Space (Mac, Windows) hands these to Lathe
+// first, when the key is pressed in one of Lathe's own windows (not the Save panel or another
+// app's); plug-in windows pass them on elsewhere. Everything else (Cmd+Z, Cmd+C...) stays with
+// the plug-in, which may have its own undo and copy.
+//==============================================================================
+
+/** What to do with a shortcut from one of Lathe's windows: true if it was used. nullptr removes it. */
+void installCommands (std::function<bool (const KeyPress&)> handler);
+
+/** Runs the handler for a key press with Cmd/Ctrl held, unless a dialog is open. True if it was used. */
+bool handleCommand (const KeyPress&);
 } // namespace lathe::globalkeys

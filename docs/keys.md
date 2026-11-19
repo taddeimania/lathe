@@ -10,6 +10,7 @@ Every shortcut in one place. On the Mac use Cmd; on Windows and Linux, Ctrl.
 | L | Loop on/off (drag in the top strip of the ruler to set the loop) |
 | F | Follow Playhead on/off. On, the arrangement scrolls to keep the playhead in view while playing; off, you can scroll anywhere while it plays. Also the transport's **Follow** button and View > Follow Playhead; Lathe remembers it. |
 | Tab | Arrangement / mixer |
+| Cmd/Ctrl+S, +Shift+S | Save / Save As. These and the other File shortcuts (Cmd/Ctrl+O open, Cmd/Ctrl+N new, Cmd/Ctrl+Shift+E export audio) also work with a plug-in's window in front; the plug-in keeps the rest of its keys (its own undo and copy, say). |
 | Cmd/Ctrl+B | Plug-in browser |
 | Cmd/Ctrl+G, +Shift+G | Group the selected tracks / ungroup |
 | Cmd/Ctrl+T, +Shift+T, +Alt+T | Add audio / MIDI / return track |

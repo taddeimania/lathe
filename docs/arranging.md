@@ -70,6 +70,17 @@ Right-click a clip for **Rename...**, **Copy**, **Paste at Start Marker**, **Dup
 
 Drag audio files (WAV, AIFF, FLAC, MP3 or Ogg) onto the arrangement, or choose **File > Import Audio...** (Cmd/Ctrl+I). Dropped on an audio track, a file lands where you dropped it. From the menu, it goes on the selected track at the start marker.
 
+### A folder of stems as a new project
+
+Got the stems of a song (from a bandmate, a session, another DAW)? Choose **File > Import Folder as New Project...** and pick the folder they're in. Lathe starts a new project with each file on its own track, from the start of the song:
+
+- Audio files (WAV, AIFF, FLAC, MP3, Ogg) go on audio tracks; MIDI files go on MIDI tracks (add an instrument to hear them). A MIDI file with several parts gets a track for each part.
+- Each track is named after its file, without what all the files' names start with or a number in front: "Night Drive_01 Kick.wav" and "Night Drive_02 Bass.wav" become **Kick** and **Bass**. Rename a track by double-clicking its name.
+- The tracks are in the files' name order, so numbered stems stay in order.
+- The project runs at the stems' sample rate, so they go in unchanged. If there's a MIDI file that says a tempo, the song takes it; otherwise set the tempo yourself before you edit to the grid.
+- Only the files directly in the folder are imported, not ones in folders inside it. Hidden files and macOS's "._" copies are left out.
+- The files are copied into the project; the folder is left as it was. Save As suggests the folder's name.
+
 ## The loop, the start marker and the playhead
 
 - The **start marker** is where Play starts and Paste goes. Click empty lane space to move it there.

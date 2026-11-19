@@ -13,7 +13,27 @@ std::function<void()>& action()
     static std::function<void()> f;
     return f;
 }
+
+std::function<bool (const KeyPress&)>& commandAction()
+{
+    static std::function<bool (const KeyPress&)> f;
+    return f;
+}
 } // namespace
+
+void installCommands (std::function<bool (const KeyPress&)> handler)
+{
+    commandAction() = std::move (handler);
+}
+
+bool handleCommand (const KeyPress& k)
+{
+    if (! k.getModifiers().isCommandDown() || ! commandAction())
+        return false;
+    if (Component::getCurrentlyModalComponent() != nullptr)
+        return false;   // a dialog: its own keys
+    return commandAction() (k);
+}
 
 bool spaceIsForPlayback()
 {
@@ -48,11 +68,30 @@ bool isTextField (HWND h)
     return cls.containsIgnoreCase ("edit");
 }
 
+bool isLatheWindow (HWND h)
+{
+    const auto root = GetAncestor (h, GA_ROOT);
+    for (int i = ComponentPeer::getNumPeers(); --i >= 0;)
+        if (auto* peer = ComponentPeer::getPeer (i))
+            if ((HWND) peer->getNativeHandle() == root)
+                return true;
+    return false;
+}
+
 LRESULT CALLBACK onMessage (int code, WPARAM removing, LPARAM param)
 {
     if (code == HC_ACTION && removing == PM_REMOVE)
     {
         auto* msg = reinterpret_cast<MSG*> (param);
+        // Ctrl+S and the other file shortcuts, typed in one of Lathe's windows (a plug-in's included).
+        if (msg->message == WM_KEYDOWN && (GetKeyState (VK_CONTROL) & 0x8000) && ! (GetKeyState (VK_MENU) & 0x8000)
+            && msg->wParam >= 'A' && msg->wParam <= 'Z' && isLatheWindow (msg->hwnd))
+        {
+            const auto c = (juce_wchar) (msg->wParam - 'A' + 'a');
+            const int mods = ModifierKeys::ctrlModifier | ((GetKeyState (VK_SHIFT) & 0x8000) ? ModifierKeys::shiftModifier : 0);
+            if (handleCommand (KeyPress ((int) c, ModifierKeys (mods), c)))
+                msg->message = WM_NULL;
+        }
         if (msg->message == WM_KEYDOWN && msg->wParam == VK_SPACE)
         {
             const bool modifier = (GetKeyState (VK_CONTROL) & 0x8000) || (GetKeyState (VK_MENU) & 0x8000)

@@ -397,11 +397,13 @@ public:
         setVisible (true);
     }
 
-    // Space starts and stops playback here too (on the Mac and Windows it never gets this far:
-    // Lathe catches it first, see GlobalKeys.h).
+    // Space starts and stops playback here too, and the file shortcuts save, open and so on (on
+    // the Mac and Windows they never get this far: Lathe catches them first, see GlobalKeys.h).
     bool keyPressed (const KeyPress& k) override
     {
         if (k == KeyPress (KeyPress::spaceKey) && globalkeys::handleSpace())
+            return true;
+        if (globalkeys::handleCommand (k))   // Cmd/Ctrl+S and the other file shortcuts (Linux; see GlobalKeys.h)
             return true;
         return DocumentWindow::keyPressed (k);
     }

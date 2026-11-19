@@ -39,7 +39,7 @@ public:
         the channel EQ, the plug-in browser, the export dialog, and every built-in device, as docs-*.jpg. */
     void runDocShots (const File& outDir, const File& song, std::function<void (bool, StringArray)> done);
 
-    void newProject (const File& templateFile);
+    void newProject (const File& templateFile, bool blank = false);   // blank: no tracks at all
     void openProject (const File&);
     /** Writes "Welcome to Lathe" to the projects folder (if it isn't there) and opens it. */
     void openWelcomeSong();
@@ -61,6 +61,8 @@ public:
     void menuItemSelected (int itemId, int topLevelMenuIndex) override;
 
     bool keyPressed (const KeyPress&) override;
+    /** Cmd/Ctrl+S, Shift+S, O, N and Shift+E pressed in another of Lathe's windows (a plug-in's). */
+    bool fileShortcutFromAnotherWindow (const KeyPress&);
     void resized() override;
     void paint (Graphics&) override;
 
@@ -84,6 +86,8 @@ private:
     void deleteTemplate (const File&);
     void importAudio();
     void importMidi();
+    void importFolder();                       // File > Import Folder as New Project
+    void newProjectFromFolder (const File& folder);
     void openPluginBrowser();
     void openPatcher();
     void writeAutosave();
@@ -151,6 +155,7 @@ private:
     // until the song has played or another project is open (it's easy to miss behind the
     // first-launch question).
     String welcomeHint;
+    String suggestedName;   // Save As's name for a project that's never been saved (the stems' folder)
     File welcomeSongFile;
     int ticks = 0;
     int64 lastAutosave = 0;

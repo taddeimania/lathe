@@ -27,6 +27,8 @@
 #include "Demo/Welcome.h"
 #include "UI/CloudLinks.h"
 #include "UI/UndoHistory.h"
+#include "UI/GlobalKeys.h"
+#include "Model/StemFolder.h"
 #include "Compare/Compare.h"
 #include "Host/RemotePlugin.h"
 #if ! JUCE_WINDOWS
@@ -4877,6 +4879,55 @@ int main (int argc, char** argv)
             check (! tools.channelsTouched ("import_midi", args2 ({ { "path", "/x.mid" } }), ids), "channels touched: new tracks are song-wide");
             e.removeTrack (onto->id);
             midiFile.deleteFile();
+        }
+
+        // --- File shortcuts from a plug-in's window: Cmd/Ctrl+S reaches Lathe, plain keys don't
+        {
+            int used = 0;
+            KeyPress got;
+            globalkeys::installCommands ([&] (const KeyPress& k) { got = k; ++used; return k.getTextCharacter() == 's'; });
+            const KeyPress save ('s', ModifierKeys::commandModifier, 's');
+            const bool saved = globalkeys::handleCommand (save);
+            const bool plainKept = ! globalkeys::handleCommand (KeyPress ('s', ModifierKeys(), 's'));   // typing an s
+            const bool otherKept = ! globalkeys::handleCommand (KeyPress ('z', ModifierKeys::commandModifier, 'z'));
+            globalkeys::installCommands (nullptr);
+            const bool goneAfter = ! globalkeys::handleCommand (save);
+            check (saved && plainKept && otherKept && goneAfter && used == 2 && got.getTextCharacter() == 'z',
+                   "file shortcuts from other windows: Cmd+S is handed on, plain keys aren't, the handler decides the rest");
+        }
+
+        // --- Import Folder as New Project: which files, in what order, with what names
+        {
+            auto dir = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-test-stems");
+            dir.deleteRecursively();
+            dir.createDirectory();
+            for (auto n : { "Night Drive_10 Keys.wav", "Night Drive_2 Bass.flac", "Night Drive_1 Kick.wav", "Night Drive_Lead.mid",
+                            "._Night Drive_1 Kick.wav", ".DS_Store", "lyrics.pdf" })
+                dir.getChildFile (n).replaceWithText ("x");
+            dir.getChildFile ("Bounces").createDirectory();
+            dir.getChildFile ("Bounces").getChildFile ("Mix.wav").replaceWithText ("x");
+            const auto found = stemfolder::find (dir);
+            StringArray audio;
+            for (auto& f : found.audio) audio.add (f.getFileName());
+            const bool files = audio.joinIntoString ("|") == "Night Drive_1 Kick.wav|Night Drive_2 Bass.flac|Night Drive_10 Keys.wav"
+                               && found.midi.size() == 1 && found.other == 1;
+            const auto names = stemfolder::trackNames (found.audio).joinIntoString ("|");
+
+            auto named = [] (std::initializer_list<const char*> ns)
+            {
+                Array<File> fs;
+                for (auto n : ns) fs.add (File ("/stems").getChildFile (n));
+                return stemfolder::trackNames (fs).joinIntoString ("|");
+            };
+            const bool common  = named ({ "Song - Kick.wav", "Song - Keys.wav" }) == "Kick|Keys";        // not "ick", "eys"
+            const bool numbers = named ({ "01 Kick.wav", "02_Snare.wav", "3 - Bass.wav", "4. Keys.wav" }) == "Kick|Snare|Bass|Keys";
+            const bool kept    = named ({ "808.wav", "Kick.wav" }) == "808|Kick"                         // no separator: a name
+                                 && named ({ "Vox.wav" }) == "Vox"
+                                 && named ({ "Take.wav", "Take 2.wav" }) == "Take|Take 2";             // trimming would empty one
+            dir.deleteRecursively();
+            check (files && names == "Kick|Bass|Keys" && common && numbers && kept,
+                   "import folder: stems in name order, hidden and ._ files and subfolders left out, track names trimmed: "
+                   + names + (files ? String() : " (files: " + audio.joinIntoString ("|") + ")"));
         }
 
         // --- MIDI export: what the clips play, read back by the importer
