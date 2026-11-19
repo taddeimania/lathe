@@ -36,7 +36,21 @@ public:
     void selectAllClips();
     int numSelectedClips() const;
     bool canPaste() const   { return ! clipboard.empty(); }
-    void importFiles (const Array<File>&, int trackIndex, double atBeat);
+    /** One file of an import: the track it went on, or why it didn't. */
+    struct ImportedFile
+    {
+        File source;
+        int trackId = -1;   // -1: not imported (see error)
+        String error;
+    };
+    /** Audio files: the first onto the audio track at trackIndex, the rest onto new tracks named
+        after them, at atBeat. The files are copied (and converted if needed) into the project's
+        Audio folder on a background thread, in a progress window naming each file, with Cancel;
+        the clips go in afterwards, as one undo step, and then `then` gets one entry per file, in
+        order (not called if the person cancels). `inBackground` false does it all before
+        returning (the scripted screenshots). */
+    void importFiles (const Array<File>&, int trackIndex, double atBeat,
+                      std::function<void (const std::vector<ImportedFile>&)> then = {}, bool inBackground = true);
     /** MIDI files: onto the MIDI track at trackIndex as one clip each, else onto new MIDI tracks
         (one per part of the file). */
     void importMidiFiles (const Array<File>&, int trackIndex, double atBeat);

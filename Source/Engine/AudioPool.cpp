@@ -59,8 +59,17 @@ void AudioPool::purgeUnused()
     }
 }
 
-File AudioPool::importFile (const File& source, const File& audioDir, double sampleRate, String& error)
+File AudioPool::importFile (const File& source, const File& audioDir, double sampleRate, String& error,
+                            const std::function<bool (double)>& progress)
 {
+    auto report = [&] (double p) { return progress == nullptr || progress (jlimit (0.0, 1.0, p)); };
+    auto cancelled = [&] (const File& partial)
+    {
+        partial.deleteFile();
+        error = "Import cancelled.";
+        return File();
+    };
+
     std::unique_ptr<AudioFormatReader> reader (formats.createReaderFor (source));
     if (reader == nullptr)
     {
@@ -70,34 +79,83 @@ File AudioPool::importFile (const File& source, const File& audioDir, double sam
 
     audioDir.createDirectory();
     auto dest = audioDir.getNonexistentChildFile (File::createLegalFileName (source.getFileNameWithoutExtension()), ".wav", false);
+    constexpr int block = 1 << 16;
 
-    // Already a WAV at the right rate: plain copy.
+    // Already a WAV at the right rate: a plain copy, a block at a time.
     if (source.hasFileExtension ("wav") && std::abs (reader->sampleRate - sampleRate) < 0.5 && ! reader->usesFloatingPointData)
     {
         reader.reset();
-        if (source.copyFileTo (dest))
-            return dest;
+        FileInputStream in (source);
+        std::unique_ptr<FileOutputStream> out (dest.createOutputStream());
+        if (in.openedOk() && out != nullptr && out->openedOk())
+        {
+            const auto total = jmax ((int64) 1, in.getTotalLength());
+            HeapBlock<char> buffer (1 << 20);
+            bool ok = true;
+            while (! in.isExhausted())
+            {
+                const auto n = in.read (buffer, 1 << 20);
+                if (n <= 0)
+                    break;
+                if (! out->write (buffer, (size_t) n)) { ok = false; break; }
+                if (! report ((double) in.getPosition() / (double) total))
+                {
+                    out.reset();
+                    return cancelled (dest);
+                }
+            }
+            out->flush();
+            ok = ok && out->getStatus().wasOk();
+            out.reset();
+            if (ok)
+                return dest;
+        }
+        out.reset();
+        dest.deleteFile();
+        reader.reset (formats.createReaderFor (source));   // fall back to converting it
+        if (reader == nullptr)
+        {
+            error = "Couldn't copy " + source.getFileName();
+            return {};
+        }
     }
 
+    // Converting: reading is about 60% of the work, the rate change 25%, writing the rest.
+    const bool changeRate = std::abs (reader->sampleRate - sampleRate) >= 0.5;
+    const double readShare = changeRate ? 0.6 : 0.8, rateShare = changeRate ? 0.25 : 0.0;
     const int numChannels = (int) jlimit ((unsigned int) 1, (unsigned int) 2, reader->numChannels);
     const auto length = (int) jmin ((int64) std::numeric_limits<int>::max() / 2, reader->lengthInSamples);
 
-    AudioBuffer<float> in (numChannels, length);
-    reader->read (&in, 0, length, 0, true, numChannels > 1);
+    AudioBuffer<float> in (numChannels, jmax (1, length));
+    for (int pos = 0; pos < length; pos += block)
+    {
+        const int n = jmin (block, length - pos);
+        reader->read (&in, pos, n, pos, true, numChannels > 1);
+        if (! report (readShare * (pos + n) / (double) length))
+            return cancelled (dest);
+    }
 
     AudioBuffer<float>* out = &in;
     AudioBuffer<float> resampled;
 
-    if (std::abs (reader->sampleRate - sampleRate) >= 0.5)
+    if (changeRate)
     {
         const double ratio = reader->sampleRate / sampleRate;   // input samples per output sample
         const int outLength = (int) std::ceil (length / ratio);
-        resampled.setSize (numChannels, outLength);
+        resampled.setSize (numChannels, jmax (1, outLength));
 
         for (int ch = 0; ch < numChannels; ++ch)
         {
             WindowedSincInterpolator interp;
-            interp.process (ratio, in.getReadPointer (ch), resampled.getWritePointer (ch), outLength, length, 0);
+            int used = 0;
+            for (int pos = 0; pos < outLength; pos += block)
+            {
+                const int n = jmin (block, outLength - pos);
+                used += interp.process (ratio, in.getReadPointer (ch) + used, resampled.getWritePointer (ch) + pos, n,
+                                        jmax (0, length - used), 0);
+                if (! report (readShare + rateShare * (ch + (pos + n) / (double) outLength) / numChannels))
+                    return cancelled (dest);
+            }
         }
         out = &resampled;
     }
@@ -120,7 +178,23 @@ File AudioPool::importFile (const File& source, const File& audioDir, double sam
         return {};
     }
 
-    writer->writeFromAudioSampleBuffer (*out, 0, out->getNumSamples());
+    const int total = length > 0 ? out->getNumSamples() : 0;
+    for (int pos = 0; pos < total; pos += block)
+    {
+        const int n = jmin (block, total - pos);
+        if (! writer->writeFromAudioSampleBuffer (*out, pos, n))
+        {
+            writer.reset();
+            dest.deleteFile();
+            error = "Couldn't write " + dest.getFileName() + " (is the disk full?)";
+            return {};
+        }
+        if (! report (readShare + rateShare + (1.0 - readShare - rateShare) * (pos + n) / (double) total))
+        {
+            writer.reset();
+            return cancelled (dest);
+        }
+    }
     writer.reset();
     return dest;
 }

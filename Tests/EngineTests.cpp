@@ -3584,6 +3584,71 @@ int main (int argc, char** argv)
     }
 
 
+
+    std::cout << "Importing audio (progress, cancel)" << std::endl;
+    {
+        const auto folder = dir.getChildFile ("import");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        const auto audioDir = folder.getChildFile ("Audio");
+        // 3 s of a 441 Hz sine at 44.1 kHz, 16-bit: a copy at 44.1 kHz, a conversion at 48 kHz.
+        const int n = 44100 * 3;
+        AudioBuffer<float> sine (1, n);
+        for (int i = 0; i < n; ++i)
+            sine.setSample (0, i, 0.5f * (float) std::sin (MathConstants<double>::twoPi * 441.0 * i / 44100.0));
+        const auto src = folder.getChildFile ("Sine.wav");
+        {
+            std::unique_ptr<OutputStream> stream (src.createOutputStream());
+            WavAudioFormat wav;
+            auto w = wav.createWriterFor (stream, AudioFormatWriterOptions().withSampleRate (44100.0).withNumChannels (1).withBitsPerSample (16));
+            w->writeFromAudioSampleBuffer (sine, 0, n);
+        }
+
+        for (double rate : { 44100.0, 48000.0 })
+        {
+            std::vector<double> seen;
+            String error;
+            const auto out = pool.importFile (src, audioDir, rate, error, [&] (double p) { seen.push_back (p); return true; });
+            bool rising = ! seen.empty();
+            for (size_t i = 1; i < seen.size(); ++i)
+                rising = rising && seen[i] >= seen[i - 1];
+            const String what = rate < 45000.0 ? "copying" : "converting";
+            check (out.existsAsFile() && error.isEmpty(), what + " imports the file " + error);
+            check (rising && std::abs (seen.back() - 1.0) < 1e-9 && ! seen.empty(),
+                   what + ": progress goes up to 1 (" + String ((int) seen.size()) + " reports)");
+
+            AudioFormatManager fm;
+            fm.registerBasicFormats();
+            std::unique_ptr<AudioFormatReader> r (fm.createReaderFor (out));
+            check (r != nullptr && std::abs (r->sampleRate - rate) < 0.5 && std::abs ((double) r->lengthInSamples - 3.0 * rate) < 2.0,
+                   what + ": the file is at the project's rate and 3 s long");
+            if (r != nullptr && rate > 45000.0)
+            {
+                // Block by block gives what one pass over the whole file gives.
+                AudioBuffer<float> got (1, (int) r->lengthInSamples);
+                r->read (&got, 0, got.getNumSamples(), 0, true, false);
+                AudioBuffer<float> want (1, got.getNumSamples());
+                WindowedSincInterpolator interp;
+                interp.process (44100.0 / 48000.0, sine.getReadPointer (0), want.getWritePointer (0), want.getNumSamples(), n, 0);
+                float worst = 0.0f;
+                for (int i = 0; i < got.getNumSamples(); ++i)
+                    worst = jmax (worst, std::abs (got.getSample (0, i) - want.getSample (0, i)));
+                check (worst < 1.0e-3f, "converting in blocks matches converting in one go (worst " + String (worst, 6) + ")");
+            }
+        }
+
+        for (double rate : { 44100.0, 48000.0 })
+        {
+            String error;
+            int calls = 0;
+            const auto before = audioDir.getNumberOfChildFiles (File::findFiles);
+            const auto out = pool.importFile (src, audioDir, rate, error, [&] (double) { return ++calls < 1; });
+            check (out == File() && error.containsIgnoreCase ("cancel") && audioDir.getNumberOfChildFiles (File::findFiles) == before,
+                   String (rate < 45000.0 ? "copying" : "converting") + ": cancelling stops it and leaves no file behind");
+        }
+        folder.deleteRecursively();
+    }
+
     std::cout << "Bounce Group to Audio Track" << std::endl;
     {
         const auto folder = dir.getChildFile ("bounce");

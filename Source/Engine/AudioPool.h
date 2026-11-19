@@ -30,8 +30,11 @@ public:
     AudioThumbnail& getThumbnail (const File&);
 
     /** Copies an audio file into the project's Audio folder as a WAV at the project
-        sample rate (converting format and rate if needed). Returns the new file. */
-    File importFile (const File& source, const File& audioDir, double sampleRate, String& error);
+        sample rate (converting format and rate if needed). Returns the new file.
+        `progress` gets 0..1 as it goes and returns false to stop (nothing is left behind, and
+        `error` says it was cancelled). Any thread: it doesn't touch the pool's sources. */
+    File importFile (const File& source, const File& audioDir, double sampleRate, String& error,
+                     const std::function<bool (double)>& progress = {});
 
     /** Drops sources no longer referenced by anything but the pool. */
     void purgeUnused();

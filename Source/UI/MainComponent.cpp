@@ -1001,76 +1001,77 @@ void MainComponent::newProjectFromFolder (const File& folder)
     all.addArray (found.midi);
     std::sort (all.begin(), all.end(), [] (const File& a, const File& b) { return a.getFileName().compareNatural (b.getFileName()) < 0; });
     const auto allNames = stemfolder::trackNames (all);
-    auto nameOf  = [&] (const File& f) { return allNames[all.indexOf (f)]; };
-    std::map<int, int> order;   // track id -> its file's place in `all`
 
-    // Each audio file on its own track from the start of the song. importFiles makes a track for
-    // each file in order, and leaves it empty if the file couldn't be read: name them, and take
-    // the empty ones out again.
-    if (! found.audio.isEmpty())
-        arrangement.importFiles (found.audio, -1, 0.0);
-    int audioTracks = 0, unreadable = 0, i = 0;
-    std::vector<int> empty;
-    for (auto& tr : edit.tracks)
+    // Each audio file on its own track from the start of the song, copied in on a background
+    // thread (a progress window names each file). The rest happens once they're in.
+    auto finish = [this, folder, found, midi = std::move (midi), problem, tempo, all, allNames]
+                  (const std::vector<ArrangementView::ImportedFile>& results)
     {
-        if (! tr->isAudio() || i >= found.audio.size())
-            continue;
-        const auto& f = found.audio[i++];
-        tr->name = nameOf (f);
-        order[tr->id] = all.indexOf (f) * 100;
-        for (auto& c : tr->clips)
-            c.name = tr->name;
-        if (tr->clips.empty()) { empty.push_back (tr->id); ++unreadable; }
-        else                   ++audioTracks;
-    }
-    for (auto id : empty)
-        edit.removeTrack (id);
-
-    // A MIDI file with one part is one track named after the file; one with several parts (a
-    // whole song's MIDI) gets a track for each, named after its parts.
-    int midiTracks = 0;
-    for (size_t m = 0; m < midi.size(); ++m)
-    {
-        if (midi[m].error.isNotEmpty())
-            continue;
-        const auto& f = found.midi[(int) m];
-        const auto placed = midiimport::place (edit, midi[m], nullptr, 0.0, nameOf (f));
-        if (placed.size() == 1)
+        auto nameOf  = [&] (const File& f) { return allNames[all.indexOf (f)]; };
+        std::map<int, int> order;   // track id -> its file's place in `all`
+        int audioTracks = 0, unreadable = 0;
+        for (auto& r : results)
         {
-            placed.front()->name = nameOf (f);
-            for (auto& c : placed.front()->clips)
-                c.name = nameOf (f);
+            auto tr = edit.findTrack (r.trackId);
+            if (tr == nullptr) { ++unreadable; continue; }
+            tr->name = nameOf (r.source);
+            order[tr->id] = all.indexOf (r.source) * 100;
+            for (auto& c : tr->clips)
+                c.name = tr->name;
+            ++audioTracks;
         }
-        for (size_t k = 0; k < placed.size(); ++k)
-            order[placed[k]->id] = all.indexOf (f) * 100 + (int) k;
-        midiTracks += (int) placed.size();
-    }
-    std::stable_sort (edit.tracks.begin(), edit.tracks.end(), [&] (auto& a, auto& b) { return order[a->id] < order[b->id]; });
 
-    suggestedName = File::createLegalFileName (folder.getFileName());
-    ctx.selection = {};
-    if (! edit.tracks.empty())
-        ctx.selection.trackId = edit.tracks.front()->id;
-    engine.rebuild();
-    edit.needsRebuild = false;
-    edit.clearUndo();     // the import is where this song starts
-    edit.dirty = true;    // and it hasn't been saved
-    refreshAll();
+        // A MIDI file with one part is one track named after the file; one with several parts (a
+        // whole song's MIDI) gets a track for each, named after its parts.
+        int midiTracks = 0;
+        for (size_t m = 0; m < midi.size(); ++m)
+        {
+            if (midi[m].error.isNotEmpty())
+                continue;
+            const auto& f = found.midi[(int) m];
+            const auto placed = midiimport::place (edit, midi[m], nullptr, 0.0, nameOf (f));
+            if (placed.size() == 1)
+            {
+                placed.front()->name = nameOf (f);
+                for (auto& c : placed.front()->clips)
+                    c.name = nameOf (f);
+            }
+            for (size_t k = 0; k < placed.size(); ++k)
+                order[placed[k]->id] = all.indexOf (f) * 100 + (int) k;
+            midiTracks += (int) placed.size();
+        }
+        std::stable_sort (edit.tracks.begin(), edit.tracks.end(), [&] (auto& a, auto& b) { return order[a->id] < order[b->id]; });
 
-    String status = "New project from " + folder.getFileName() + ": ";
-    StringArray parts;
-    if (audioTracks > 0) parts.add (String (audioTracks) + (audioTracks == 1 ? " audio track" : " audio tracks"));
-    if (midiTracks > 0)  parts.add (String (midiTracks) + (midiTracks == 1 ? " MIDI track (add an instrument to hear it)" : " MIDI tracks (add instruments to hear them)"));
-    status << parts.joinIntoString (" and ") << ".";
-    if (tempo > 0.0)
-        status << " Tempo " << String (edit.tempo, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") << " BPM, from the MIDI.";
-    if (unreadable > 0)
-        status << " " << unreadable << (unreadable == 1 ? " audio file couldn't be read." : " audio files couldn't be read.");
-    if (problem.isNotEmpty())
-        status << " (" << problem << ")";
-    if (found.other > 0)
-        status << " Left out " << found.other << (found.other == 1 ? " other file." : " other files.");
-    setStatus (status);
+        suggestedName = File::createLegalFileName (folder.getFileName());
+        ctx.selection = {};
+        if (! edit.tracks.empty())
+            ctx.selection.trackId = edit.tracks.front()->id;
+        engine.rebuild();
+        edit.needsRebuild = false;
+        edit.clearUndo();     // the import is where this song starts
+        edit.dirty = true;    // and it hasn't been saved
+        refreshAll();
+
+        String status = "New project from " + folder.getFileName() + ": ";
+        StringArray parts;
+        if (audioTracks > 0) parts.add (String (audioTracks) + (audioTracks == 1 ? " audio track" : " audio tracks"));
+        if (midiTracks > 0)  parts.add (String (midiTracks) + (midiTracks == 1 ? " MIDI track (add an instrument to hear it)" : " MIDI tracks (add instruments to hear them)"));
+        status << parts.joinIntoString (" and ") << ".";
+        if (tempo > 0.0)
+            status << " Tempo " << String (edit.tempo, 1).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") << " BPM, from the MIDI.";
+        if (unreadable > 0)
+            status << " " << unreadable << (unreadable == 1 ? " audio file couldn't be read." : " audio files couldn't be read.");
+        if (problem.isNotEmpty())
+            status << " (" << problem << ")";
+        if (found.other > 0)
+            status << " Left out " << found.other << (found.other == 1 ? " other file." : " other files.");
+        setStatus (status);
+    };
+
+    if (found.audio.isEmpty())
+        finish ({});
+    else
+        arrangement.importFiles (found.audio, -1, 0.0, finish);
 }
 
 //==============================================================================
@@ -2560,7 +2561,7 @@ void MainComponent::runAssistantShots (const File& outDir, const File& work, std
             for (size_t i = 0; i < self->edit.tracks.size(); ++i)
                 if (self->edit.tracks[i]->name == "Guitar")
                     guitarIndex = (int) i;
-            self->arrangement.importFiles ({ wav }, guitarIndex, 4.0 * self->edit.beatsPerBar());
+            self->arrangement.importFiles ({ wav }, guitarIndex, 4.0 * self->edit.beatsPerBar(), {}, false);
             entry->setProperty ("person", "Recorded a guitar take over bars 5 to 8");
         }
         else if (human == "learn")

@@ -2487,53 +2487,155 @@ File ArrangementView::writeSelectedMidiForDrag()
     return file;
 }
 
-void ArrangementView::importFiles (const Array<File>& files, int trackIndex, double atBeat)
+namespace
+{
+/** Copies audio files into the project off the message thread, with a progress bar, the file
+    it's on, and Cancel. */
+class ImportThread : public ThreadWithProgressWindow
+{
+public:
+    using Done = std::function<void (std::vector<File> imported, StringArray errors, bool cancelled)>;
+
+    ImportThread (AudioPool& p, Array<File> f, File dir, double rate, Done d)
+        : ThreadWithProgressWindow (f.size() == 1 ? "Importing " + f[0].getFileName() + "..." : "Importing " + String (f.size()) + " files...",
+                                    true, true, 10000, "Cancel"),
+          pool (p), files (std::move (f)), audioDir (std::move (dir)), sampleRate (rate), done (std::move (d)) {}
+
+    void run() override
+    {
+        for (int i = 0; i < files.size(); ++i)
+        {
+            setStatusMessage (files.size() == 1 ? files[i].getFileName()
+                                                : files[i].getFileName() + " (" + String (i + 1) + " of " + String (files.size()) + ")");
+            String error;
+            const auto file = pool.importFile (files[i], audioDir, sampleRate, error, [this, i] (double p)
+            {
+                setProgress ((i + p) / (double) files.size());
+                return ! threadShouldExit();
+            });
+            imported.push_back (file);
+            errors.add (error);
+            if (threadShouldExit())
+                return;
+        }
+    }
+
+    void threadComplete (bool cancelled) override
+    {
+        done (std::move (imported), std::move (errors), cancelled);
+        MessageManager::callAsync ([this] { delete this; });
+    }
+
+private:
+    AudioPool& pool;
+    Array<File> files;
+    File audioDir;
+    double sampleRate;
+    Done done;
+    std::vector<File> imported;
+    StringArray errors;
+};
+} // namespace
+
+void ArrangementView::importFiles (const Array<File>& files, int trackIndex, double atBeat,
+                                   std::function<void (const std::vector<ImportedFile>&)> then, bool inBackground)
 {
     if (files.isEmpty())
         return;
 
     auto& edit = ctx.edit;
     edit.ensureWorkDir();
-    edit.beginClipEdit();
-    MouseCursor::showWaitCursor();
+    const auto audioDir = edit.getAudioDir();
+    const double rate = ctx.engine.getSampleRate() > 0 ? ctx.engine.getSampleRate() : edit.sampleRate;
+    // The track to put the first file on, by id: tracks can move while the files copy.
+    int targetId = -1;
+    if (trackIndex >= 0 && trackIndex < (int) edit.tracks.size() && edit.tracks[(size_t) trackIndex]->isAudio())
+        targetId = edit.tracks[(size_t) trackIndex]->id;
 
-    int imported = 0;
-    for (int i = 0; i < files.size(); ++i)
+    // On the message thread once the files are in the project: a clip for each, as one step.
+    Component::SafePointer<ArrangementView> self (this);
+    auto place = [self, files, targetId, atBeat, then] (std::vector<File> imported, StringArray errors, bool cancelled)
     {
-        // First file goes on the audio track under the mouse; the rest get new tracks.
-        std::shared_ptr<Track> track;
-        if (i == 0 && trackIndex >= 0 && trackIndex < (int) edit.tracks.size() && edit.tracks[(size_t) trackIndex]->isAudio())
-            track = edit.tracks[(size_t) trackIndex];
-        else
+        if (self == nullptr)
+            return;
+        auto& ctx = self->ctx;
+        if (cancelled)
         {
-            track = edit.addTrack (TrackKind::audio, files[i].getFileNameWithoutExtension());
-            track->input.channel = -1;
+            for (auto& f : imported)
+                f.deleteFile();
+            ctx.showStatus ("Import cancelled. Nothing was added.");
+            return;
         }
 
-        String error;
-        const auto file = ctx.pool.importFile (files[i], edit.getAudioDir(), ctx.engine.getSampleRate() > 0 ? ctx.engine.getSampleRate() : edit.sampleRate, error);
-        auto src = file.existsAsFile() ? ctx.pool.get (file) : nullptr;
-        if (src == nullptr)
+        auto& edit = ctx.edit;
+        edit.beginClipEdit();
+        std::vector<ImportedFile> results;
+        String firstError;
+        int done = 0;
+        for (int i = 0; i < files.size(); ++i)
         {
-            ctx.showStatus (error.isNotEmpty() ? error : "Couldn't import " + files[i].getFileName());
-            continue;
+            ImportedFile r;
+            r.source = files[i];
+            const auto file = i < (int) imported.size() ? imported[(size_t) i] : File();
+            r.error = errors[i];
+            auto src = file.existsAsFile() ? ctx.pool.get (file) : nullptr;
+            if (src == nullptr)
+            {
+                if (r.error.isEmpty())
+                    r.error = "Couldn't import " + files[i].getFileName();
+                if (firstError.isEmpty())
+                    firstError = r.error;
+                results.push_back (r);
+                continue;
+            }
+
+            // The first file goes on the audio track it was dropped on (or the selected one);
+            // the rest get new tracks.
+            std::shared_ptr<Track> track = i == 0 ? edit.findTrack (targetId) : nullptr;
+            if (track == nullptr || ! track->isAudio())
+            {
+                track = edit.addTrack (TrackKind::audio, files[i].getFileNameWithoutExtension());
+                track->input.channel = -1;
+            }
+
+            Clip c;
+            c.id = edit.newId();
+            c.kind = ClipKind::audio;
+            c.name = files[i].getFileNameWithoutExtension();
+            c.file = file;
+            c.start = atBeat;
+            c.length = (double) src->lengthInSamples / edit.samplesPerBeat (src->sampleRate);
+            edit.clearRange (*track, c.start, c.end());
+            track->clips.push_back (c);
+            r.trackId = track->id;
+            results.push_back (r);
+            ++done;
         }
 
-        Clip c;
-        c.id = edit.newId();
-        c.kind = ClipKind::audio;
-        c.name = files[i].getFileNameWithoutExtension();
-        c.file = file;
-        c.start = atBeat;
-        c.length = (double) src->lengthInSamples / edit.samplesPerBeat (src->sampleRate);
-        edit.clearRange (*track, c.start, c.end());
-        track->clips.push_back (c);
-        ++imported;
+        edit.changed();
+        if (done > 0)
+            ctx.showStatus ("Imported " + String (done) + (done == 1 ? " file" : " files") + " into the project's Audio folder."
+                            + (firstError.isNotEmpty() ? " (" + firstError + ")" : String()));
+        else if (firstError.isNotEmpty())
+            ctx.showStatus (firstError);
+        if (then)
+            then (results);
+    };
+
+    if (! inBackground)
+    {
+        std::vector<File> imported;
+        StringArray errors;
+        for (auto& f : files)
+        {
+            String error;
+            imported.push_back (ctx.pool.importFile (f, audioDir, rate, error));
+            errors.add (error);
+        }
+        place (std::move (imported), std::move (errors), false);
+        return;
     }
 
-    MouseCursor::hideWaitCursor();
-    edit.changed();
-    if (imported > 0)
-        ctx.showStatus ("Imported " + String (imported) + (imported == 1 ? " file" : " files") + " into the project's Audio folder.");
+    (new ImportThread (ctx.pool, files, audioDir, rate, std::move (place)))->launchThread();
 }
 } // namespace lathe
