@@ -564,11 +564,30 @@ HttpResult withRetries (const std::function<HttpResult()>& attempt, const std::a
     }
     return r;
 }
+
+/** "Uploading Kick.wav (3 of 12)": the first file still moving, and how far through the list. */
+String describeTransfer (const String& verb, const std::vector<String>& names, const std::vector<double>& fractions)
+{
+    const int n = (int) names.size();
+    if (n == 0)
+        return {};
+    int finished = 0, current = -1;
+    for (int i = 0; i < n; ++i)
+    {
+        if (fractions[(size_t) i] >= 1.0)
+            ++finished;
+        else if (current < 0 || (fractions[(size_t) current] <= 0.0 && fractions[(size_t) i] > 0.0))
+            current = i;
+    }
+    if (current < 0)
+        current = n - 1;
+    return verb + " " + names[(size_t) current] + (n > 1 ? " (" + String (jmin (n, finished + 1)) + " of " + String (n) + ")" : String());
+}
 } // namespace
 
 Result Client::packForUpload (const String& projectId, const std::vector<UploadItem>& items,
                               std::vector<UploadItem>& toSend, std::vector<File>& tempFiles,
-                              const std::function<bool (double)>& progress)
+                              const std::function<bool (double)>& progress, const Detail& detail)
 {
     // Which files does the server still need?
     std::set<String> missing;
@@ -627,13 +646,25 @@ Result Client::packForUpload (const String& projectId, const std::vector<UploadI
     {
         auto& item = toSend[indices[(size_t) k]];
         const auto dest = tempDir.getChildFile (item.hash + "-" + String::toHexString (Random::getSystemRandom().nextInt()) + ".lflac");
-        if (packAudio (item.file, dest, [&] (double p) { fraction[(size_t) k] = (float) p; return ! stop.load(); }))
+        if (packAudio (item.file, dest, [&] (double p) { fraction[(size_t) k] = (float) jmin (0.999, p); return ! stop.load(); }))
             packedFiles[(size_t) k] = dest;
         fraction[(size_t) k] = 1.0f;
         return stop.load() ? Result::fail ("Cancelled.") : Result::ok();
     },
     [&]
     {
+        if (detail)
+        {
+            std::vector<String> names;
+            std::vector<double> done;
+            for (size_t k = 0; k < indices.size(); ++k)
+            {
+                const auto& item = toSend[indices[k]];
+                names.push_back (item.name.isNotEmpty() ? item.name : item.file.getFileName());
+                done.push_back (fraction[k].load());
+            }
+            detail (describeTransfer ("Compressing", names, done));
+        }
         if (progress == nullptr || totalBytes <= 0)
             return true;
         double sum = 0.0;
@@ -646,13 +677,15 @@ Result Client::packForUpload (const String& projectId, const std::vector<UploadI
         if (packedFiles[k] != File())
         {
             tempFiles.push_back (packedFiles[k]);
+            if (toSend[indices[k]].name.isEmpty())
+                toSend[indices[k]].name = toSend[indices[k]].file.getFileName();   // not the temp file's
             toSend[indices[k]].file = packedFiles[k];   // same hash (the original WAV's), smaller file
         }
     return r;
 }
 
 Result Client::upload (const String& projectId, const std::vector<UploadItem>& allItems,
-                       const std::function<bool (double)>& progress, int& uploadedCount)
+                       const std::function<bool (double)>& progress, int& uploadedCount, const Detail& detail)
 {
     uploadedCount = 0;
     if (allItems.empty())
@@ -669,7 +702,7 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& a
         ~DeleteTemps() { for (auto& f : files) f.deleteFile(); }
     } deleteTemps { tempFiles };
     const auto packShare = [&] (double p) { return progress == nullptr || progress (0.25 * p); };
-    if (auto r = packForUpload (projectId, allItems, items, tempFiles, packShare); r.failed())
+    if (auto r = packForUpload (projectId, allItems, items, tempFiles, packShare, detail); r.failed())
         return r;
     if (items.empty())
     {
@@ -759,6 +792,14 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& a
 
     std::atomic<int64> done { 0 };
     std::atomic<int> wholeFilesDone { 0 };
+    // Bytes sent of each item, for saying which file is going up (the song's own data has no
+    // name and isn't counted).
+    std::vector<std::atomic<int64>> itemDone (items.size());
+    for (auto& d : itemDone)
+        d = 0;
+    std::set<const UploadItem*> sending;
+    for (auto& piece : pieces)
+        sending.insert (piece.item);
     CriticalSection etagLock;
     const String octet = "Content-Type: application/octet-stream";
 
@@ -798,9 +839,27 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& a
             ++wholeFilesDone;
         }
         done += piece.length;
+        itemDone[(size_t) (&item - items.data())] += piece.length;
         return Result::ok();
     },
-    [&] { return total <= 0 || uploadShare ((double) done.load() / (double) total); });
+    [&]
+    {
+        if (detail)
+        {
+            std::vector<String> names;
+            std::vector<double> sent;
+            for (size_t i = 0; i < items.size(); ++i)
+            {
+                const auto& item = items[i];
+                if (sending.count (&item) == 0 || (item.file == File() && item.name.isEmpty()))
+                    continue;
+                names.push_back (item.name.isNotEmpty() ? item.name : item.file.getFileName());
+                sent.push_back ((double) itemDone[i].load() / (double) jmax ((int64) 1, item.size()));
+            }
+            detail (describeTransfer ("Uploading", names, sent));
+        }
+        return total <= 0 || uploadShare ((double) done.load() / (double) total);
+    });
 
     if (r.failed())
         return r;
@@ -833,7 +892,7 @@ Result Client::upload (const String& projectId, const std::vector<UploadItem>& a
 }
 
 Result Client::download (const String& projectId, const std::vector<std::pair<String, File>>& wanted,
-                         const std::function<bool (double)>& progress)
+                         const std::function<bool (double)>& progress, const Detail& detail)
 {
     if (wanted.empty())
         return Result::ok();
@@ -932,6 +991,17 @@ Result Client::download (const String& projectId, const std::vector<std::pair<St
     },
     [&]
     {
+        if (detail)
+        {
+            std::vector<String> names;
+            std::vector<double> got;
+            for (size_t i = 0; i < wanted.size(); ++i)
+            {
+                names.push_back (wanted[i].second.getFileName());
+                got.push_back (fraction[i].load());
+            }
+            detail (describeTransfer ("Downloading", names, got));
+        }
         if (progress == nullptr)
             return true;
         double sum = 0.0;

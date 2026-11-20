@@ -59,6 +59,48 @@ void AudioPool::purgeUnused()
     }
 }
 
+Result copyFileWithProgress (const File& from, const File& to, const std::function<bool (double)>& progress)
+{
+    FileInputStream in (from);
+    std::unique_ptr<FileOutputStream> out (to.createOutputStream());
+    if (! in.openedOk() || out == nullptr || ! out->openedOk() || ! out->truncate().wasOk())
+    {
+        out.reset();
+        to.deleteFile();
+        return Result::fail ("Couldn't copy " + from.getFileName());
+    }
+
+    const auto total = jmax ((int64) 1, in.getTotalLength());
+    HeapBlock<char> buffer (1 << 20);
+    bool ok = true;
+    while (! in.isExhausted())
+    {
+        const auto n = in.read (buffer, 1 << 20);
+        if (n <= 0)
+            break;
+        if (! out->write (buffer, (size_t) n))
+        {
+            ok = false;
+            break;
+        }
+        if (progress && ! progress (jlimit (0.0, 1.0, (double) in.getPosition() / (double) total)))
+        {
+            out.reset();
+            to.deleteFile();
+            return Result::fail ("Cancelled.");
+        }
+    }
+    out->flush();
+    ok = ok && out->getStatus().wasOk() && in.getPosition() == in.getTotalLength();
+    out.reset();
+    if (! ok)
+    {
+        to.deleteFile();
+        return Result::fail ("Couldn't copy " + from.getFileName() + " (is the disk full?)");
+    }
+    return Result::ok();
+}
+
 File AudioPool::importFile (const File& source, const File& audioDir, double sampleRate, String& error,
                             const std::function<bool (double)>& progress)
 {
@@ -85,33 +127,11 @@ File AudioPool::importFile (const File& source, const File& audioDir, double sam
     if (source.hasFileExtension ("wav") && std::abs (reader->sampleRate - sampleRate) < 0.5 && ! reader->usesFloatingPointData)
     {
         reader.reset();
-        FileInputStream in (source);
-        std::unique_ptr<FileOutputStream> out (dest.createOutputStream());
-        if (in.openedOk() && out != nullptr && out->openedOk())
-        {
-            const auto total = jmax ((int64) 1, in.getTotalLength());
-            HeapBlock<char> buffer (1 << 20);
-            bool ok = true;
-            while (! in.isExhausted())
-            {
-                const auto n = in.read (buffer, 1 << 20);
-                if (n <= 0)
-                    break;
-                if (! out->write (buffer, (size_t) n)) { ok = false; break; }
-                if (! report ((double) in.getPosition() / (double) total))
-                {
-                    out.reset();
-                    return cancelled (dest);
-                }
-            }
-            out->flush();
-            ok = ok && out->getStatus().wasOk();
-            out.reset();
-            if (ok)
-                return dest;
-        }
-        out.reset();
-        dest.deleteFile();
+        const auto copied = copyFileWithProgress (source, dest, report);
+        if (copied.wasOk())
+            return dest;
+        if (copied.getErrorMessage() == "Cancelled.")
+            return cancelled (dest);
         reader.reset (formats.createReaderFor (source));   // fall back to converting it
         if (reader == nullptr)
         {

@@ -57,6 +57,11 @@ Lathe can share a song with the people you make music with, through Lathe Cloud.
 - Downloads new revisions and the latest one's audio.
 - Doesn't change what you have open. Lathe offers to open the newest revision.
 
+## Watching a push or pull
+Pushes, pulls and opening a revision run in the background, so you can keep working. The cloud label in the status bar becomes a progress bar that says what it's doing and which file it's on: "Uploading Kick.wav (3 of 12)", "Downloading Bass.wav (2 of 5)", "Checking Vox.wav (4 of 6)" (Lathe works out each file's fingerprint before a push).
+
+Click the bar to stop. Nothing changes in the cloud or in your project: a stopped push sends no revision, and a stopped pull or open leaves your song as it was (files it had half-fetched are removed). Do it again later; files that already went up aren't sent twice.
+
 ## History
 
 Open History from the Cloud menu, or click the cloud label in the status bar.

@@ -717,53 +717,150 @@ void MainComponent::saveAs (std::function<void (bool)> done)
     });
 }
 
-void MainComponent::saveTo (const File& chosen, std::function<void (bool)> done)
+namespace
+{
+/** Save As: copies the project's audio into the new folder off the message thread, with a
+    progress bar, the file it's on, and Cancel. */
+class CopyAudioThread : public ThreadWithProgressWindow
+{
+public:
+    using Copies = std::vector<std::pair<File, File>>;   // from, to
+    using Done = std::function<void (std::vector<bool> copied, bool cancelled)>;
+
+    CopyAudioThread (const String& projectName, Copies c, Done d)
+        : ThreadWithProgressWindow ("Saving \"" + projectName + "\"...", true, true, 10000, "Cancel"),
+          copies (std::move (c)), done (std::move (d)) {}
+
+    void run() override
+    {
+        int64 total = 0;
+        for (auto& [from, to] : copies)
+            total += jmax ((int64) 1, from.getSize());
+        int64 before = 0;
+        for (size_t i = 0; i < copies.size(); ++i)
+        {
+            const auto& [from, to] = copies[i];
+            setStatusMessage ("Copying " + from.getFileName()
+                              + (copies.size() > 1 ? " (" + String ((int) i + 1) + " of " + String ((int) copies.size()) + ")" : String()));
+            const auto size = jmax ((int64) 1, from.getSize());
+            const auto r = copyFileWithProgress (from, to, [&] (double p)
+            {
+                setProgress (((double) before + p * (double) size) / (double) total);
+                return ! threadShouldExit();
+            });
+            copied.push_back (r.wasOk());
+            before += size;
+            if (threadShouldExit())
+                return;
+        }
+    }
+
+    void threadComplete (bool cancelled) override
+    {
+        copied.resize (copies.size(), false);
+        done (std::move (copied), cancelled);
+        MessageManager::callAsync ([this] { delete this; });
+    }
+
+private:
+    Copies copies;
+    Done done;
+    std::vector<bool> copied;
+};
+} // namespace
+
+void MainComponent::saveTo (const File& chosen, std::function<void (bool)> done, bool inBackground)
 {
     // Every project gets its own folder: Name/Name.lathe, Name/Audio, Name/Exports.
     const auto name = chosen.getFileNameWithoutExtension();
     auto folder = chosen.getParentDirectory();
     if (folder.getFileName() != name)
         folder = folder.getChildFile (name);
+    const bool folderWasThere = folder.isDirectory();
     folder.createDirectory();
     const auto newFile = folder.getChildFile (name + kProjectExtension);
     const auto audioDir = folder.getChildFile ("Audio");
+    const bool audioDirWasThere = audioDir.isDirectory();
 
-    // Bring all audio into the new folder so the project is self-contained.
-    std::map<String, File> copied;
-    int failures = 0;
+    // Bring all audio into the new folder so the project is self-contained: each file once, under
+    // its own name (or "Name 2" if that's taken).
+    CopyAudioThread::Copies copies;
+    std::set<String> planned, taken;
     for (auto& t : edit.tracks)
-    {
         for (auto& c : t->clips)
         {
-            if (c.kind != ClipKind::audio || ! c.file.existsAsFile() || c.file.isAChildOf (folder))
+            if (c.kind != ClipKind::audio || ! c.file.existsAsFile() || c.file.isAChildOf (folder)
+                || ! planned.insert (c.file.getFullPathName()).second)
                 continue;
-
-            const auto key = c.file.getFullPathName();
-            if (copied.find (key) == copied.end())
-            {
-                audioDir.createDirectory();
-                auto dest = audioDir.getChildFile (c.file.getFileName());
-                if (dest.existsAsFile())
-                    dest = audioDir.getNonexistentChildFile (c.file.getFileNameWithoutExtension(), c.file.getFileExtension(), false);
-                if (c.file.copyFileTo (dest))
-                    copied[key] = dest;
-                else
-                {
-                    ++failures;
-                    copied[key] = c.file;
-                }
-            }
-            c.file = copied[key];
+            auto dest = audioDir.getChildFile (c.file.getFileName());
+            for (int n = 2; dest.exists() || taken.count (dest.getFullPathName()) > 0; ++n)
+                dest = audioDir.getChildFile (c.file.getFileNameWithoutExtension() + " " + String (n) + c.file.getFileExtension());
+            taken.insert (dest.getFullPathName());
+            copies.push_back ({ c.file, dest });
         }
+    if (! copies.empty())
+        audioDir.createDirectory();
+
+    Component::SafePointer<MainComponent> self (this);
+    auto finish = [self, copies, folder, folderWasThere, audioDir, audioDirWasThere, newFile, done]
+                  (std::vector<bool> copied, bool cancelled)
+    {
+        if (cancelled)
+        {
+            // Leave the disk as it was: no copies, and no folders we made.
+            for (size_t i = 0; i < copies.size(); ++i)
+                if (copied[i])
+                    copies[i].second.deleteFile();
+            if (! audioDirWasThere)
+                audioDir.deleteFile();   // only if it's empty
+            if (! folderWasThere)
+                folder.deleteFile();
+            if (self != nullptr)
+                self->setStatus ("Save As cancelled. Nothing was saved.");
+            if (done)
+                done (false);
+            return;
+        }
+        if (self == nullptr)
+            return;
+
+        std::map<String, File> moved;
+        int failures = 0;
+        for (size_t i = 0; i < copies.size(); ++i)
+        {
+            if (copied[i])
+                moved[copies[i].first.getFullPathName()] = copies[i].second;
+            else
+                ++failures;
+        }
+        for (auto& t : self->edit.tracks)
+            for (auto& c : t->clips)
+                if (c.kind == ClipKind::audio)
+                    if (auto it = moved.find (c.file.getFullPathName()); it != moved.end())
+                        c.file = it->second;
+
+        self->edit.projectFile = newFile;
+        self->edit.workDir = folder;
+        self->engine.rebuild();
+        self->save (done);
+        if (failures > 0)
+            self->setStatus (String (failures) + " audio file(s) couldn't be copied into the project folder.");
+    };
+
+    if (copies.empty())
+    {
+        finish ({}, false);
+        return;
     }
-
-    edit.projectFile = newFile;
-    edit.workDir = folder;
-    if (failures > 0)
-        setStatus (String (failures) + " audio file(s) couldn't be copied into the project folder.");
-
-    engine.rebuild();
-    save (done);
+    if (! inBackground)
+    {
+        std::vector<bool> copied;
+        for (auto& [from, to] : copies)
+            copied.push_back (copyFileWithProgress (from, to).wasOk());
+        finish (std::move (copied), false);
+        return;
+    }
+    (new CopyAudioThread (name, std::move (copies), std::move (finish)))->launchThread();
 }
 
 void MainComponent::connectAssistantToProjects()
@@ -800,7 +897,7 @@ void MainComponent::connectAssistantToProjects()
         }
         else
         {
-            saveTo (saveAs, [&ok] (bool r) { ok = r; });
+            saveTo (saveAs, [&ok] (bool r) { ok = r; }, false);   // the tool waits for the answer
         }
         return ok ? String() : "Lathe couldn't write " + (saveAs == File() ? edit.projectFile : saveAs).getFullPathName() + ".";
     };
@@ -1328,7 +1425,7 @@ void MainComponent::resized()
 
     auto status = r.removeFromBottom (theme::statusHeight).reduced (10, 0);
     if (cloud != nullptr)
-        cloud->getStatusComponent().setBounds (status.removeFromRight (300));
+        cloud->getStatusComponent().setBounds (status.removeFromRight (cloud->isShowingProgress() ? jmin (460, status.getWidth() / 2) : 300));
     if (updateNotice != nullptr && updateNotice->isVisible())
         updateNotice->setBounds (status.removeFromRight (230));
     statusRight.setBounds (status.removeFromRight (360));

@@ -358,7 +358,7 @@ Result Snapshot::finish (LocalStore& store, const Progress& progress)
     for (int index = 1; index <= total; ++index)
     {
         const auto& file = files[(size_t) index - 1];
-        const auto label = "Checking audio files (" + String (index) + " of " + String (total) + ")";
+        const auto label = "Checking " + file.getFileName() + (total > 1 ? " (" + String (index) + " of " + String (total) + ")" : String());
         if (! report (progress, label, (double) (index - 1) / (double) total))
         {
             store.saveHashCache();   // keep what's done: next time is quicker
@@ -458,15 +458,16 @@ PushOutcome push (Client& client, LocalStore& store, Snapshot& snap, const Strin
         if (h.isNotEmpty() && ! blobs.contains (h))
         {
             blobs.add (h);
-            items.push_back ({ h, a.file, {} });
+            items.push_back ({ h, a.file, {}, a.file.getFileName() });
         }
     }
 
     int uploaded = 0;
+    String onFile;   // "Uploading Kick.wav (3 of 12)"
     auto r = client.upload (projectId, items, [&] (double p)
     {
-        return report (progress, p < 0.25 ? "Compressing audio" : "Uploading", 0.3 + 0.65 * p);
-    }, uploaded);
+        return report (progress, onFile.isNotEmpty() ? onFile : String (p < 0.25 ? "Compressing audio" : "Uploading"), 0.3 + 0.65 * p);
+    }, uploaded, [&] (const String& d) { onFile = d; });
     if (r.failed())
     {
         out.result = r;
@@ -752,12 +753,23 @@ Result prepareRevision (Client* client, LocalStore& store, const Revision& rev, 
         if (client == nullptr)
             return Result::fail (String ((int) downloads.size()) + " audio file(s) for " + rev.label()
                                  + " haven't been downloaded. Sign in and pull first.");
+        std::set<String> wereThere;   // only what this download makes gets cleaned up if it stops
+        for (auto& [hash, f] : downloads)
+            if (f.exists())
+                wereThere.insert (f.getFullPathName());
+        String onFile;   // "Downloading Kick.wav (3 of 12)"
         auto r = client->download (store.getProjectId(), downloads, [&] (double p)
         {
-            return report (progress, "Downloading " + String ((int) downloads.size()) + " audio file(s)...", p);
-        });
+            return report (progress, onFile.isNotEmpty() ? onFile : "Downloading " + String ((int) downloads.size()) + " audio file(s)...", p);
+        }, [&] (const String& d) { onFile = d; });
         if (r.failed())
+        {
+            // Stopped or failed: don't leave half a revision's files lying in the Audio folder.
+            for (auto& [hash, f] : downloads)
+                if (wereThere.count (f.getFullPathName()) == 0)
+                    f.deleteFile();
             return r;
+        }
         for (auto& [hash, f] : downloads)
             store.rememberHash (f, hash);
     }

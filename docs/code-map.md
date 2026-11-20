@@ -34,7 +34,7 @@ Source/
                         Mutable.* (Multi Synth, Resonator, Grains, Random Notes, and CoreRate, which
                         runs a fixed-rate core at any sample rate)
 ThirdParty/mutable/     the vendored MIT DSP behind those four (see its README for source and changes)
-  Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert
+  Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert, copying with progress
   UI/CloudLinks.*       invite links and listening links (pages on getlathe.app), Cloud menu
   UI/UndoHistory.*      Edit > Undo History: every undo step, who made it (you or the assistant), click to go back
   Compare/Compare.*     View > Compare: renders Before/Now, reads a reference, measures them, plays them in step

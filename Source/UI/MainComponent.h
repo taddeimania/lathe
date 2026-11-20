@@ -46,7 +46,9 @@ public:
     void save (std::function<void (bool)> done = {});
     void saveAs (std::function<void (bool)> done = {});
     /** Save As to this file without asking: Name/Name.lathe in its own folder, audio copied in. */
-    void saveTo (const File& chosen, std::function<void (bool)> done = {});
+    /** Saves into chosen's own folder, copying the project's audio there first. In the background
+        (a progress bar with Cancel) unless `inBackground` is false; `done` gets whether it saved. */
+    void saveTo (const File& chosen, std::function<void (bool)> done = {}, bool inBackground = true);
     /** Lets the AI assistant's tools make, open and save projects. */
     void connectAssistantToProjects();
     void saveAsTemplate();

@@ -4,6 +4,10 @@
 
 namespace lathe
 {
+/** Copies a file a megabyte at a time. `progress` gets 0..1 and returns false to stop. On any
+    failure (or a stop, "Cancelled.") the copy is deleted. Any thread. */
+Result copyFileWithProgress (const File& from, const File& to, const std::function<bool (double)>& progress = {});
+
 /** One audio file, memory-mapped for allocation-free reads on the audio thread. */
 struct AudioFileSource
 {

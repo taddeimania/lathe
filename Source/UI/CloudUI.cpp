@@ -147,11 +147,34 @@ public:
         setMouseCursor (MouseCursor::PointingHandCursor);
     }
 
+    void paint (Graphics& g) override
+    {
+        // While a push or pull runs: a bar behind the text, filling as it goes.
+        if (owner.isShowingProgress())
+        {
+            auto r = getLocalBounds().toFloat().reduced (0.0f, 3.0f);
+            g.setColour (theme::lane);
+            g.fillRoundedRectangle (r, 3.0f);
+            if (owner.activityProgress > 0.0)
+            {
+                g.setColour (theme::accent.withAlpha (0.35f));
+                g.fillRoundedRectangle (r.withWidth (jmax (6.0f, r.getWidth() * (float) jmin (1.0, owner.activityProgress))), 3.0f);
+            }
+            g.setColour (theme::text);
+            g.setFont (getFont());
+            g.drawFittedText (getText(), getLocalBounds().reduced (8, 0), Justification::centred, 1, 0.8f);
+            return;
+        }
+        Label::paint (g);
+    }
+
     void mouseUp (const MouseEvent& e) override
     {
         if (! e.mouseWasClicked())
             return;
-        if (! owner.isSignedIn())
+        if (owner.isShowingProgress())
+            owner.askToStop();
+        else if (! owner.isSignedIn())
             owner.showSignIn();
         else if (owner.isLinked())
             owner.showHistory();
@@ -725,8 +748,16 @@ void CloudController::updateStatus()
     }
 
     status->setText (text, dontSendNotification);
+    status->repaint();
+    if (isShowingProgress() != layoutBusy)
+    {
+        layoutBusy = isShowingProgress();
+        if (auto* parent = status->getParentComponent())
+            parent->resized();   // wider while busy, for the file's name
+    }
     status->setColour (Label::textColourId, attention ? theme::accent : theme::textDim);
-    status->setTooltip (busy ? String ("Working... Keep Lathe open until this finishes.")
+    status->setTooltip (isShowingProgress() ? String ("Working... Keep Lathe open until this finishes, or click to stop.")
+                        : busy ? String ("Working... Keep Lathe open until this finishes.")
                              : isLinked() && lostAccess ? String ("The owner stopped sharing this song with you, moved it or deleted it. Your copy here is "
                                                                   "yours: keep working on it, or choose Cloud > Disconnect This Song.")
                              : isLinked() && isUnfinishedShare() ? String ("Sharing didn't finish. Cloud > Push uploads the rest; files already sent aren't sent again.")
@@ -833,6 +864,9 @@ void CloudController::run (const String& what, std::function<void()> work, std::
 {
     busy = true;
     *cancelFlag = false;
+    stopping = false;
+    job = what;
+    activityProgress = what.isNotEmpty() ? 0.0 : -1.0;
     activity = what;
     if (what.isNotEmpty())
         hooks.setStatus (what + "...");
@@ -848,13 +882,45 @@ void CloudController::run (const String& what, std::function<void()> work, std::
         {
             if (auto* self = weak.get())
             {
+                const auto stopped = self->stopping ? self->job : String();
                 self->busy = false;
                 self->activity = {};
+                self->job = {};
+                self->stopping = false;
+                self->activityProgress = -1.0;
                 self->updateStatus();
+                // A job you stopped says so; if it finished anyway, its own message follows.
+                if (stopped.isNotEmpty())
+                    self->hooks.setStatus ("Stopped " + stopped.substring (0, 1).toLowerCase() + stopped.substring (1) + ".");
                 if (callback)
                     callback();
             }
         });
+    });
+}
+
+void CloudController::askToStop()
+{
+    if (! isShowingProgress() || stopping)
+        return;
+    const auto what = job.substring (0, 1).toLowerCase() + job.substring (1);
+    WeakReference<CloudController> weak (this);
+    AlertWindow::showAsync (MessageBoxOptions()
+                                .withIconType (MessageBoxIconType::NoIcon)
+                                .withTitle ("Stop " + what + "?")
+                                .withMessage ("Nothing changes in the cloud or in your project. You can do it again later.")
+                                .withButton ("Stop")
+                                .withButton ("Keep Going"),
+                            [weak, startedJob = job] (int button)
+    {
+        auto* self = weak.get();
+        if (button != 1 || self == nullptr || ! self->isShowingProgress() || self->job != startedJob)
+            return;
+        self->stopping = true;
+        self->cancel();
+        self->activity = "Stopping...";
+        self->hooks.setStatus ("Stopping " + startedJob.substring (0, 1).toLowerCase() + startedJob.substring (1) + "...");
+        self->updateStatus();
     });
 }
 
@@ -870,11 +936,14 @@ cloud::Progress CloudController::progressReporter()
         {
             last->store (now);
             const auto text = what + (p > 0.0 && p < 1.0 ? "  " + String (roundToInt (p * 100.0)) + "%" : String());
-            MessageManager::callAsync ([weak, text]
+            MessageManager::callAsync ([weak, text, p]
             {
                 if (auto* self = weak.get())
                 {
+                    if (self->stopping)
+                        return;   // keep saying "Stopping..."
                     self->activity = text;
+                    self->activityProgress = p;
                     self->hooks.setStatus (text);
                     self->updateStatus();
                 }

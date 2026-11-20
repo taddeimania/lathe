@@ -31,6 +31,8 @@ inline void styleEditor (TextEditor& e, bool password = false)
 
 inline void alert (const String& title, const String& message)
 {
+    if (message == "Cancelled.")
+        return;   // you stopped it (the status bar says so): nothing went wrong
     AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::NoIcon)
                                 .withTitle (title).withMessage (message).withButton ("OK"), nullptr);
 }

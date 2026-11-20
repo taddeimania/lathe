@@ -97,27 +97,32 @@ public:
         String hash;
         File file;                 // uploaded from here...
         MemoryBlock data;          // ...or from memory when file is empty
+        String name;               // what to call it while it goes up ("Kick.wav"); the file's name if empty
         int64 size() const         { return file != File() ? file.getSize() : (int64) data.getSize(); }
     };
+
+    /** Says which file a transfer is on, like "Uploading Kick.wav (3 of 12)". Called on the
+        thread that called upload() or download(), along with progress. */
+    using Detail = std::function<void (const String&)>;
 
     /** Uploads whichever items the server doesn't have yet, takes compressed losslessly
         (see Packing.h). progress: 0..1 (the first quarter is compressing). */
     Result upload (const String& projectId, const std::vector<UploadItem>& items,
-                   const std::function<bool (double)>& progress, int& uploadedCount);
+                   const std::function<bool (double)>& progress, int& uploadedCount, const Detail& detail = {});
     /** How many files (or pieces of a big file) move at once, up and down. Default 4. */
     void setParallelTransfers (int n)    { parallelTransfers = jlimit (1, 16, n); }
     int getParallelTransfers() const     { return parallelTransfers.load(); }
 
     /** Downloads blobs to files, checking each file's SHA-256. */
     Result download (const String& projectId, const std::vector<std::pair<String, File>>& hashAndDestination,
-                     const std::function<bool (double)>& progress);
+                     const std::function<bool (double)>& progress, const Detail& detail = {});
 
 private:
     /** Asks which items the server is missing; those go in toSend, takes packed (FLAC)
         into temp files where that makes them smaller. */
     Result packForUpload (const String& projectId, const std::vector<UploadItem>& items,
                           std::vector<UploadItem>& toSend, std::vector<File>& tempFiles,
-                          const std::function<bool (double)>& progress);
+                          const std::function<bool (double)>& progress, const Detail& detail);
     Result cognito (const String& target, const var& payload, var& response);
     /** Stores the tokens, unless the account changed (signed out) since `startedIn`. */
     Result applyAuthResult (const var& authResult, const String& email, uint64 startedIn);

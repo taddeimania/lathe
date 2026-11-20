@@ -97,6 +97,11 @@ public:
     bool isUnfinishedShare() const;
     bool isSignedIn() const        { return client != nullptr && client->isSignedIn(); }
     bool isBusy() const noexcept   { return busy; }
+    /** Busy with something you asked for (a push, a pull), not a quiet background check: the
+        status bar shows a progress bar, wider. */
+    bool isShowingProgress() const { return busy && job.isNotEmpty(); }
+    /** Asks whether to stop what's running, then stops it. */
+    void askToStop();
     /** A newer revision is on the server than the one open (Pull would get it). */
     bool hasNewerRevision() const noexcept   { return waitingHead.isNotEmpty(); }
     /** What's running ("Uploading  45%"), for the quit warning. */
@@ -157,6 +162,10 @@ private:
     std::atomic<bool> busy { false };
     std::shared_ptr<std::atomic<bool>> cancelFlag = std::make_shared<std::atomic<bool>> (false);
     String activity;                     // what the cloud is doing right now, for the status label
+    String job;                          // what run() was asked to do ("Pushing"), for "Stopped pushing."
+    double activityProgress = -1.0;      // how far it is (0..1), or -1 when there's nothing to show
+    bool layoutBusy = false;             // the status label is wide (busy) in the window's layout
+    bool stopping = false;               // you stopped the running job
     String waitingHead, waitingText;     // a newer revision on the server, if any
     std::unique_ptr<StatusLabel> status;
     Component::SafePointer<DocumentWindow> history, library, friends;

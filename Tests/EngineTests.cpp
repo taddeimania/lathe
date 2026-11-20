@@ -3978,7 +3978,7 @@ int main (int argc, char** argv)
             auto pieces = cloud::Snapshot::capture (split);
             check (pieces.finish (store, [&] (const String& what, double) { seen.addIfNotAlreadyThere (what); return true; }).wasOk(),
                    "a split take shares");
-            check (seen.contains ("Checking audio files (1 of 1)") && ! seen.contains ("Checking audio files (1 of 3)"),
+            check (seen.contains ("Checking Kick 1.wav") && ! seen.joinIntoString ("|").contains (" of 3)"),
                    "the push counts audio files, not clips (" + seen.joinIntoString (" / ") + ")");
             const auto& pc = *pieces.project["tracks"][0]["clips"].getArray();
             check (pc.size() == 3 && pc[2]["hash"].toString() == cloud::sha256OfFile (c.file) && pc[2]["file"].toString() == "Audio/Kick 1.wav",
@@ -4139,12 +4139,21 @@ int main (int argc, char** argv)
             cloud::testing::dropNextTransfers (2);
             std::vector<double> seen;
             int sent = 0;
-            const auto r = mara.upload (maraStore.getProjectId(), batch, [&] (double p) { seen.push_back (p); return true; }, sent);
+            StringArray said;
+            const auto r = mara.upload (maraStore.getProjectId(), batch, [&] (double p) { seen.push_back (p); return true; }, sent,
+                                        [&] (const String& d) { said.addIfNotAlreadyThere (d); });
             check (r.wasOk() && sent == 7, "uploads 7 files, 4 at a time, through 2 dropped connections (" + r.getErrorMessage() + ")");
             check (! seen.empty() && seen.back() == 1.0 && std::is_sorted (seen.begin(), seen.end()), "progress only goes forward and ends at 100%");
+            const auto saidText = said.joinIntoString (" / ");
+            check (saidText.contains ("Uploading take") && saidText.contains (" of 7)") && ! saidText.contains (" of 8)")
+                     && ! saidText.contains ("(8 of"),
+                   "says which file is going up, counting files, not pieces (" + saidText.substring (0, 300) + ")");
 
             cloud::testing::dropNextTransfers (1);
-            const auto d = mara.download (maraStore.getProjectId(), back, {});
+            StringArray gotSaid;
+            const auto d = mara.download (maraStore.getProjectId(), back, {}, [&] (const String& t) { gotSaid.addIfNotAlreadyThere (t); });
+            check (gotSaid.joinIntoString ("|").contains ("Downloading take") && gotSaid.joinIntoString ("|").contains (" of 7)"),
+                   "and which file is coming down (" + gotSaid.joinIntoString (" / ").substring (0, 300) + ")");
             bool same = d.wasOk();
             for (size_t i = 0; i < back.size() && same; ++i)
                 same = cloud::sha256OfFile (back[i].second) == batch[i].hash;
