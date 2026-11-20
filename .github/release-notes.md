@@ -3,6 +3,15 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.9
+
+- **A progress bar for Save As.** Save As copies every audio file into the new project's folder, and with a lot
+  of long stems that used to freeze Lathe. Now it copies in the background, with a progress bar that names the
+  file it's on and a **Cancel** button that leaves everything as it was.
+- **A progress bar for Lathe Cloud.** While you push or pull, the cloud label in the status bar fills like a
+  progress bar and names the stem it's on ("Uploading Kick.wav (3 of 12)"). Click it to stop; nothing changes
+  in the cloud or in your project.
+
 ## New in 0.13.8
 
 - **A progress bar when importing audio.** Importing used to freeze Lathe until every file was copied and
