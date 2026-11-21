@@ -272,6 +272,27 @@ int main (int argc, char** argv)
         std::cout << seeds << " random sessions on " << threads << " threads: " << failures << " differ from one thread" << std::endl;
         return failures == 0 ? 0 : 1;
     }
+    if (argc >= 3 && String (argv[1]) == "--drums-to-midi")   // LatheTests --drums-to-midi <file> [from s] [to s]: tuning Convert to MIDI
+    {
+        // Prints "pitch start velocity" for every drum hit found in a recording, as the converter
+        // sees it (mono, the file's rate). Not a test: for scoring the converter against real drums.
+        AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<AudioFormatReader> r (fm.createReaderFor (File::getCurrentWorkingDirectory().getChildFile (argv[2])));
+        if (r == nullptr)
+            return 2;
+        const auto from = argc >= 4 ? (int64) (String (argv[3]).getDoubleValue() * r->sampleRate) : (int64) 0;
+        const auto to = argc >= 5 ? jmin (r->lengthInSamples, (int64) (String (argv[4]).getDoubleValue() * r->sampleRate)) : r->lengthInSamples;
+        const int n = (int) jmax ((int64) 0, to - from);
+        AudioBuffer<float> b ((int) r->numChannels, n);
+        r->read (&b, 0, n, from, true, true);
+        for (int ch = 1; ch < b.getNumChannels(); ++ch)
+            b.addFrom (0, 0, b, ch, 0, n);
+        b.applyGain (0, 0, n, 1.0f / (float) jmax (1, b.getNumChannels()));
+        for (auto& f : lathe::audiotomidi::drums (b.getReadPointer (0), n, r->sampleRate, false))
+            std::cout << f.pitch << " " << String (f.start, 4) << " " << String (f.velocity, 3) << "\n";
+        return 0;
+    }
     if (argc >= 3 && String (argv[1]) == "--dump")    // LatheTests --dump <folder> [threads]
         return lathe::bench::dump (File::getCurrentWorkingDirectory().getChildFile (argv[2]), argc >= 4 ? String (argv[3]).getIntValue() : 1, std::cout);
     if (argc >= 4 && String (argv[1]) == "--crash-on-load")   // the crash-loop guard test's child: loads a plug-in that crashes
@@ -5273,6 +5294,69 @@ int main (int argc, char** argv)
                 allSnare = allSnare && h.pitch == 38;
             check (allSnare && snares[2].velocity < snares[1].velocity, "convert to MIDI, one drum: every hit the same drum ("
                                                                        + String ((int) snares.size()) + " hits)");
+
+            // What a real kit adds (tuned on a real drum recording): a kick's long boom, a snare's
+            // ring and the room, all rising and falling within each wave; a crash on its own (bright,
+            // but ringing a little in the snare's band), and a crash on a kick. None of it is a new
+            // kick or a snare.
+            {
+                auto crashAt = [&] (std::vector<float>& b, double at, float gain)
+                {
+                    IIRFilter hp1, hp2;
+                    hp1.setCoefficients (IIRCoefficients::makeHighPass (sr, 4000.0));
+                    hp2.setCoefficients (IIRCoefficients::makeHighPass (sr, 4000.0));
+                    for (int i = 0; i < (int) (0.6 * sr) && (size_t) (at * sr) + (size_t) i < b.size(); ++i)
+                    {
+                        const double t = i / sr;
+                        const double ring = 0.4 * std::sin (2.0 * MathConstants<double>::pi * 330.0 * t) + 0.25 * std::sin (2.0 * MathConstants<double>::pi * 517.0 * t);
+                        b[(size_t) (at * sr) + (size_t) i] += gain * (float) (std::exp (-t * 4.0)
+                            * (hp2.processSingleSampleRaw (hp1.processSingleSampleRaw (rnd.nextFloat() * 2.0f - 1.0f)) + ring));
+                    }
+                };
+                auto ringAt = [&] (std::vector<float>& buf, double at, double hz, double decay, float gain, double seconds)
+                {
+                    for (int i = 0; i < (int) (seconds * sr); ++i)
+                    {
+                        const double t = i / sr;
+                        buf[(size_t) (at * sr) + (size_t) i] += gain * (float) (jmin (1.0, t / 0.005) * std::exp (-t * decay) * std::sin (2.0 * MathConstants<double>::pi * hz * t));
+                    }
+                };
+                std::vector<float> real ((size_t) (sr * 3.4), 0.0f);
+                kickAt (real, 0.10, 0.9f);
+                ringAt (real, 0.10, 55.0, 3.0, 0.5f, 0.9);      // a kick with a long boom
+                snareAt (real, 1.10, 0.8f);
+                ringAt (real, 1.10, 185.0, 4.0, 0.25f, 0.8);    // and a snare that rings
+                // The room under it all: noise in the snare's band, swelling and dipping 6 dB every
+                // 40 ms and flickering 12 dB every few ms.
+                {
+                    IIRFilter bp;
+                    bp.setCoefficients (IIRCoefficients::makeBandPass (sr, 250.0, 1.0));
+                    float g = 1.0f, swell = 1.0f;
+                    for (int i = (int) (1.16 * sr); i < (int) (1.9 * sr); ++i)
+                    {
+                        if (i % (int) (0.04 * sr) == 0)
+                            swell = swell > 0.75f ? 0.5f : 1.0f;
+                        if (i % (int) (0.003 * sr) == 0)
+                            g = rnd.nextFloat() < 0.5f ? 1.0f : 0.25f;
+                        real[(size_t) i] += 0.3f * swell * g * bp.processSingleSampleRaw (rnd.nextFloat() * 2.0f - 1.0f);
+                    }
+                }
+                crashAt (real, 2.10, 0.5f);
+                kickAt (real, 2.90, 0.9f);
+                crashAt (real, 2.90, 0.5f);
+                for (auto& v : real) v += (rnd.nextFloat() - 0.5f) * 0.001f;
+                const auto found = audiotomidi::drums (real.data(), (int) real.size(), sr, false);
+                StringArray text;
+                for (auto& h : found)
+                    text.add (String (h.pitch) + "@" + String (h.start, 3));
+                struct Want { int pitch; double at; };
+                const Want want[] = { { 36, 0.10 }, { 38, 1.10 }, { 42, 2.10 }, { 36, 2.90 }, { 42, 2.90 } };
+                bool ok = found.size() == 5;
+                for (size_t i = 0; ok && i < 5; ++i)
+                    ok = found[i].pitch == want[i].pitch && std::abs (found[i].start - want[i].at) < 0.012;
+                check (ok, "convert to MIDI, a real kit: nothing from a kick's boom, a snare's ring or the room, a crash is a cymbal, alone or on a kick: "
+                               + text.joinIntoString (", "));
+            }
 
             // A clip: its own stretch of the file, in beats at the song's tempo.
             const auto wav = File::getSpecialLocation (File::tempDirectory).getChildFile ("lathe-test-melody.wav");

@@ -68,14 +68,14 @@ The file has the song's tempo and time signature, each track's name and MIDI cha
 Turn a recording into notes: right-click an audio clip and choose **Convert to MIDI**, then what's on it:
 
 - **Melody**, for one note at a time: a voice, a bass, a lead line. Each note gets its pitch, where it starts, how long it is and how loud it was. Slides and vibrato are held as one note at the nearest pitch.
-- **Drums**, for a drum part: each hit becomes a kick, a snare or a closed hi-hat (General MIDI's notes 36, 38 and 42, which EZdrummer and other drum plug-ins follow). A hat played on a kick gives both notes.
+- **Drums**, for a drum part: each hit becomes a kick, a snare or a closed hi-hat (General MIDI's notes 36, 38 and 42, which EZdrummer and other drum plug-ins follow). Crashes and rides come out as hi-hat notes too. A hat or cymbal played on a kick gives both notes. A whole kit works, close mics and overheads together (a [bounced drum group](arranging.md#bounce-a-group-to-one-audio-track), say): the ring of the drums and the room isn't taken for hits, and soft notes are kept when they're struck, not when they're the tail of the last hit.
 - **One Drum**, for a track of a single drum (a kick mic, a snare mic): every hit becomes the same note.
 
 The notes go on a new MIDI track right under the audio track, named after it ("Vocal MIDI"), one MIDI clip for each audio clip at the same place. Select several clips on a track first to convert them all. The audio is left as it is. Add an instrument to the new track to hear it: a drum plug-in for drums. It's one undo step.
 
 Timing is kept as played, not snapped to the grid, and softer notes get lower velocities.
 
-> **Note:** Convert to MIDI hears one note at a time, so chords (a strummed guitar, a piano) don't convert. On drums, toms and cymbals other than the hi-hat come out as one of the three, and a hi-hat hit at the same moment as the snare is usually missed: the snare's wires sound like it. Clean, separate recordings convert best; a full mix doesn't.
+> **Note:** Convert to MIDI hears one note at a time, so chords (a strummed guitar, a piano) don't convert. On drums, toms come out as a kick or a snare, and a cymbal hit at the same moment as the snare is usually missed: the snare's wires sound like it. A drum recording converts well; a full band mix doesn't.
 
 The AI assistant can convert a track too (`convert_to_midi`), and then read and rework the notes.
 

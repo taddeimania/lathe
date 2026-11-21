@@ -303,14 +303,25 @@ std::vector<Found> drums (const float* x, int n, double sr, bool oneDrum, const 
     if (peakDb[all] < -60.0f)
         return out;   // silence
 
-    // How sharply the sound jumps up in each hop: the biggest rise over 7.5 ms in any band that's
-    // loud enough to count.
+    // How sharply the sound jumps up in each hop: in any band that's loud enough to count, what
+    // comes next against the average just before. Against an average, not a single earlier hop:
+    // a real drum's ring and a cymbal's wash flicker by several dB from hop to hop, and a rise out
+    // of one of those dips isn't a hit. The kick's and snare's bands look longer (10 ms against
+    // 30 ms): a 60 Hz wave takes 16 ms, so 5 ms of it flickers on its own. The hiss is quick
+    // (5 ms against 15 ms).
     const int back = 3;
     std::vector<float> rise ((size_t) frames, 0.0f);
-    for (int f = back; f < frames; ++f)
+    for (int f = 13; f + 4 <= frames; ++f)
         for (int b = 0; b < all; ++b)
-            if (db[(size_t) f][(size_t) b] > peakDb[(size_t) b] - 45.0f)
-                rise[(size_t) f] = jmax (rise[(size_t) f], db[(size_t) f][(size_t) b] - db[(size_t) (f - back)][(size_t) b]);
+        {
+            const int nowHops = b == high ? 2 : 4, wasHops = b == high ? 6 : 12;
+            double now = 0.0, was = 0.0;
+            for (int k = 0; k < nowHops; ++k) now += energy[(size_t) (f + k)][(size_t) b];
+            for (int k = 1; k <= wasHops; ++k) was += energy[(size_t) (f - 1 - k)][(size_t) b];
+            const float nowDb = toDb (now / nowHops);
+            if (nowDb > peakDb[(size_t) b] - 45.0f)
+                rise[(size_t) f] = jmax (rise[(size_t) f], nowDb - toDb (was / wasHops));
+        }
 
     const float threshold = 9.0f;                          // dB
     const int near = jmax (1, roundToInt (0.01 * sr / hop));    // the biggest within 10 ms
@@ -351,8 +362,8 @@ std::vector<Found> drums (const float* x, int n, double sr, bool oneDrum, const 
             }
             fresh[(size_t) b] = (float) jmax (0.0, now - was * (after + 1));
         }
-        // Which drum: a kick is mostly low; a hi-hat is hiss with next to no body; a snare has
-        // both. A hit can be two at once: a hat or a snare on a kick
+        // Which drum: a kick is mostly low; a hi-hat or a cymbal is mostly hiss; a snare is
+        // mostly body. A hit can be two at once: a hat or a snare on a kick
         // shows as high or middle energy near the loudest there is in those bands.
         const float l = fresh[low], md = fresh[mid], h = fresh[high];
         const float total = l + md + h;
@@ -360,16 +371,21 @@ std::vector<Found> drums (const float* x, int n, double sr, bool oneDrum, const 
             continue;
         auto closeToLoudest = [&] (int band, float within) { return toDb (peak[(size_t) band]) > peakDb[(size_t) band] - within; };
         auto add = [&] (int drum) { hits.push_back ({ f, drum, peak, total }); };
-        // A hat under a kick is swamped in power, but still adds a little real top (a kick's
-        // beater click adds less) at about a hat's loudness.
-        const bool hatToo = h >= 0.008f * total && closeToLoudest (high, 12.0f);
+        // A hat or cymbal under a kick is swamped in power, but still adds a little real top (a
+        // few tenths of a percent of what's new; a kick's beater click adds next to none) at
+        // about a cymbal's loudness.
+        const bool hatToo = h >= 0.003f * total && closeToLoudest (high, 12.0f);
         if (l >= 0.5f * total)
         {
             add (kick);
-            if (md >= 0.15f * total && closeToLoudest (mid, 12.0f)) add (snare);
+            // A kick's own boom puts a fifth of what's new into the snare's band; a snare on top
+            // of it makes that a third or more.
+            if (md >= 0.25f * total && closeToLoudest (mid, 12.0f)) add (snare);
             else if (hatToo) add (hihat);
         }
-        else if (md < 0.15f * (md + h) && l < 0.3f * h)
+        // A real snare is nearly all body over its wires' hiss; a crash or a ride, bright as it is,
+        // still rings a little in the snare's band.
+        else if (md < 0.25f * (md + h) && l < 0.3f * h)
             add (hihat);
         else
             add (snare);
@@ -419,6 +435,24 @@ std::vector<Found> drums (const float* x, int n, double sr, bool oneDrum, const 
     std::map<int, float> loudest;
     for (auto& h : hits)
         loudest[h.drum] = jmax (loudest.count (h.drum) ? loudest[h.drum] : -240.0f, toDb (h.power[(size_t) bandOf (h.drum)]));
+
+    // Lost in the tail: a soft "hit" no louder in its drum's band than that band already was in the
+    // last quarter second is the room, a ringing drum or the cymbals' wash moving, not a new hit
+    // (real hits stand 15 dB and more over what came before). Loud ones stay, however close.
+    {
+        const int recent = jmax (1, roundToInt (0.25 * sr / hop)), skip = 4;
+        hits.erase (std::remove_if (hits.begin(), hits.end(), [&] (const Hit& h)
+        {
+            const int b = bandOf (h.drum);
+            const float level = toDb (h.power[(size_t) b]);
+            if (level > loudest[h.drum] - 8.0f || rise[(size_t) h.frame] >= 15.0f)
+                return false;
+            float was = -240.0f;
+            for (int k = jmax (0, h.frame - recent); k < h.frame - skip; ++k)
+                was = jmax (was, db[(size_t) k][(size_t) b]);
+            return level < was;
+        }), hits.end());
+    }
     for (auto& h : hits)
     {
         Found note;
