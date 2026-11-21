@@ -934,9 +934,17 @@ void MainComponent::confirmDiscard (std::function<void()> proceed)
                                      ModalCallbackFunction::create ([this, proceed] (int result)
     {
         if (result == 1)
+        {
             save ([proceed] (bool ok) { if (ok) proceed(); });
+        }
         else if (result == 2)
+        {
+            // Not keeping them: the autosave goes too, or opening the song next time would offer
+            // to "recover" changes you chose to throw away, as if Lathe had crashed.
+            if (edit.projectFile != File())
+                autosaveFileFor (edit.projectFile).deleteFile();
             proceed();
+        }
     }));
 }
 

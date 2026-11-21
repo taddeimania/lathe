@@ -235,6 +235,10 @@ public:
     File projectFile;   // empty until saved
     File workDir;       // holds Audio/ and Exports/
     File getAudioDir() const    { return workDir.getChildFile ("Audio"); }
+    /** Where unsaved changes to `project` are autosaved every minute ("Song.lathe-autosave").
+        Saving deletes it, and so does choosing not to keep the changes; one left behind means
+        Lathe closed without either, and opening the project offers to recover it. */
+    static File autosaveFileFor (const File& project)   { return project.getSiblingFile (project.getFileName() + "-autosave"); }
     File getExportsDir() const  { return workDir.getChildFile ("Exports"); }
     String getName() const      { return projectFile.existsAsFile() ? projectFile.getFileNameWithoutExtension() : String ("Untitled"); }
     void ensureWorkDir();

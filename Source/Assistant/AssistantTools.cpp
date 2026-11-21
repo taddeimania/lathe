@@ -2299,7 +2299,11 @@ String Tools::settleUnsaved (const var& args, const String& doing)
         return {};
     const auto choice = args.getProperty ("unsaved", {}).toString().trim().toLowerCase();
     if (choice == "discard")
+    {
+        if (edit.projectFile != File())
+            Edit::autosaveFileFor (edit.projectFile).deleteFile();   // or it'd be offered back as if Lathe had crashed
         return {};
+    }
     if (choice == "save")
     {
         if (! edit.projectFile.existsAsFile())

@@ -5642,9 +5642,18 @@ int main (int argc, char** argv)
             e.dirty = true;
             r = tools.call ("new_project", args2 ({ { "template", "nope" } }), status);
             check ((bool) r["isError"] && text (r).contains ("8-Input Tracking") && calls.isEmpty(), "new_project names the templates there are");
+            // The changes being dropped were autosaved a minute ago; dropping them drops that too,
+            // or opening the song again would offer to "recover" them as if Lathe had crashed.
+            const auto dropped = pdir.getChildFile ("Dropped/Dropped.lathe");
+            dropped.getParentDirectory().createDirectory();
+            dropped.replaceWithText ("{}");
+            Edit::autosaveFileFor (dropped).replaceWithText ("{}");
+            e.projectFile = dropped;
             r = tools.call ("new_project", args2 ({ { "template", "8-input" }, { "unsaved", "discard" } }), status);
             check (! (bool) r["isError"] && calls.joinIntoString ("|") == "new 8-Input Tracking" && text (r).contains ("Untitled"),
                    "new_project from a template, discarding the changes when told to");
+            check (dropped.existsAsFile() && ! Edit::autosaveFileFor (dropped).existsAsFile(),
+                   "discarding deletes the autosave of the changes, and keeps the saved song");
             calls.clear();
             e.dirty = true;
             r = tools.call ("new_project", args2 ({ { "unsaved", "save" } }), status);
