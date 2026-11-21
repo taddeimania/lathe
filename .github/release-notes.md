@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.13
+
+- **Opening a song shows its plug-ins loading.** A song with big instruments used to freeze Lathe for as long
+  as they took, with nothing on screen. Now a progress bar names each plug-in as it loads, and **Cancel** keeps
+  the song you had open.
+- **Join Clips shows progress on long audio.** Joining more than two minutes of audio renders in the background
+  with a progress bar and **Cancel**, instead of freezing Lathe until it's done.
+
 ## New in 0.13.12
 
 - **Convert to MIDI hears real drums.** On a real recorded kit (close mics and overheads, bounced to one track)
