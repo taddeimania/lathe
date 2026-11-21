@@ -37,144 +37,206 @@ Clip joinMidi (const std::vector<const Clip*>& parts, double start, double end)
     return out;
 }
 
-Result joinAudio (Edit& edit, AudioPool& pool, const std::vector<const Clip*>& parts,
-                  double start, double end, Clip& out)
+Result writeWav (const File& file, const AudioBuffer<float>& mix, double rate, const std::function<bool (double)>& progress)
 {
-    const double rate = edit.sampleRate;
-    const double spb = edit.samplesPerBeat (rate);
-    const auto total = (int64) std::llround ((end - start) * spb);
-    if (total <= 0)
-        return Result::fail ("The clips have no length.");
-    if (total > (int64) std::numeric_limits<int>::max())
-        return Result::fail ("The joined clip would be too long.");
-
-    int channels = 1;
-    for (auto* c : parts)
-        if (auto src = pool.get (c->file))
-            channels = jmax (channels, jmin (2, src->numChannels));
-
-    AudioBuffer<float> mix (channels, (int) total);
-    mix.clear();
-
-    for (auto* c : parts)
-    {
-        std::unique_ptr<AudioFormatReader> reader (pool.formats.createReaderFor (c->file));
-        if (reader == nullptr)
-            return Result::fail ("Couldn't read " + c->file.getFileName() + ".");
-
-        const auto from = (int64) std::llround ((c->start - start) * spb);
-        auto n = (int64) std::llround (c->length * spb);
-        n = jmin (n, (int64) reader->lengthInSamples - c->sourceOffset, total - from);
-        if (n <= 0 || from < 0)
-            continue;
-
-        AudioBuffer<float> piece ((int) jmax ((int) reader->numChannels, 1), (int) n);
-        reader->read (&piece, 0, (int) n, c->sourceOffset, true, true);
-
-        // The same short fades the engine puts on clip edges, so it sounds identical.
-        // Not on the joined clip's own outer edges: the engine still fades those.
-        const auto clipLen = (int64) std::llround (c->length * spb);
-        const int fade = (int) jmin ((int64) 64, clipLen / 2);
-        const bool fadeIn = from > 0;
-        const bool fadeOut = from + clipLen < total;
-        const float gain = Decibels::decibelsToGain (c->gainDb);
-        for (int ch = 0; ch < channels; ++ch)
-        {
-            const int srcCh = jmin (ch, piece.getNumChannels() - 1);
-            const float* in = piece.getReadPointer (srcCh);
-            float* dst = mix.getWritePointer (ch, (int) from);
-            for (int i = 0; i < (int) n; ++i)
-            {
-                float g = gain;
-                if (fade > 0)
-                {
-                    if (fadeIn && i < fade) g *= (float) i / (float) fade;
-                    if (fadeOut && clipLen - i < fade) g *= (float) (clipLen - i) / (float) fade;
-                }
-                // Later clips are drawn on top, so they win where clips overlap.
-                dst[i] = in[i] * g;
-            }
-        }
-    }
-
-    edit.ensureWorkDir();
-    auto dir = edit.getAudioDir();
-    dir.createDirectory();
-    const auto file = dir.getNonexistentChildFile (File::createLegalFileName (parts.front()->name) + " joined", ".wav", false);
-
     std::unique_ptr<OutputStream> stream (file.createOutputStream());
     WavAudioFormat wav;
     // 32-bit float: clip gain can push peaks over 0 dB, and float keeps them.
     auto writer = stream != nullptr ? wav.createWriterFor (stream, AudioFormatWriterOptions()
                                                                       .withSampleRate (rate)
-                                                                      .withNumChannels (channels)
+                                                                      .withNumChannels (mix.getNumChannels())
                                                                       .withBitsPerSample (32)
                                                                       .withSampleFormat (AudioFormatWriterOptions::SampleFormat::floatingPoint))
                                     : nullptr;
-    if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (mix, 0, mix.getNumSamples()))
-    {
-        writer.reset();
-        file.deleteFile();
+    if (writer == nullptr)
         return Result::fail ("Couldn't write " + file.getFullPathName() + ".");
-    }
-    writer.reset();
 
-    out.kind = ClipKind::audio;
-    out.file = file;
-    out.sourceOffset = 0;
-    out.gainDb = 0.0f;
-    out.start = start;
-    out.length = end - start;
+    constexpr int block = 1 << 16;
+    for (int pos = 0; pos < mix.getNumSamples(); pos += block)
+    {
+        if (! writer->writeFromAudioSampleBuffer (mix, pos, jmin (block, mix.getNumSamples() - pos)))
+            return Result::fail ("Couldn't write " + file.getFullPathName() + ".");
+        if (progress && ! progress ((double) (pos + block) / (double) mix.getNumSamples()))
+            return Result::fail ("Cancelled.");
+    }
     return Result::ok();
 }
 } // namespace
 
-Result joinClips (Edit& edit, AudioPool& pool, Track& track, const std::vector<int>& clipIds, int& newClipId)
+JoinPlan planJoin (Edit& edit, const Track& track, const std::vector<int>& clipIds)
 {
-    newClipId = -1;
+    JoinPlan plan;
+    plan.trackId = track.id;
+    plan.clipIds = clipIds;
 
     // In timeline order, then by their order on the track (later ones sit on top).
-    std::vector<const Clip*> parts;
     for (auto& c : track.clips)
         if (std::find (clipIds.begin(), clipIds.end(), c.id) != clipIds.end())
-            parts.push_back (&c);
+            plan.parts.push_back (c);
 
-    if (parts.size() < 2)
-        return Result::fail ("Select two or more clips on the same track to join them.");
-
-    const auto kind = parts.front()->kind;
-    double start = parts.front()->start, end = parts.front()->end();
-    for (auto* c : parts)
+    if (plan.parts.size() < 2)
     {
-        if (c->kind != kind)
-            return Result::fail ("Audio and MIDI clips can't be joined together.");
-        start = jmin (start, c->start);
-        end = jmax (end, c->end());
+        plan.problem = "Select two or more clips on the same track to join them.";
+        return plan;
     }
 
-    Clip joined;
-    if (kind == ClipKind::midi)
+    plan.kind = plan.parts.front().kind;
+    plan.start = plan.parts.front().start;
+    plan.end = plan.parts.front().end();
+    for (auto& c : plan.parts)
     {
-        joined = joinMidi (parts, start, end);
+        if (c.kind != plan.kind)
+        {
+            plan.problem = "Audio and MIDI clips can't be joined together.";
+            return plan;
+        }
+        plan.start = jmin (plan.start, c.start);
+        plan.end = jmax (plan.end, c.end());
+    }
+
+    plan.sampleRate = edit.sampleRate;
+    plan.samplesPerBeat = edit.samplesPerBeat (edit.sampleRate);
+    if (plan.isAudio())
+    {
+        edit.ensureWorkDir();
+        plan.audioDir = edit.getAudioDir();
+    }
+    return plan;
+}
+
+Result renderJoin (const JoinPlan& plan, AudioFormatManager& formats, File& wav, const std::function<bool (double)>& progress)
+{
+    wav = File();
+    if (plan.problem.isNotEmpty())
+        return Result::fail (plan.problem);
+    if (! plan.isAudio())
+        return Result::ok();
+
+    const double spb = plan.samplesPerBeat;
+    const auto total = (int64) std::llround ((plan.end - plan.start) * spb);
+    if (total <= 0)
+        return Result::fail ("The clips have no length.");
+    if (total > (int64) std::numeric_limits<int>::max())
+        return Result::fail ("The joined clip would be too long.");
+
+    std::vector<std::unique_ptr<AudioFormatReader>> readers;
+    int channels = 1;
+    for (auto& c : plan.parts)
+    {
+        readers.emplace_back (formats.createReaderFor (c.file));
+        if (readers.back() == nullptr)
+            return Result::fail ("Couldn't read " + c.file.getFileName() + ".");
+        channels = jmax (channels, jmin (2, (int) readers.back()->numChannels));
+    }
+
+    AudioBuffer<float> mix (channels, (int) total);
+    mix.clear();
+
+    // Reading is about two thirds of the time, writing the rest.
+    int64 toRead = 0;
+    for (auto& c : plan.parts)
+        toRead += jmax ((int64) 1, (int64) std::llround (c.length * spb));
+    int64 read = 0;
+    auto reading = [&] (int64 done) { return ! progress || progress (0.65 * (double) (read + done) / (double) toRead); };
+
+    for (size_t k = 0; k < plan.parts.size(); ++k)
+    {
+        auto& c = plan.parts[k];
+        auto& reader = *readers[k];
+        const auto from = (int64) std::llround ((c.start - plan.start) * spb);
+        const auto clipLen = (int64) std::llround (c.length * spb);
+        auto n = jmin (clipLen, (int64) reader.lengthInSamples - c.sourceOffset, total - from);
+        if (n > 0 && from >= 0)
+        {
+            // The same short fades the engine puts on clip edges, so it sounds identical.
+            // Not on the joined clip's own outer edges: the engine still fades those.
+            const int fade = (int) jmin ((int64) 64, clipLen / 2);
+            const bool fadeIn = from > 0;
+            const bool fadeOut = from + clipLen < total;
+            const float gain = Decibels::decibelsToGain (c.gainDb);
+
+            constexpr int block = 1 << 17;
+            AudioBuffer<float> piece (jmax ((int) reader.numChannels, 1), block);
+            for (int64 at = 0; at < n; at += block)
+            {
+                const int len = (int) jmin ((int64) block, n - at);
+                reader.read (&piece, 0, len, c.sourceOffset + at, true, true);
+                for (int ch = 0; ch < channels; ++ch)
+                {
+                    const int srcCh = jmin (ch, piece.getNumChannels() - 1);
+                    const float* in = piece.getReadPointer (srcCh);
+                    float* dst = mix.getWritePointer (ch, (int) (from + at));
+                    for (int j = 0; j < len; ++j)
+                    {
+                        const int64 i = at + j;
+                        float g = gain;
+                        if (fade > 0)
+                        {
+                            if (fadeIn && i < fade) g *= (float) i / (float) fade;
+                            if (fadeOut && clipLen - i < fade) g *= (float) (clipLen - i) / (float) fade;
+                        }
+                        // Later clips are drawn on top, so they win where clips overlap.
+                        dst[j] = in[j] * g;
+                    }
+                }
+                if (! reading (at + len))
+                    return Result::fail ("Cancelled.");
+            }
+        }
+        read += jmax ((int64) 1, clipLen);
+    }
+
+    plan.audioDir.createDirectory();
+    const auto file = plan.audioDir.getNonexistentChildFile (File::createLegalFileName (plan.parts.front().name) + " joined", ".wav", false);
+    const auto r = writeWav (file, mix, plan.sampleRate, [&] (double p) { return ! progress || progress (0.65 + 0.35 * jmin (1.0, p)); });
+    if (r.failed())
+    {
+        file.deleteFile();
+        return r;
+    }
+    wav = file;
+    return Result::ok();
+}
+
+Result applyJoin (Edit& edit, Track& track, const JoinPlan& plan, const File& wav, int& newClipId)
+{
+    newClipId = -1;
+    for (int id : plan.clipIds)
+        if (track.findClip (id) == nullptr)
+        {
+            wav.deleteFile();
+            return Result::fail ("The clips changed while they were being joined.");
+        }
+
+    Clip joined;
+    if (plan.isAudio())
+    {
+        joined.kind = ClipKind::audio;
+        joined.file = wav;
+        joined.sourceOffset = 0;
+        joined.gainDb = 0.0f;
+        joined.start = plan.start;
+        joined.length = plan.end - plan.start;
     }
     else
     {
-        auto r = joinAudio (edit, pool, parts, start, end, joined);
-        if (r.failed())
-            return r;
+        std::vector<const Clip*> parts;
+        for (auto& c : plan.parts)
+            parts.push_back (&c);
+        joined = joinMidi (parts, plan.start, plan.end);
     }
 
     // Named after the first clip in time.
-    const Clip* first = parts.front();
-    for (auto* c : parts)
-        if (c->start < first->start)
-            first = c;
+    const Clip* first = &plan.parts.front();
+    for (auto& c : plan.parts)
+        if (c.start < first->start)
+            first = &c;
     joined.name = first->name;
     joined.id = edit.newId();
 
     std::vector<Clip> kept;
     for (auto& c : track.clips)
-        if (std::find (clipIds.begin(), clipIds.end(), c.id) == clipIds.end())
+        if (std::find (plan.clipIds.begin(), plan.clipIds.end(), c.id) == plan.clipIds.end())
             kept.push_back (c);
     track.clips = std::move (kept);
 
@@ -183,5 +245,17 @@ Result joinClips (Edit& edit, AudioPool& pool, Track& track, const std::vector<i
     track.clips.push_back (joined);
     newClipId = joined.id;
     return Result::ok();
+}
+
+Result joinClips (Edit& edit, AudioPool& pool, Track& track, const std::vector<int>& clipIds, int& newClipId)
+{
+    newClipId = -1;
+    const auto plan = planJoin (edit, track, clipIds);
+    if (plan.problem.isNotEmpty())
+        return Result::fail (plan.problem);
+    File wav;
+    if (auto r = renderJoin (plan, pool.formats, wav); r.failed())
+        return r;
+    return applyJoin (edit, track, plan, wav, newClipId);
 }
 } // namespace lathe

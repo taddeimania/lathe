@@ -5,6 +5,7 @@
 
 namespace lathe
 {
+struct JoinPlan;
 class ArrangementView : public Component,
                         public FileDragAndDropTarget,
                         private ScrollBar::Listener
@@ -98,6 +99,7 @@ public:
     AppContext& ctx;
 
 private:
+    void applyJoins (const std::vector<JoinPlan>&, const std::vector<File>& wavs, const std::vector<String>& errors);
     class Ruler;
     class Lanes;
     class Header;

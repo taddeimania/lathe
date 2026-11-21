@@ -2105,6 +2105,59 @@ void ArrangementView::pasteClips()
                         + " fit: there was no track of the same kind (audio or MIDI) for it.");
 }
 
+namespace
+{
+/** Join Clips on long audio: renders the joined WAVs off the message thread, with a progress
+    bar and Cancel. Applying them happens back on the message thread, as one undo step. */
+class JoinThread : public ThreadWithProgressWindow
+{
+public:
+    using Done = std::function<void (std::vector<JoinPlan>, std::vector<File>, std::vector<String>, bool cancelled)>;
+
+    JoinThread (std::vector<JoinPlan> p, AudioFormatManager& f, Done d)
+        : ThreadWithProgressWindow ("Joining clips...", true, true, 10000, "Cancel"),
+          plans (std::move (p)), formats (f), done (std::move (d)) {}
+
+    void run() override
+    {
+        double total = 0.0;
+        for (auto& p : plans)
+            total += jmax (0.001, p.seconds());
+        double before = 0.0;
+        for (auto& p : plans)
+        {
+            const double share = jmax (0.001, p.seconds());
+            File wav;
+            const auto r = renderJoin (p, formats, wav, [&] (double x)
+            {
+                setProgress ((before + x * share) / total);
+                return ! threadShouldExit();
+            });
+            wavs.push_back (wav);
+            errors.push_back (r.failed() ? r.getErrorMessage() : String());
+            before += share;
+            if (threadShouldExit())
+                return;
+        }
+    }
+
+    void threadComplete (bool cancelled) override
+    {
+        wavs.resize (plans.size());
+        errors.resize (plans.size(), "Cancelled.");
+        done (std::move (plans), std::move (wavs), std::move (errors), cancelled);
+        MessageManager::callAsync ([this] { delete this; });
+    }
+
+private:
+    std::vector<JoinPlan> plans;
+    AudioFormatManager& formats;
+    Done done;
+    std::vector<File> wavs;
+    std::vector<String> errors;
+};
+} // namespace
+
 void ArrangementView::joinSelectedClips()
 {
     const auto selected = getSelectedClips();
@@ -2140,21 +2193,78 @@ void ArrangementView::joinSelectedClips()
                 }
     }
 
+    std::vector<JoinPlan> plans;
+    double audioSeconds = 0.0;
+    for (auto& [trackId, ids] : byTrack)
+        if (auto track = ctx.edit.findTrack (trackId); track != nullptr && ids.size() >= 2)
+        {
+            plans.push_back (planJoin (ctx.edit, *track, ids));
+            if (plans.back().isAudio() && plans.back().problem.isEmpty())
+                audioSeconds += plans.back().seconds();
+        }
+
+    // Short joins happen at once; long audio renders off the message thread, with a progress bar.
+    if (audioSeconds < 120.0)
+    {
+        std::vector<File> wavs;
+        std::vector<String> errors;
+        for (auto& p : plans)
+        {
+            File wav;
+            const auto r = renderJoin (p, ctx.pool.formats, wav);
+            wavs.push_back (wav);
+            errors.push_back (r.failed() ? r.getErrorMessage() : String());
+        }
+        applyJoins (plans, wavs, errors);
+        return;
+    }
+
+    if (ctx.engine.isPlaying())
+        ctx.engine.stop();
+    Component::SafePointer<ArrangementView> safe (this);
+    auto* thread = new JoinThread (std::move (plans), ctx.pool.formats,
+                                   [safe] (std::vector<JoinPlan> p, std::vector<File> wavs, std::vector<String> errors, bool cancelled)
+    {
+        if (safe == nullptr || cancelled)
+        {
+            for (auto& w : wavs)
+                w.deleteFile();
+            if (safe != nullptr)
+                safe->ctx.showStatus ("Stopped joining: nothing changed.");
+            return;
+        }
+        safe->applyJoins (p, wavs, errors);
+    });
+    thread->launchThread();
+}
+
+void ArrangementView::applyJoins (const std::vector<JoinPlan>& plans, const std::vector<File>& wavs, const std::vector<String>& errors)
+{
     ctx.edit.beginClipEdit();
     std::set<std::pair<int, int>> joined;
     String problem;
-    for (auto& [trackId, ids] : byTrack)
+    for (size_t i = 0; i < plans.size(); ++i)
     {
-        auto track = ctx.edit.findTrack (trackId);
-        if (track == nullptr || ids.size() < 2)
+        auto& plan = plans[i];
+        if (errors[i].isNotEmpty())
+        {
+            problem = errors[i];
             continue;
+        }
+        auto track = ctx.edit.findTrack (plan.trackId);
+        if (track == nullptr)
+        {
+            wavs[i].deleteFile();
+            problem = "The track was removed while its clips were being joined.";
+            continue;
+        }
 
         int newId = -1;
-        auto r = joinClips (ctx.edit, ctx.pool, *track, ids, newId);
+        auto r = applyJoin (ctx.edit, *track, plan, wavs[i], newId);
         if (r.failed())
             problem = r.getErrorMessage();
         else
-            joined.insert ({ trackId, newId });
+            joined.insert ({ plan.trackId, newId });
     }
 
     if (joined.empty())

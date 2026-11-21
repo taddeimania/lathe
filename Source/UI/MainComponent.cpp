@@ -31,6 +31,162 @@ namespace menu
 }
 
 //==============================================================================
+namespace
+{
+struct PluginToLoad
+{
+    PluginDescription description;
+    MemoryBlock state;
+    bool separate = false;
+};
+
+/** Every plug-in a project file loads, in the order Edit::loadFrom asks for them (it reads the
+    file into a scratch Edit with a factory that only takes notes). */
+std::vector<PluginToLoad> pluginsIn (const var& data, const File& dir)
+{
+    std::vector<PluginToLoad> list;
+    Edit scratch;
+    scratch.loadFrom (data, dir, [&list] (const PluginDescription& d, const MemoryBlock& state, bool separate)
+    {
+        list.push_back ({ d, state, separate });
+        return std::make_shared<PluginSlot>();
+    });
+    return list;
+}
+} // namespace
+
+/** Opening a project: its plug-ins load first, one per message-loop turn (they must load on the
+    message thread), with a progress window naming each one and Cancel. Only once they're all in
+    does the project replace the open one, so Cancel leaves you where you were. */
+class MainComponent::ProjectOpener : private Timer
+{
+public:
+    ProjectOpener (MainComponent& m, File f, var d, double previousRate, std::function<void()> t)
+        : owner (m), file (std::move (f)), data (std::move (d)), rateBefore (previousRate), then (std::move (t))
+    {
+        plugins = pluginsIn (data, file.getParentDirectory());
+        startTimer (1);
+    }
+
+    ~ProjectOpener() override
+    {
+        stopTimer();
+        if (window != nullptr)
+            window->exitModalState (0);
+    }
+
+    bool hasSlowPlugins() const
+    {
+        for (auto& p : plugins)
+            if (! devices::isBuiltIn (p.description))
+                return true;
+        return false;
+    }
+
+    String getName() const   { return file.getFileNameWithoutExtension(); }
+    const File& getFile() const   { return file; }
+
+private:
+    void timerCallback() override
+    {
+        stopTimer();
+        if (cancelled)
+        {
+            made.clear();
+            auto& o = owner;
+            const auto name = getName();
+            const double rate = rateBefore;
+            o.opener.reset();   // deletes this
+            if (rate > 0)
+                o.engine.setDeviceRate (rate);   // back to the open song's rate
+            o.setStatus ("Stopped opening " + name + ".");
+            return;
+        }
+
+        if (next < plugins.size())
+        {
+            // Name it first and let that paint: the load itself blocks until it's done.
+            if (! labelled)
+            {
+                if (window == nullptr)
+                    showWindow();
+                window->setMessage ("Loading " + plugins[next].description.name
+                                    + (plugins.size() > 1 ? " (" + String ((int) next + 1) + " of " + String ((int) plugins.size()) + ")" : String())
+                                    + "...");
+                progress = (double) next / (double) plugins.size();
+                labelled = true;
+                startTimer (60);   // the progress bar picks up its value on a timer of its own
+                return;
+            }
+
+            auto& p = plugins[next];
+            String error;
+            auto slot = owner.engine.makeSlot (p.description, p.state, error, p.separate);
+            if (slot->instance == nullptr)
+                missing.addIfNotAlreadyThere (p.description.name);
+            made.push_back (std::move (slot));
+            ++next;
+            labelled = false;
+            startTimer (1);
+            return;
+        }
+
+        if (window != nullptr)
+            window->setMessage ("Opening the song...");
+        progress = 1.0;
+
+        auto& o = owner;
+        auto f = file;
+        auto d = data;
+        auto slots = std::move (made);
+        auto stillMissing = missing;
+        auto after = std::move (then);
+        o.opener.reset();   // deletes this (and closes the window) before the song opens
+
+        size_t handedOut = 0;
+        auto factory = [&o, &slots, &handedOut, &stillMissing] (const PluginDescription& desc, const MemoryBlock& state, bool separate)
+        {
+            if (handedOut < slots.size())
+                return slots[handedOut++];
+            String error;   // shouldn't happen: the same file asks for the same plug-ins
+            auto slot = o.engine.makeSlot (desc, state, error, separate);
+            if (slot->instance == nullptr)
+                stillMissing.addIfNotAlreadyThere (desc.name);
+            return slot;
+        };
+        o.finishLoading (f, d, factory, stillMissing);
+        if (after)
+            after();
+    }
+
+    void showWindow()
+    {
+        window = std::make_unique<AlertWindow> ("Opening \"" + getName() + "\"", String(), MessageBoxIconType::NoIcon);
+        window->addProgressBarComponent (progress);
+        window->addButton ("Cancel", 1, KeyPress (KeyPress::escapeKey));
+        window->setMessage ("Loading plug-ins...");
+        window->enterModalState (true, ModalCallbackFunction::create ([this] (int r)
+        {
+            // Seen between plug-ins: one that's loading can't be stopped part way.
+            if (r == 1)
+                cancelled = true;
+        }), false);
+    }
+
+    MainComponent& owner;
+    File file;
+    var data;
+    double rateBefore = 0.0;
+    std::function<void()> then;
+    std::vector<PluginToLoad> plugins;
+    std::vector<std::shared_ptr<PluginSlot>> made;
+    StringArray missing;
+    size_t next = 0;
+    bool labelled = false, cancelled = false;
+    double progress = 0.0;
+    std::unique_ptr<AlertWindow> window;
+};
+
 /** Drag bar between the main view and the bottom panel. */
 class MainComponent::Divider : public Component
 {
@@ -199,7 +355,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
     hooks.openProject = [this] (const File& f)
     {
         autosaveFileFor (f).deleteFile();
-        loadProjectFile (f, f);
+        loadProjectFile (f, f, [this] { updateTitle(); });
     };
     hooks.confirmDiscard = [this] (std::function<void()> proceed) { confirmDiscard (std::move (proceed)); };
     hooks.setStatus = [this] (const String& m) { setStatus (m); };
@@ -279,6 +435,7 @@ MainComponent::MainComponent (PropertiesFile& s, bool screenshots)
 
 MainComponent::~MainComponent()
 {
+    opener.reset();   // plug-ins it loaded go before the host that made them
     UndoHistoryWindow::closeIfOpen();
     CompareWindow::closeIfOpen();
     globalkeys::uninstall();
@@ -501,6 +658,8 @@ Edit::PluginFactory MainComponent::makePluginFactory (StringArray& missing)
 
 void MainComponent::newProject (const File& templateFile, bool blank)
 {
+    if (stillOpening())
+        return;
     if (engine.isPlaying())
         engine.stop();
 
@@ -556,6 +715,10 @@ void MainComponent::newProject (const File& templateFile, bool blank)
 
 void MainComponent::openProject (const File& file)
 {
+    if (opener != nullptr && opener->getFile() == file)
+        return;   // already on its way (a Mac sends a file it was started with a second time)
+    if (stillOpening())
+        return;
     if (! file.existsAsFile())
     {
         setStatus ("Can't find " + file.getFullPathName());
@@ -574,29 +737,35 @@ void MainComponent::openProject (const File& file)
                            .withButton ("Open saved version");
         AlertWindow::showAsync (options, [this, file, autosave] (int button)
         {
-            loadProjectFile (file, button == 1 ? autosave : file);
-            if (button == 1)
-                edit.dirty = true;
-            else
-                autosave.deleteFile();
-            updateTitle();
+            loadProjectFile (file, button == 1 ? autosave : file, [this, file, autosave, button]
+            {
+                if (edit.projectFile != file)
+                    return;   // it didn't open
+                if (button == 1)
+                    edit.dirty = true;
+                else
+                    autosave.deleteFile();
+                updateTitle();
+            });
         });
         return;
     }
 
-    loadProjectFile (file, file);
+    loadProjectFile (file, file, [this] { updateTitle(); });
 }
 
-void MainComponent::loadProjectFile (const File& file, const File& readFrom)
+bool MainComponent::readProject (const File& readFrom, var& data)
 {
-    const auto data = JSON::parse (readFrom);
-    if (! data.isObject())
-    {
-        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Can't open project",
-                                          readFrom.getFileName() + " isn't a readable Lathe project.");
-        return;
-    }
+    data = JSON::parse (readFrom);
+    if (data.isObject())
+        return true;
+    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Can't open project",
+                                      readFrom.getFileName() + " isn't a readable Lathe project.");
+    return false;
+}
 
+void MainComponent::matchProjectRate (const var& data)
+{
     if (engine.isPlaying())
         engine.stop();
 
@@ -604,14 +773,60 @@ void MainComponent::loadProjectFile (const File& file, const File& readFrom)
     const double projectRate = data.hasProperty ("sampleRate") ? (double) data["sampleRate"] : 0.0;
     if (projectRate > 0)
         engine.setDeviceRate (projectRate);
+}
 
+bool MainComponent::stillOpening()
+{
+    if (opener == nullptr)
+        return false;
+    setStatus ("Still opening " + opener->getName() + "...");
+    return true;
+}
+
+void MainComponent::loadProjectFile (const File& file, const File& readFrom)
+{
+    if (stillOpening())
+        return;
+    var data;
+    if (! readProject (readFrom, data))
+        return;
+    matchProjectRate (data);
+    StringArray missing;
+    finishLoading (file, data, makePluginFactory (missing), missing);
+}
+
+void MainComponent::loadProjectFile (const File& file, const File& readFrom, std::function<void()> then)
+{
+    if (stillOpening())
+        return;
+    var data;
+    if (! readProject (readFrom, data))
+        return;
+
+    const double rateBefore = engine.getSampleRate();
+    matchProjectRate (data);
+    auto o = std::make_unique<ProjectOpener> (*this, file, data, rateBefore, then);
+    if (! o->hasSlowPlugins())
+    {
+        // Only Lathe's own devices: they load in no time, so no window.
+        o.reset();
+        StringArray missing;
+        finishLoading (file, data, makePluginFactory (missing), missing);
+        if (then)
+            then();
+        return;
+    }
+    opener = std::move (o);
+}
+
+void MainComponent::finishLoading (const File& file, const var& data, const Edit::PluginFactory& makePlugin, StringArray& missing)
+{
     edit.reset();
     suggestedName = {};
     edit.projectFile = file;
     edit.workDir = file.getParentDirectory();
 
-    StringArray missing;
-    const auto result = edit.loadFrom (data, edit.workDir, makePluginFactory (missing));
+    const auto result = edit.loadFrom (data, edit.workDir, makePlugin);
     if (result.failed())
     {
         AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Can't open project", result.getErrorMessage());

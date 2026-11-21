@@ -79,7 +79,16 @@ private:
     void setStatus (const String&);
     void setMixerShown (bool);
     void showDetail (bool pianoRoll);
-    void loadProjectFile (const File& file, const File& readFrom);
+    void loadProjectFile (const File& file, const File& readFrom);   // all at once: the assistant and screenshots wait for it
+    /** The same, but the plug-ins load one at a time between events, with a progress window and
+        Cancel (the open song stays until they're all loaded). `then` runs once it has opened. */
+    void loadProjectFile (const File& file, const File& readFrom, std::function<void()> then);
+    bool readProject (const File& readFrom, var& data);
+    void matchProjectRate (const var& data);
+    void finishLoading (const File& file, const var& data, const Edit::PluginFactory&, StringArray& missing);
+    class ProjectOpener;
+    std::unique_ptr<ProjectOpener> opener;   // while a project's plug-ins load
+    bool stillOpening();
     Edit::PluginFactory makePluginFactory (StringArray& missing);
     void reloadMissingPlugins();
     String crashedPluginNote;   // a plug-in that crashed Lathe while loading, moved out (Engine::loadGuardFile)

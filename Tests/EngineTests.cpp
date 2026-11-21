@@ -4526,6 +4526,35 @@ int main (int argc, char** argv)
         t->clips.push_back (md);
         check (joinClips (j, pool, *t, { a.id, md.id, b.id }, none).wasOk(), "three audio clips with gaps join");
 
+        // In steps, as the app does a long join: progress, Cancel leaves nothing, and the
+        // parts must still be there to apply it.
+        {
+            auto g = j.addTrack (TrackKind::audio, "Gtr B");
+            Clip x = a, y = b;
+            x.id = j.newId(); y.id = j.newId();
+            g->clips = { x, y };
+            const auto plan = planJoin (j, *g, { x.id, y.id });
+            check (plan.problem.isEmpty() && plan.isAudio() && std::abs (plan.seconds() - 1.5) < 1.0e-6, "a join plan spans the clips (" + String (plan.seconds()) + " s)");
+
+            const auto filesBefore = j.getAudioDir().getNumberOfChildFiles (File::findFiles);
+            File wav;
+            int calls = 0;
+            check (renderJoin (plan, pool.formats, wav, [&calls] (double) { return ++calls < 2; }).getErrorMessage() == "Cancelled."
+                       && wav == File() && j.getAudioDir().getNumberOfChildFiles (File::findFiles) == filesBefore,
+                   "a cancelled join leaves no file behind");
+
+            double last = 0.0;
+            bool rising = true;
+            check (renderJoin (plan, pool.formats, wav, [&] (double p) { rising = rising && p >= last; last = p; return true; }).wasOk()
+                       && wav.existsAsFile() && rising && last > 0.99,
+                   "a join's render reports progress up to the end (" + String (last) + ")");
+
+            g->clips.pop_back();   // a part went away in the meantime
+            int id = -1;
+            check (applyJoin (j, *g, plan, wav, id).failed() && ! wav.existsAsFile() && g->clips.size() == 1,
+                   "a join whose clips changed isn't applied, and its file is deleted");
+        }
+
         engine.setEdit (&edit);
     }
 

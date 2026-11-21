@@ -60,7 +60,7 @@ Paste goes to the **start marker** on the selected track: click an empty spot in
 ### Split and join
 
 - **Cmd/Ctrl+E** splits the selected clips at the start marker (or right-click a clip > **Split at start marker**).
-- **Cmd/Ctrl+J** joins the selected clips on each track into one clip. Audio clips are rendered to a new file; MIDI clips simply become one clip with all their notes.
+- **Cmd/Ctrl+J** joins the selected clips on each track into one clip. Audio clips are rendered to a new file; MIDI clips simply become one clip with all their notes. Joining more than two minutes of audio shows a progress bar with **Cancel**, which leaves the clips as they were.
 
 ### More on a clip's menu
 
