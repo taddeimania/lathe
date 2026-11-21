@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.11
+
+- **No more false "Recover unsaved changes?"** Choosing **Don't save** when closing or quitting left the
+  minute-by-minute autosave behind, so opening the song next time offered to recover changes you'd chosen to
+  throw away, as if Lathe had crashed. Don't save now drops the autosave too. The offer only appears after
+  Lathe really did close unexpectedly.
+
 ## New in 0.13.10
 
 - **Bounce Group to Audio Track records what you hear.** It used to take only the group's bus or the tracks
