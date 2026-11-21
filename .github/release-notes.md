@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.10
+
+- **Bounce Group to Audio Track records what you hear.** It used to take only the group's bus or the tracks
+  playing straight to the master, so a drum group playing into a drum bus return gave nothing but a line in the
+  status bar. Now it records everything the group puts into the master: its tracks plus the returns they play
+  into or send to (drum bus, reverb), with only the group in them. Soloing the new track sounds like soloing
+  the group. When it can't bounce, it says why in a message.
+
 ## New in 0.13.9
 
 - **A progress bar for Save As.** Save As copies every audio file into the new project's folder, and with a lot
