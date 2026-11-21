@@ -115,16 +115,20 @@ Groups and group buses are saved in projects and templates.
 
 ### Bounce a group to one audio track
 
-To turn five drum tracks into one stereo drum track, right-click the group's header > **Bounce Group to Audio Track**. Lathe renders the group faster than real time, with a progress bar and **Cancel**:
+To turn five drum tracks into one stereo drum track, right-click the group's header > **Bounce Group to Audio Track**. Lathe renders the group faster than real time, with a progress bar and **Cancel**.
 
-- With a [group bus](mixing.md#group-buses), you get what the bus plays: after its plug-ins, EQ and fader.
-- Without one, you get the group's tracks added up after their own faders and pans.
+You get what the group puts into the master: what you'd hear with the group soloed, before the master's own plug-ins and fader. That's:
 
-The result goes on a new audio track right under the group, named like "Drums (bounced)", in the group's colour. It starts where the group's first clip starts and runs until the sound stops, so a reverb's tail is kept. Lathe then mutes the group, so you hear the drums once. The tracks, their clips and their plug-ins are all kept: unmute the group (and mute the new track) to go back to them, or bounce again after a change.
+- the group's tracks that play straight to the master, after their faders and pans;
+- every return or bus they play into or send to (a [group bus](mixing.md#group-buses), a drum bus return, the reverb), after its plug-ins and fader, with only the group in it. Another track feeding the same return isn't in the bounce.
+
+Soloing the new track sounds the same as soloing the group did.
+
+The result goes on a new audio track right under the group, named like "Drums (bounced)", in the group's colour, playing to the master. It starts where the group's first clip starts and runs until the sound stops, so a reverb's tail is kept. Lathe then mutes the group, so you hear the drums once (a muted group's sends stop too, so the reverb isn't doubled). The tracks, their clips and their plug-ins are all kept: unmute the group (and mute the new track) to go back to them, or bounce again after a change.
 
 One **Cmd/Ctrl+Z** takes the new track away and unmutes the group.
 
-> **Note:** Sends to returns, like a shared reverb, aren't in the bounce, and the group's tracks stop sending once the group is muted. Turn up the new track's sends to put them back.
+If there's nothing to bounce (no clips, or everything plays to interface outputs instead of the master), Lathe says why in a message.
 
 ## Comments
 

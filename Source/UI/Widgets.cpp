@@ -808,7 +808,8 @@ void bounceGroup (AppContext& ctx, int groupId)
     auto plan = bounce::plan (ctx.edit, groupId);
     if (plan.problem.isNotEmpty())
     {
-        ctx.showStatus (plan.problem);
+        // A box, not just the status bar: you asked for a track, and none is coming.
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::NoIcon, "Can't bounce \"" + plan.groupName + "\"", plan.problem);
         return;
     }
     if (ctx.engine.isPlaying())
@@ -820,7 +821,10 @@ void bounceGroup (AppContext& ctx, int groupId)
     {
         if (r.error.isNotEmpty())
         {
-            context->showStatus (r.error);
+            if (r.cancelled)
+                context->showStatus (r.error);
+            else
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::NoIcon, "Couldn't bounce \"" + plan.groupName + "\"", r.error);
             return;
         }
         auto& edit = context->edit;
@@ -839,8 +843,8 @@ void bounceGroup (AppContext& ctx, int groupId)
         if (context->selectionChanged)
             context->selectionChanged();
         context->showStatus ("Bounced \"" + plan.groupName + "\" onto \"" + track->name + "\" and muted the group (unmute it to go back)."
-                             + (plan.anySends ? " Its sends to returns aren't in the bounce: turn up the new track's sends for those."
-                                              : String()));
+                             + (plan.viaReturns ? " The returns it plays through are in it too, with only the group in them."
+                                                : String()));
     });
     thread->launchThread();
 }

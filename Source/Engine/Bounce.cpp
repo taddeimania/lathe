@@ -15,23 +15,40 @@ Plan plan (const Edit& edit, int groupId)
     p.groupName = group->name;
     p.tempo = edit.tempo;
 
-    const auto bus = edit.findGroupBus (groupId);
-    if (bus != nullptr)
+    // What reaches the master when the group is soloed: members that play straight to it, and
+    // every return or bus they play into or send to (a drum bus, the reverb). Only the group's
+    // tracks play in the render, so those returns carry nothing but the group.
+    auto findBus = [&] (int id) -> std::shared_ptr<Track>
     {
-        p.playing.insert (bus->id);
-        p.taps.insert (bus->id);
-    }
+        for (auto& b : edit.buses)
+            if (b->id == id)
+                return b;
+        return {};
+    };
+    std::set<int> reached;   // returns and buses the group feeds
+    if (auto bus = edit.findGroupBus (groupId))
+        reached.insert (bus->id);
 
     bool anyClip = false;
     p.startBeat = std::numeric_limits<double>::max();
     for (auto& t : edit.groupMembers (groupId))
     {
         p.playing.insert (t->id);
-        if (bus == nullptr && t->output.kind == OutputRoute::Kind::master)
+        if (t->output.kind == OutputRoute::Kind::master)
             p.taps.insert (t->id);
+        else if (t->output.kind == OutputRoute::Kind::bus)
+        {
+            if (findBus (t->output.busId) != nullptr)
+                reached.insert (t->output.busId);
+            else
+                p.taps.insert (t->id);   // a return that's gone: the engine plays it to the master
+        }
         for (auto& s : t->sends)
-            if (s->levelDb.load() > kSilenceDb)
+            if (s->levelDb.load() > kSilenceDb && findBus (s->busId) != nullptr)
+            {
+                reached.insert (s->busId);
                 p.anySends = true;
+            }
         for (auto& c : t->clips)
         {
             anyClip = true;
@@ -40,10 +57,20 @@ Plan plan (const Edit& edit, int groupId)
         }
     }
 
+    // A return plays to the master unless it goes to an interface output (a return can't feed
+    // another return; the engine sends one that tries to the master).
+    for (auto id : reached)
+        if (auto b = findBus (id); b != nullptr && b->output.kind != OutputRoute::Kind::hardware)
+        {
+            p.playing.insert (id);   // listed, so the render hands out its signal
+            p.taps.insert (id);
+            p.viaReturns = true;
+        }
+
     if (! anyClip)
         p.problem = "\"" + p.groupName + "\" has no clips to bounce.";
     else if (p.taps.empty())
-        p.problem = "None of \"" + p.groupName + "\"'s tracks play to the master, so there's nothing to bounce.";
+        p.problem = "Nothing in \"" + p.groupName + "\" reaches the master (its tracks and returns play to interface outputs), so there's nothing to bounce.";
     if (! anyClip)
         p.startBeat = 0.0;
     return p;

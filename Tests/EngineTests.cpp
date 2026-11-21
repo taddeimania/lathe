@@ -3753,6 +3753,63 @@ int main (int argc, char** argv)
         bus->mute = true;
         auto r3 = bounce::render (eng, p, folder, 1.0);
         check (r3.error.contains ("silent") && ! r3.file.existsAsFile(), "a muted bus gives no bounce, and no file is left behind");
+
+        // No group bus, the drums playing into a "Drum Bus" return instead (as in a real
+        // session), the snare also sending to a reverb, and the bass feeding the Drum Bus too.
+        // The bounce is what the group puts into the master when it's soloed: the returns with
+        // only the drums in them, and no bass.
+        e.removeGroupBus (drums->id);
+        kick = e.findTrack (kick->id);
+        snare = e.findTrack (snare->id);
+        bass = e.findTrack (bass->id);
+        auto drumBus = e.addTrack (TrackKind::bus, "Drum Bus");
+        auto verb = e.addTrack (TrackKind::bus, "Verb");
+        drumBus->volumeDb = -6.0206f;                       // x0.5
+        for (auto* t : { kick.get(), snare.get(), bass.get() })
+        {
+            t->output.kind = OutputRoute::Kind::bus;
+            t->output.busId = drumBus->id;
+        }
+        snare->getSend (verb->id, true)->levelDb = -6.0206f;   // 0.3 x 0.5 into the reverb
+        eng.rebuild();
+        p = bounce::plan (e, drums->id);
+        check (p.problem.isEmpty() && p.taps == std::set<int> { drumBus->id, verb->id } && p.viaReturns,
+               "tracks that play into returns: the bounce takes the returns they feed");
+        auto r4 = bounce::render (eng, p, folder, 1.0);
+        const float viaReturn = sampleAt (r4.file, 1000);
+        check (r4.error.isEmpty() && std::abs (viaReturn - 0.35f) < 0.005f,
+               "it's the Drum Bus (0.1 + 0.3, halved) plus the snare's reverb (0.15), without the bass (got " + String (viaReturn, 4) + ") " + r4.error);
+
+        // Soloing the group and bouncing sound the same: the mix with only the group playing
+        // (a flat master) is the bounce.
+        {
+            Engine::ExportSettings solo;
+            solo.mix = true;
+            solo.stems = false;
+            solo.startBeat = p.startBeat;
+            solo.endBeat = p.endBeat;
+            solo.tailSeconds = 0.0;
+            solo.trackIds = { kick->id, snare->id };
+            float heard = -1.0f;
+            eng.renderOffline (solo, [] (double) { return true; },
+                               [] (const std::vector<Engine::RenderTap>&, int64) { return Result::ok(); },
+                               [&] (int, const AudioBuffer<float>& b, int start, int count, int64 at)
+                               {
+                                   if (heard < 0.0f && at <= 1000 && at + count > 1000)
+                                       heard = b.getSample (0, start + (int) (1000 - at));
+                               });
+            check (std::abs (heard - viaReturn) < 0.005f, "soloing the group sounds like the bounce (" + String (heard, 4) + " vs " + String (viaReturn, 4) + ")");
+        }
+
+        // Everything going to an interface output: nothing reaches the master, and it says why.
+        for (auto* t : { kick.get(), snare.get() })
+        {
+            t->output.kind = OutputRoute::Kind::hardware;
+            t->getSend (verb->id, true)->levelDb = kSilenceDb;
+        }
+        p = bounce::plan (e, drums->id);
+        check (p.problem.contains ("reaches the master"), "tracks that only play to the interface can't be bounced: " + p.problem);
+
         eng.setEdit (nullptr);
         folder.deleteRecursively();
     }
