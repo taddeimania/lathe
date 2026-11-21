@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.12
+
+- **Convert to MIDI hears real drums.** On a real recorded kit (close mics and overheads, bounced to one track)
+  it used to add a snare or a kick for every ripple in the drums' ring and the room: two and a half times as many
+  notes as were played, and nine snares for every real one. Now it finds 98% of the kicks and 96% of the snares
+  with almost nothing extra, and nine in ten cymbal hits, including the ones played on a kick. Crashes come out
+  as cymbals, not snares.
+
 ## New in 0.13.11
 
 - **No more false "Recover unsaved changes?"** Choosing **Don't save** when closing or quitting left the
