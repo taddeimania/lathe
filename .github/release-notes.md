@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.14.2
+
+- **Clearer tool descriptions for AI apps.** The AI assistant's tools now say outright that they can remove tracks,
+  that only you can start a recording, and when to compare mixes rather than measure one. Scored with
+  [TDQS](https://tdqs.dev/), the tool set rates A.
+
 ## New in 0.14.1
 
 - **A track can have a key of its own.** For a part in a different key or mode from the band, like a solo in
