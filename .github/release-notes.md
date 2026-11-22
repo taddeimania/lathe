@@ -3,6 +3,15 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.14.0
+
+- **Play Along.** A new **Key** lane under the bar numbers holds the song's key, bar by bar: click it to set the
+  key or add a key change. **View > Play Along** then shows where those notes are on a guitar, bass, ukulele or
+  keyboard, and follows the song as it plays. In the bar before a key change, the next key's notes fade in so it
+  doesn't catch you out.
+- **The AI assistant can set the keys.** Ask it to work out the keys of a song, and it reads the notes and fills in
+  the key lane for you (one undo step).
+
 ## New in 0.13.14
 
 - **Fixed a crash at start-up on Macs using one device for input and another for output** (say, the built-in
