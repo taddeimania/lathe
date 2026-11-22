@@ -151,6 +151,7 @@ private:
     String structureSignature() const;
 
     static constexpr int kGroupHeaderHeight = 30;
+    static constexpr int kTrackKeyHeight = 15;
     double pxPerBeat = 24.0;
     double scrollBeats = 0.0;
     int scrollY = 0;
@@ -158,6 +159,8 @@ private:
 
     std::unique_ptr<Ruler> ruler;
     std::unique_ptr<KeyLane> keyLane;
+    OwnedArray<KeyLane> trackKeyStrips;   // on the tracks with keys of their own
+    void updateTrackKeyStrips();
     bool keyLaneShown = true;
     std::unique_ptr<Lanes> lanes;
     Component headerHolder;

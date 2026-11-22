@@ -236,6 +236,19 @@ var Tools::trackSummary (const Track& t) const
         set (o, "clips", (int) t.clips.size());
     if (auto g = edit.findGroup (t.groupId))
         set (o, "group", g->name);
+    if (! t.keys.empty())
+    {
+        // Its own key changes (from its first one on; before that it follows the song's).
+        Array<var> list;
+        for (auto& k : t.keys)
+        {
+            var ko = obj();
+            set (ko, "bar", rounded (toBar (k.beat), 0.01));
+            set (ko, "key", keys::keyName (k));
+            list.add (ko);
+        }
+        set (o, "own_keys", list);
+    }
     return o;
 }
 
@@ -1004,7 +1017,8 @@ bool Tools::channelsTouched (const String& tool, const var& args, Array<int>& id
         // tempo, time signature) change the song as a whole.
         static const StringArray oneChannel { "rename_track", "add_plugin", "remove_plugin", "move_plugin", "set_plugin_on",
                                               "set_input", "set_output", "set_send", "set_mixer", "set_eq", "set_track" };
-        if (! oneChannel.contains (action) || ! add (c.getProperty ("track", {})))
+        const bool trackKeys = action == "set_keys" && c.hasProperty ("track");   // without one: the song's
+        if ((! oneChannel.contains (action) && ! trackKeys) || ! add (c.getProperty ("track", {})))
             return false;
         // A track's input or output names a second one; its contents don't change, but the
         // assistant should know about it as it is now.
@@ -1912,6 +1926,15 @@ var Tools::editSession (const var& args, String& status)
 
         if (action == "set_keys")
         {
+            // With a track: that track's own keys (an empty list: it follows the song again).
+            std::shared_ptr<Track> onTrack;
+            if (hasKey (c, "track"))
+            {
+                onTrack = needTrack();
+                if (onTrack == nullptr) return {};
+                if (! onTrack->holdsClips()) { error = "only audio and MIDI tracks have keys of their own."; return {}; }
+            }
+            const String where = onTrack != nullptr ? " on " + quoted (onTrack->name) : String();
             auto* list = c.getProperty ("keys", {}).getArray();
             if (list == nullptr) { error = "set_keys needs \"keys\": a list of {\"bar\", \"key\"} (empty to clear the lane)."; return {}; }
             const bool ranged = hasKey (c, "from_bar") || hasKey (c, "to_bar");
@@ -1943,16 +1966,20 @@ var Tools::editSession (const var& args, String& status)
                 }
                 wanted.push_back ({ beat, parsed->first, parsed->second });
             }
-            edit.replaceKeys (wanted, from, to);
+            edit.replaceKeys (wanted, from, to, onTrack.get());
 
             if (wanted.empty())
-                return ranged ? "Cleared the keys from bar " + barText (from) + (to >= 0.0 ? " to " + barText (to) : String())
+            {
+                if (onTrack != nullptr && onTrack->keys.empty())
+                    return quoted (onTrack->name) + " follows the song's key";
+                return ranged ? "Cleared the keys" + where + " from bar " + barText (from) + (to >= 0.0 ? " to " + barText (to) : String())
                               : String ("Cleared the key lane");
+            }
             keys::tidy (wanted);
             StringArray words;
             for (auto& k : wanted)
                 words.add ("bar " + barText (k.beat) + " " + keys::keyName (k));
-            return "Keys: " + words.joinIntoString (", ");
+            return "Keys" + where + ": " + words.joinIntoString (", ");
         }
 
         if (action == "set_time_signature")

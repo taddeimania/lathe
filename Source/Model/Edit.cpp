@@ -574,34 +574,50 @@ double Edit::getEndBeat() const
     return end;
 }
 
-void Edit::setKey (const KeyChange& k)
+std::vector<KeyChange> Edit::keysFor (const Track* t) const
 {
-    keys.push_back (k);
-    keys::tidy (keys);
+    if (t == nullptr || t->keys.empty())
+        return keys;
+    std::vector<KeyChange> out;
+    const double first = t->keys.front().beat;
+    for (auto& k : keys)
+        if (k.beat < first - 1.0e-6)
+            out.push_back (k);
+    out.insert (out.end(), t->keys.begin(), t->keys.end());
+    return out;
+}
+
+void Edit::setKey (const KeyChange& k, Track* track)
+{
+    auto& list = track != nullptr ? track->keys : keys;
+    list.push_back (k);
+    keys::tidy (list);
     touched();
 }
 
-bool Edit::removeKey (double beat)
+bool Edit::removeKey (double beat, Track* track)
 {
-    const auto before = keys.size();
-    keys.erase (std::remove_if (keys.begin(), keys.end(), [beat] (auto& k) { return std::abs (k.beat - beat) < 1.0e-6; }),
-                keys.end());
-    if (keys.size() == before)
+    auto& list = track != nullptr ? track->keys : keys;
+    const auto before = list.size();
+    list.erase (std::remove_if (list.begin(), list.end(), [beat] (auto& k) { return std::abs (k.beat - beat) < 1.0e-6; }),
+                list.end());
+    if (list.size() == before)
         return false;
     touched();
     return true;
 }
 
-void Edit::replaceKeys (std::vector<KeyChange> list, double from, double to)
+void Edit::replaceKeys (std::vector<KeyChange> list, double from, double to, Track* track)
 {
+    auto& lane = track != nullptr ? track->keys : keys;
     const bool toEnd = to < 0.0;
     std::optional<KeyChange> carry;
     if (! toEnd)
-        if (auto* k = keyAt (to))
+        if (auto* k = keys::at (lane, to))
             carry = *k;
 
     std::vector<KeyChange> out;
-    for (auto& k : keys)
+    for (auto& k : lane)
         if (k.beat < from - 1.0e-6 || (! toEnd && k.beat >= to - 1.0e-6))
             out.push_back (k);
     for (auto& k : list)
@@ -624,7 +640,7 @@ void Edit::replaceKeys (std::vector<KeyChange> list, double from, double to)
             }
         }
     }
-    keys = std::move (out);
+    lane = std::move (out);
     touched();
 }
 
@@ -773,6 +789,7 @@ struct TrackState
     std::vector<std::shared_ptr<PluginSlot>> plugins;
     std::vector<bool> bypassed;
     int eqPosition = -1;
+    std::vector<KeyChange> keys;
     std::vector<Clip> clips;
     // The mix controls: fader, pan, send levels (parallel to sends) and the channel EQ.
     float volumeDb = 0.0f, pan = 0.0f;
@@ -821,6 +838,7 @@ static TrackState captureTrack (const std::shared_ptr<Track>& t)
     s.sends = t->sends;
     s.plugins = t->plugins;
     s.eqPosition = t->eqPosition;
+    s.keys = t->keys;
     for (auto& p : t->plugins)
         s.bypassed.push_back (p->bypassed.load());
     s.clips = t->clips;
@@ -854,6 +872,7 @@ static void restoreTrack (const TrackState& s)
     t.sends = s.sends;
     t.plugins = s.plugins;
     t.eqPosition = s.eqPosition;
+    t.keys = s.keys;
     for (size_t i = 0; i < s.plugins.size() && i < s.bypassed.size(); ++i)
         s.plugins[i]->bypassed = s.bypassed[i];
     t.clips = s.clips;
@@ -929,7 +948,7 @@ static bool sameTrack (const TrackState& a, const TrackState& b)
         && a.output.kind == b.output.kind && a.output.busId == b.output.busId
         && a.output.channel == b.output.channel && a.output.stereo == b.output.stereo
         && a.sends == b.sends && a.plugins == b.plugins && a.bypassed == b.bypassed && a.eqPosition == b.eqPosition
-        && sameClips (a.clips, b.clips)
+        && a.keys == b.keys && sameClips (a.clips, b.clips)
         && exactlyEqual (a.volumeDb, b.volumeDb) && exactlyEqual (a.pan, b.pan) && a.sendLevels == b.sendLevels
         && sameEq (a.eq, b.eq);
 }
@@ -975,23 +994,27 @@ static String panWords (float p)
 }
 
 // "Key at bar 17: C major", "Removed the key at bar 9", or "Key changes" for several at once.
-static String describeKeyStep (const EditSnapshot& a, const EditSnapshot& b)
+static String describeKeyStep (const std::vector<KeyChange>& before, const std::vector<KeyChange>& after,
+                               const EditSnapshot& b, const String& onTrack = {})
 {
     const double bpb = b.timeSigNum * 4.0 / b.timeSigDen;
+    const String on = onTrack.isEmpty() ? String() : " on " + onTrack;
     auto bar = [bpb] (double beat) { return String (beat / bpb + 1.0, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
     auto has = [] (const std::vector<KeyChange>& list, const KeyChange& k)
     {
         return std::find (list.begin(), list.end(), k) != list.end();
     };
     std::vector<KeyChange> added, removed;
-    for (auto& k : b.keys) if (! has (a.keys, k)) added.push_back (k);
-    for (auto& k : a.keys) if (! has (b.keys, k)) removed.push_back (k);
+    for (auto& k : after)  if (! has (before, k)) added.push_back (k);
+    for (auto& k : before) if (! has (after, k))  removed.push_back (k);
 
     if (added.size() == 1 && removed.size() <= 1)
-        return "Key at bar " + bar (added[0].beat) + ": " + keys::keyName (added[0]);
+        return "Key at bar " + bar (added[0].beat) + on + ": " + keys::keyName (added[0]);
+    if (added.empty() && after.empty() && ! onTrack.isEmpty())
+        return onTrack + " follows the song's key";
     if (added.empty() && removed.size() == 1)
-        return "Removed the key at bar " + bar (removed[0].beat);
-    return "Key changes";
+        return "Removed the key at bar " + bar (removed[0].beat) + on;
+    return onTrack.isEmpty() ? String ("Key changes") : "Keys on " + onTrack;
 }
 
 static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
@@ -1004,7 +1027,7 @@ static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
     if (a.timeSigNum != b.timeSigNum || a.timeSigDen != b.timeSigDen)
         out.add ("Time signature " + String (b.timeSigNum) + "/" + String (b.timeSigDen));
     if (a.keys != b.keys)
-        out.add (describeKeyStep (a, b));
+        out.add (describeKeyStep (a.keys, b.keys, b));
 
     auto find = [] (const std::vector<TrackState>& list, const std::shared_ptr<Track>& t) -> const TrackState*
     {
@@ -1025,6 +1048,8 @@ static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
             out.add (q (name) + " fader " + dbWords (y.volumeDb));
         if (! exactlyEqual (x.pan, y.pan))
             out.add (q (name) + " pan " + panWords (y.pan));
+        if (x.keys != y.keys)
+            out.add (describeKeyStep (x.keys, y.keys, b, q (name)));
         if (! sameEq (x.eq, y.eq))
         {
             String what = q (name) + " EQ";
@@ -1519,6 +1544,13 @@ var Edit::trackToVar (const Track& t, bool asTemplate) const
 
     if (t.groupId >= 0)
         o->setProperty ("group", t.groupId);
+    if (! asTemplate && ! t.keys.empty())
+    {
+        Array<var> list;
+        for (auto& k : t.keys)
+            list.add (keys::toVar (k));
+        o->setProperty ("keys", list);
+    }
 
     if (t.isMidi())
     {
@@ -1610,6 +1642,11 @@ std::shared_ptr<Track> Edit::trackFromVar (const var& v, const File& baseDir, co
     }
 
     t->groupId = v.hasProperty ("group") ? (int) v["group"] : -1;
+    if (auto* list = v["keys"].getArray())
+        for (auto& kv : *list)
+            if (auto k = keys::fromVar (kv))
+                t->keys.push_back (*k);
+    keys::tidy (t->keys);
 
     if (v.hasProperty ("midiInput"))
     {

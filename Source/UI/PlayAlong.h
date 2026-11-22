@@ -18,14 +18,20 @@ public:
     ~PlayAlongWindow() override;
     void closeButtonPressed() override;
 
-    /** What the window shows at a beat (for tests and the screenshots). */
+    /** What a diagram shows at a beat: the song's keys, or (track set) the keys that track
+        plays in (its own, after the song's until its first). For tests and the screenshots. */
     struct State
     {
-        const KeyChange* key = nullptr;    // the key now, or null
-        const KeyChange* next = nullptr;   // the next key change, or null
-        float nextFade = 0.0f;             // 0, rising to 1 over the last bar before `next`
+        std::optional<KeyChange> key;    // the key now, if there is one
+        std::optional<KeyChange> next;   // the next key change, if there is one
+        float nextFade = 0.0f;           // 0, rising to 1 over the last bar before `next`
     };
-    static State stateAt (const Edit&, double beat);
+    static State stateAt (const Edit&, double beat, const Track* track = nullptr);
+
+    /** The track an instrument's diagram follows on its own: a track with keys of its own whose
+        name fits ("Bass" for Bass; "Gtr", "Lead Guitar" for Guitar; "Uke"; "Keys", "Piano" for
+        Keyboard), or null (the song's key). */
+    static std::shared_ptr<Track> autoFollow (const Edit&, const String& instrument);
 
 private:
     class Content;

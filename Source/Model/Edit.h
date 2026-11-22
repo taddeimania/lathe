@@ -176,6 +176,9 @@ struct Track
         before the EQ could move): after all of them, and it stays last when plug-ins are added at
         the end. Change it with moveInChain; insertPluginAt and removePluginSlot keep it in place. */
     int eqPosition = -1;
+    /** The track's own key changes, in order of beat; empty (the usual): it follows the song's
+        key lane. Until its first key change, the song's key applies (Edit::keysFor). */
+    std::vector<KeyChange> keys;
 
     // Peak meters: the audio thread raises them, the UI reads and clears them.
     std::atomic<float> meterL { 0.0f }, meterR { 0.0f };
@@ -301,16 +304,20 @@ public:
     double getEndBeat() const;   // end of the last clip
     void setTempo (double newTempo);   // keeps audio clips the same length in seconds
 
-    // --- the key lane
-    /** The key in effect at a beat, or null before the first key change. */
+    // --- the key lane (the song's), and a track's own keys
+    /** The song's key at a beat, or null before the first key change. */
     const KeyChange* keyAt (double beat) const   { return keys::at (keys, beat); }
-    /** Adds a key change, or replaces the one already at that beat. */
-    void setKey (const KeyChange&);
+    /** The keys a track plays in: the song's until the track's first key change, then the
+        track's own. Just the song's for a track with none (or a null track). */
+    std::vector<KeyChange> keysFor (const Track*) const;
+    /** Adds a key change, or replaces the one already at that beat: on the song's lane, or
+        (track not null) on the track's own. */
+    void setKey (const KeyChange&, Track* track = nullptr);
     /** Removes the key change at that beat, if there is one. Returns whether it did. */
-    bool removeKey (double beat);
+    bool removeKey (double beat, Track* track = nullptr);
     /** Replaces the key changes from `from` up to (not including) `to` with `list`; to < 0
         means the end of the song. The key in effect at `to` carries on there afterwards. */
-    void replaceKeys (std::vector<KeyChange> list, double from = 0.0, double to = -1.0);
+    void replaceKeys (std::vector<KeyChange> list, double from = 0.0, double to = -1.0, Track* track = nullptr);
 
     // --- clip editing helpers (all positions in beats)
     /** Removes everything on the track between from and to, trimming and splitting clips that overlap. */

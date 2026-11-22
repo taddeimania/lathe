@@ -421,7 +421,8 @@ var toolDefinitions()
                                                          "set_input", "set_output", "set_send", "set_mixer", "set_eq", "set_track",
                                                          "set_tempo", "set_time_signature", "set_keys" } },
                                   { "description", "What to change" } }) },
-            { "track", prop ("string", "The track it applies to: name or id. Tracks added earlier in the same call can be named") },
+            { "track", prop ("string", "The track it applies to: name or id. Tracks added earlier in the same call can be named. "
+                                       "set_keys: that track's own keys instead of the song's") },
             { "kind", prop ("string", "add_track: \"audio\", \"midi\" or \"return\"") },
             { "name", prop ("string", "add_track, rename_track: the track's name (must differ from every other track's)") },
             { "plugins", object ({ { "type", "array" }, { "items", object ({ { "type", "string" } }) },
@@ -493,7 +494,11 @@ var toolDefinitions()
                          "The key lane says what key the song is in, bar by bar; Lathe's Play Along window shows the person "
                          "where those notes are on guitar, bass, ukulele and keyboard so they can jam along. set_keys replaces "
                          "the lane (or a range of it): {\"action\":\"set_keys\",\"keys\":[{\"bar\":1,\"key\":\"A minor pentatonic\"},"
-                         "{\"bar\":17,\"key\":\"C major\"}]}. An empty list clears it. Work the keys out from the notes "
+                         "{\"bar\":17,\"key\":\"C major\"}]}. An empty list clears it. With \"track\", a track gets keys of its "
+                         "own, for a part that plays in a different key or mode from the band (a solo in D dorian over a D "
+                         "minor song); it follows the song's key until its first one, and an empty list puts it back on the "
+                         "song's. Play Along can follow that track. Most parts don't need one: a bass playing roots is still "
+                         "in the song's key. Work the keys out from the notes "
                          "(get_notes; convert_to_midi for audio) and pick the scale a player would improvise with: minor "
                          "pentatonic or blues over a minor blues-rock riff, the full major or minor scale when the melody "
                          "uses all seven notes.\n"

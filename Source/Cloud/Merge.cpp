@@ -221,7 +221,7 @@ String keyName (const String& key)
         { "volume", "fader" }, { "pan", "pan" }, { "mute", "mute" }, { "solo", "solo" }, { "name", "name" },
         { "colour", "colour" }, { "input", "input" }, { "output", "output" }, { "sends", "sends" }, { "eq", "EQ" },
         { "plugins", "plug-ins" }, { "group", "group" }, { "kind", "track type" }, { "midiInput", "MIDI input" },
-        { "midiOutput", "MIDI output" }, { "midiChannel", "MIDI channel" } };
+        { "midiOutput", "MIDI output" }, { "midiChannel", "MIDI channel" }, { "keys", "key changes" } };
     auto it = names.find (key);
     return it != names.end() ? it->second : key;
 }

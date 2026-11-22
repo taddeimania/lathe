@@ -6508,8 +6508,8 @@ int main (int argc, char** argv)
 
         // Play Along: the next key fades in over the bar before it.
         const auto far = PlayAlongWindow::stateAt (e, 10.0), near = PlayAlongWindow::stateAt (e, 62.0), on = PlayAlongWindow::stateAt (e, 64.0);
-        check (far.key != nullptr && far.key->root == 9 && far.next != nullptr && far.nextFade == 0.0f
-               && std::abs (near.nextFade - 0.5f) < 1.0e-4f && on.key->root == 7 && on.next == nullptr && on.nextFade == 0.0f,
+        check (far.key && far.key->root == 9 && far.next && far.nextFade == 0.0f
+               && std::abs (near.nextFade - 0.5f) < 1.0e-4f && on.key->root == 7 && ! on.next && on.nextFade == 0.0f,
                "Play Along fades the next key in over the last bar before it");
 
         // Undo, and the words for it.
@@ -6577,6 +6577,79 @@ int main (int argc, char** argv)
         check (! (bool) res["isError"] && ae.keys.empty() && res["content"][0]["text"].toString().contains ("Cleared"),
                "an empty set_keys clears the lane");
         check (ae.getDoneSteps().size() >= 3 && ae.getDoneSteps().back().byAssistant, "each set_keys is an undo step, marked as the assistant's");
+    }
+
+    std::cout << "Keys: a track's own keys" << std::endl;
+    {
+        Edit e;
+        auto bass = e.addTrack (TrackKind::audio, "Bass DI");
+        auto gtr = e.addTrack (TrackKind::midi, "Gtr 2");
+        auto bassoon = e.addTrack (TrackKind::midi, "Bassoon");
+        e.replaceKeys ({ { 0.0, 2, Scale::minor }, { 64.0, 5, Scale::major } });   // D minor, then F major at bar 17
+        e.commitUndoStep();
+        e.clearUndo();
+
+        check (e.keysFor (bass.get()) == e.keys && e.keysFor (nullptr) == e.keys, "a track without keys of its own follows the song's");
+        e.setKey ({ 32.0, 2, Scale::dorian }, bass.get());   // bar 9
+        e.commitUndoStep();
+        const auto label = e.getDoneSteps().back().label;
+        const auto list = e.keysFor (bass.get());
+        check (list.size() == 2 && list[0].root == 2 && list[0].scale == Scale::minor && list[1].scale == Scale::dorian
+               && e.keys.size() == 2 && keys::at (list, 100.0)->scale == Scale::dorian,
+               "a track's keys: the song's until its first key change, then its own (the song's later changes don't apply)");
+        check (label == "Key at bar 9 on \"Bass DI\": D dorian", "undo history names the track: " + label);
+
+        const auto st = PlayAlongWindow::stateAt (e, 40.0, bass.get()), song = PlayAlongWindow::stateAt (e, 40.0);
+        const auto before = PlayAlongWindow::stateAt (e, 31.8, bass.get());
+        check (st.key && st.key->scale == Scale::dorian && ! st.next && song.key->scale == Scale::minor && song.next->root == 5
+               && before.next && before.next->scale == Scale::dorian && before.nextFade > 0.9f,
+               "Play Along following a track shows its key, and fades its change in");
+
+        check (PlayAlongWindow::autoFollow (e, "Bass") == bass && PlayAlongWindow::autoFollow (e, "Guitar") == nullptr,
+               "Bass follows \"Bass DI\" by itself; Guitar doesn't follow a track with no keys of its own");
+        e.setKey ({ 0.0, 9, Scale::minorPentatonic }, gtr.get());
+        e.setKey ({ 0.0, 0, Scale::major }, bassoon.get());
+        check (PlayAlongWindow::autoFollow (e, "Guitar") == gtr && PlayAlongWindow::autoFollow (e, "Bass") == bass
+               && PlayAlongWindow::autoFollow (e, "Ukulele") == nullptr,
+               "\"Gtr 2\" fits Guitar, and \"Bassoon\" doesn't fit Bass");
+        e.commitUndoStep();
+
+        // Saved with the track (not in templates) and read back.
+        const auto saved = e.toVar (false);
+        check (saved["tracks"][0]["keys"].size() == 1 && saved["tracks"][0]["keys"][0]["key"].toString() == "D dorian"
+               && ! e.toVar (true)["tracks"][0].hasProperty ("keys"),
+               "a track's keys are saved with it; templates leave them out");
+        Edit loaded;
+        loaded.loadFrom (JSON::parse (JSON::toString (saved)), File(), [] (auto&, auto&, bool) { return std::shared_ptr<PluginSlot>(); });
+        check (loaded.tracks.size() == 3 && loaded.tracks[0]->keys == bass->keys && loaded.tracks[1]->keys == gtr->keys,
+               "a track's keys load back");
+
+        e.replaceKeys ({}, 0.0, -1.0, bass.get());
+        e.commitUndoStep();
+        check (bass->keys.empty() && e.getDoneSteps().back().label == "\"Bass DI\" follows the song's key",
+               "clearing a track's keys puts it back on the song's");
+        e.undo();
+        check (bass->keys.size() == 1, "...and undo gives them back");
+
+        // The assistant.
+        assistant::Tools tools (e, engine);
+        String status;
+        auto change = [&] (const String& json)
+        {
+            return tools.call ("edit_session", JSON::parse (R"({"changes":[)" + json + "]}"), status);
+        };
+        auto res = change (R"({"action":"set_keys","track":"Gtr 2","keys":[{"bar":1,"key":"E minor"},{"bar":9,"key":"E dorian"}]})");
+        check (! (bool) res["isError"] && gtr->keys.size() == 2 && gtr->keys[1].scale == Scale::dorian && e.keys.size() == 2
+               && res["content"][0]["text"].toString().contains ("Keys on \"Gtr 2\": bar 1 E minor, bar 9 E dorian"),
+               "set_keys with a track sets that track's keys, not the song's");
+        const auto desc = JSON::parse (tools.call ("describe_track", JSON::parse (R"({"track":"Gtr 2"})"), status)["content"][0]["text"].toString());
+        check (desc["own_keys"].size() == 2 && desc["own_keys"][1]["key"].toString() == "E dorian", "describe_track lists a track's own keys");
+        res = change (R"({"action":"set_keys","track":"Gtr 2","keys":[]})");
+        check (! (bool) res["isError"] && gtr->keys.empty() && res["content"][0]["text"].toString().contains ("follows the song's key"),
+               "an empty set_keys on a track puts it back on the song's key");
+        auto ret = e.addTrack (TrackKind::bus, "Verb");
+        res = change (R"({"action":"set_keys","track":"Verb","keys":[{"bar":1,"key":"C"}]})");
+        check ((bool) res["isError"] && ret->keys.empty(), "a return can't have keys of its own");
     }
 
     engine.setEdit (nullptr);

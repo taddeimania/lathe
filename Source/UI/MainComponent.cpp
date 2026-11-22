@@ -2611,7 +2611,12 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                         const double bar = self->edit.beatsPerBar();
                         self->edit.keys = { { 0.0, 9, Scale::minorPentatonic }, { 4.0 * bar, 0, Scale::major } };
                         self->edit.insertMarker = 3.5 * bar;
-                        self->settings.setValue ("playAlong.instruments", "Guitar,Keyboard");
+                        self->settings.setValue ("playAlong.instruments", "Guitar,Bass");
+                        // The bass has a key of its own from bar 3: A dorian, which Play Along's Bass follows.
+                        for (auto& t : self->edit.tracks)
+                            if (t->name == "Bass")
+                                t->keys = { { 2.0 * bar, 9, Scale::dorian } };
+                        self->arrangement.refresh();
                         PlayAlongWindow::show (self->ctx);
                         Timer::callAfterDelay (600, [self, run, shot, done, markerWas]
                         {
@@ -2631,6 +2636,9 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                                 run->written.add ("daw-key-lane.jpg");
                             PlayAlongWindow::closeIfOpen();
                             self->edit.keys.clear();
+                            for (auto& t : self->edit.tracks)
+                                t->keys.clear();
+                            self->arrangement.refresh();
                             self->edit.insertMarker = markerWas;
                             {
                                 // The one-time question about anonymous milestones (privacy page).

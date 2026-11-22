@@ -6,12 +6,13 @@ namespace lathe
 {
 Component::SafePointer<PlayAlongWindow> PlayAlongWindow::current;
 
-PlayAlongWindow::State PlayAlongWindow::stateAt (const Edit& edit, double beat)
+PlayAlongWindow::State PlayAlongWindow::stateAt (const Edit& edit, double beat, const Track* track)
 {
     State s;
-    s.key = edit.keyAt (beat);
-    s.next = keys::after (edit.keys, beat);
-    if (s.next != nullptr)
+    const auto list = edit.keysFor (track);
+    if (auto* k = keys::at (list, beat))    s.key = *k;
+    if (auto* k = keys::after (list, beat)) s.next = *k;
+    if (s.next)
     {
         const double bar = edit.beatsPerBar();
         const double until = s.next->beat - beat;
@@ -19,6 +20,32 @@ PlayAlongWindow::State PlayAlongWindow::stateAt (const Edit& edit, double beat)
             s.nextFade = (float) jlimit (0.0, 1.0, 1.0 - until / bar);
     }
     return s;
+}
+
+std::shared_ptr<Track> PlayAlongWindow::autoFollow (const Edit& edit, const String& instrument)
+{
+    static const std::map<String, StringArray> words {
+        { "Guitar",   { "guitar", "gtr", "git" } },
+        { "Bass",     { "bass" } },
+        { "Ukulele",  { "ukulele", "uke" } },
+        { "Keyboard", { "keyboard", "keys", "key", "piano", "rhodes", "organ", "synth" } },
+    };
+    auto it = words.find (instrument);
+    if (it == words.end())
+        return {};
+    for (auto& t : edit.tracks)
+    {
+        if (t->keys.empty())
+            continue;
+        const auto name = t->name.toLowerCase();
+        // Whole words or the start of one: "Bass DI" and "Gtr 2" fit; "Bassoon" doesn't fit Bass.
+        auto tokens = StringArray::fromTokens (name.retainCharacters ("abcdefghijklmnopqrstuvwxyz0123456789 "), " ", "");
+        for (auto& w : it->second)
+            for (auto& tok : tokens)
+                if (tok == w || (tok.startsWith (w) && tok.substring (w.length()).containsOnly ("0123456789")))
+                    return t;
+    }
+    return {};
 }
 
 namespace
@@ -195,9 +222,17 @@ public:
             b->setToggleState (shown.contains (instrumentNames()[i]), dontSendNotification);
             b->setColour (TextButton::buttonOnColourId, theme::accent);
             b->setColour (TextButton::textColourOnId, theme::textDark);
-            b->onClick = [this] { saveChoice(); repaint(); };
+            b->onClick = [this] { saveChoice(); resized(); repaint(); };
             addAndMakeVisible (b);
+
+            // What this diagram follows: the song's key, or a track with keys of its own.
+            auto* f = follows.add (new ComboBox());
+            f->setTooltip ("Whose key this shows: the song's, or a track with a key of its own "
+                           "(Track menu > Own Key). Automatic picks a track named after the instrument.");
+            f->onChange = [this, i] { followChosen (i); };
+            addChildComponent (f);
         }
+        rebuildFollowMenus();
         setSize (760, 520);
         startTimerHz (20);
     }
@@ -206,8 +241,16 @@ public:
     {
         auto r = getLocalBounds().reduced (12).removeFromTop (headerH).removeFromRight (380);
         for (auto* b : buttons)
-        {
             b->setBounds (r.removeFromLeft (90).reduced (2, 4));
+
+        const auto slots = layout();
+        const bool anyTrackKeys = std::any_of (ctx.edit.tracks.begin(), ctx.edit.tracks.end(), [] (auto& t) { return ! t->keys.empty(); });
+        for (int i = 0; i < follows.size(); ++i)
+        {
+            auto it = slots.find (i);
+            follows[i]->setVisible (anyTrackKeys && it != slots.end());
+            if (it != slots.end())
+                follows[i]->setBounds (it->second.withHeight (20).withTrimmedLeft (90).withWidth (190).toNearestInt());
         }
     }
 
@@ -221,7 +264,8 @@ public:
         const auto st = stateAt (ctx.edit, beat);
         const double barLen = ctx.edit.beatsPerBar();
         auto bar = [barLen] (double b) { return String (b / barLen + 1.0, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
-        if (st.key == nullptr && ctx.edit.keys.empty())
+        const bool anyTrackKeys = std::any_of (ctx.edit.tracks.begin(), ctx.edit.tracks.end(), [] (auto& t) { return ! t->keys.empty(); });
+        if (! st.key && ctx.edit.keys.empty() && ! anyTrackKeys)
         {
             g.setColour (theme::text);
             g.setFont (theme::font (15.0f, true));
@@ -234,8 +278,9 @@ public:
             return;
         }
 
+        // The song's key at the top.
         auto line = head.removeFromTop (head.getHeight() * 0.6f);
-        if (st.key != nullptr)
+        if (st.key)
         {
             g.setColour (theme::keyColour (st.key->root));
             g.fillRoundedRectangle (line.removeFromLeft (8.0f).reduced (0.0f, 4.0f), 2.0f);
@@ -248,50 +293,157 @@ public:
         {
             g.setColour (theme::textDim);
             g.setFont (theme::font (17.0f, true));
-            g.drawText ("No key yet", line, Justification::centredLeft);
+            g.drawText (ctx.edit.keys.empty() ? "No song key" : "No key yet", line, Justification::centredLeft);
         }
         g.setFont (theme::font (12.5f));
         g.setColour (st.nextFade > 0.0f ? theme::text : theme::textDim);
-        String sub = st.key != nullptr ? "From bar " + bar (st.key->beat) : String ("Before the first key change");
-        if (st.next != nullptr)
+        String sub = st.key ? "From bar " + bar (st.key->beat) : String (ctx.edit.keys.empty() ? "Tracks with their own key show it below"
+                                                                                                : "Before the first key change");
+        if (st.next)
             sub << "   " << String::fromUTF8 ("\xc2\xb7") << "   Next: " << keys::keyName (*st.next) << " at bar " << bar (st.next->beat);
         g.drawText (sub, head, Justification::centredLeft);
 
-        r.removeFromTop (10.0f);
-        std::vector<const fretboard::Instrument*> chosen;
-        for (int i = 0; i < buttons.size(); ++i)
-            if (buttons[i]->getToggleState())
-                chosen.push_back (&fretboard::instruments()[(size_t) i]);
-        if (chosen.empty())
+        const auto slots = layout();
+        if (slots.empty())
         {
             g.setColour (theme::textDim);
             g.setFont (theme::font (13.0f));
-            g.drawText ("Pick an instrument above.", r.removeFromTop (30.0f), Justification::centredLeft);
+            g.drawText ("Pick an instrument above.", r.withTrimmedTop (10.0f).removeFromTop (30.0f), Justification::centredLeft);
             return;
         }
-
-        // Share the height, each instrument at most as tall as reads well.
-        const float each = r.getHeight() / (float) chosen.size();
-        for (auto* inst : chosen)
+        for (auto& [i, slot] : slots)
         {
-            auto slot = r.removeFromTop (each);
-            const float wanted = inst->strings.empty() ? 150.0f : 22.0f + 26.0f * (float) inst->strings.size() + 14.0f;
-            drawInstrument (g, slot.withHeight (jmin (wanted, slot.getHeight() - 8.0f)), *inst, st.key, st.next, st.nextFade);
+            const auto& inst = fretboard::instruments()[(size_t) i];
+            const auto followed = followedTrack (i);
+            const auto ds = stateAt (ctx.edit, beat, followed.get());
+            // Following a track: say whose key, and what it is, beside the menu.
+            if (followed != nullptr)
+            {
+                auto label = slot.withHeight (18.0f).withTrimmedLeft (follows[i]->isVisible() ? 290.0f : 90.0f);
+                g.setFont (theme::font (12.0f, true));
+                if (ds.key)
+                {
+                    g.setColour (theme::keyColour (ds.key->root));
+                    g.drawText (keys::keyName (*ds.key) + (ds.next ? "   (next: " + keys::keyName (*ds.next) + ", bar " + bar (ds.next->beat) + ")" : String()),
+                                label, Justification::centredLeft);
+                }
+            }
+            drawInstrument (g, slot, inst, ds.key ? &*ds.key : nullptr, ds.next ? &*ds.next : nullptr, ds.nextFade);
         }
     }
 
 private:
+    /** Where each instrument that's on goes (by index), sharing the height below the header,
+        each at most as tall as reads well. */
+    std::map<int, Rectangle<float>> layout() const
+    {
+        std::map<int, Rectangle<float>> out;
+        auto r = getLocalBounds().toFloat().reduced (12.0f);
+        r.removeFromTop ((float) headerH + 10.0f);
+        std::vector<int> on;
+        for (int i = 0; i < buttons.size(); ++i)
+            if (buttons[i]->getToggleState())
+                on.push_back (i);
+        if (on.empty())
+            return out;
+        const float each = r.getHeight() / (float) on.size();
+        for (int i : on)
+        {
+            auto slot = r.removeFromTop (each);
+            const auto& inst = fretboard::instruments()[(size_t) i];
+            const float wanted = inst.strings.empty() ? 150.0f : 22.0f + 26.0f * (float) inst.strings.size() + 14.0f;
+            out[i] = slot.withHeight (jmin (wanted, slot.getHeight() - 8.0f));
+        }
+        return out;
+    }
+
+    String followKey (int i) const   { return "playAlong.follow." + instrumentNames()[i]; }
+
+    /** The track instrument i follows, or null for the song's key. The setting is "auto",
+        "song" or a track's tag; a tag whose track is gone (or has no keys now) means auto. */
+    std::shared_ptr<Track> followedTrack (int i) const
+    {
+        const auto choice = ctx.settings.getValue (followKey (i), "auto");
+        if (choice == "song")
+            return {};
+        if (choice != "auto")
+            if (auto t = ctx.edit.findTrackByUid (choice); t != nullptr && ! t->keys.empty())
+                return t;
+        return autoFollow (ctx.edit, instrumentNames()[i]);
+    }
+
+    // Menu ids: 1 automatic, 2 the song's key, 100 + index into the tracks with keys.
+    void rebuildFollowMenus()
+    {
+        followable.clear();
+        for (auto& t : ctx.edit.tracks)
+            if (! t->keys.empty())
+                followable.push_back (t);
+        for (int i = 0; i < follows.size(); ++i)
+        {
+            auto* f = follows[i];
+            f->clear (dontSendNotification);
+            const auto automatic = autoFollow (ctx.edit, instrumentNames()[i]);
+            f->addItem ("Automatic" + (automatic != nullptr ? " (" + automatic->name + ")" : String (" (song)")), 1);
+            f->addItem ("Song's key", 2);
+            for (size_t k = 0; k < followable.size(); ++k)
+                f->addItem ("\"" + followable[k]->name + "\"'s key", 100 + (int) k);
+
+            const auto choice = ctx.settings.getValue (followKey (i), "auto");
+            int id = choice == "song" ? 2 : 1;
+            for (size_t k = 0; k < followable.size(); ++k)
+                if (followable[k]->uid == choice)
+                    id = 100 + (int) k;
+            f->setSelectedId (id, dontSendNotification);
+        }
+    }
+
+    void followChosen (int i)
+    {
+        const int id = follows[i]->getSelectedId();
+        String value = "auto";
+        if (id == 2)
+            value = "song";
+        else if (id >= 100 && (size_t) (id - 100) < followable.size())
+            value = followable[(size_t) (id - 100)]->uid;
+        ctx.settings.setValue (followKey (i), value);
+        repaint();
+    }
+
     void timerCallback() override
     {
         auto& engine = ctx.engine;
         const double now = engine.isPlaying() ? engine.getPlayheadBeats() : ctx.edit.insertMarker;
-        const auto st = stateAt (ctx.edit, now);
-        // Repaint only when what's drawn would change: the key, the next one, or the fade's step.
-        String sig;
-        if (st.key != nullptr) sig << keys::keyName (*st.key) << "@" << st.key->beat;
-        if (st.next != nullptr) sig << "|" << keys::keyName (*st.next) << "@" << st.next->beat;
-        sig << "|" << roundToInt (st.nextFade * 20.0f) << "|" << (int) ctx.edit.keys.size();
         beat = now;
+
+        // The tracks with keys of their own (and their names) changed: new menus.
+        String tracksSig;
+        for (auto& t : ctx.edit.tracks)
+            if (! t->keys.empty())
+                tracksSig << t->uid << ":" << t->name << ";";
+        if (tracksSig != shownTracks)
+        {
+            shownTracks = tracksSig;
+            rebuildFollowMenus();
+            resized();
+            shownSig = {};
+        }
+
+        // Repaint only when what's drawn would change: a key, the next one, or the fade's step.
+        auto describe = [] (const State& st)
+        {
+            String sig;
+            if (st.key) sig << keys::keyName (*st.key) << "@" << st.key->beat;
+            if (st.next) sig << "|" << keys::keyName (*st.next) << "@" << st.next->beat;
+            sig << "|" << roundToInt (st.nextFade * 20.0f) << ";";
+            return sig;
+        };
+        String sig = describe (stateAt (ctx.edit, now));
+        for (int i = 0; i < buttons.size(); ++i)
+            if (buttons[i]->getToggleState())
+                if (auto t = followedTrack (i))
+                    sig << i << describe (stateAt (ctx.edit, now, t.get()));
+        sig << (int) ctx.edit.keys.size();
         if (sig != shownSig)
         {
             shownSig = sig;
@@ -311,8 +463,10 @@ private:
     static constexpr int headerH = 46;
     AppContext& ctx;
     OwnedArray<TextButton> buttons;
+    OwnedArray<ComboBox> follows;                    // one per instrument
+    std::vector<std::shared_ptr<Track>> followable;  // the tracks the menus list
     double beat = 0.0;
-    String shownSig;
+    String shownSig, shownTracks;
 };
 
 //==============================================================================

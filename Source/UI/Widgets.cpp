@@ -960,6 +960,17 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
     m.addSubMenu ("Colour", colours);
     if (track->holdsClips())
         m.addSubMenu ("Group", groupMenu);
+    if (track->holdsClips())
+    {
+        if (track->keys.empty())
+        {
+            const double bar = ctx.edit.beatsPerBar();
+            const double from = std::floor (ctx.edit.insertMarker / bar + 1.0e-6) * bar;
+            m.addItem (6, "Own Key from Bar " + String ((int) (from / bar) + 1));
+        }
+        else
+            m.addItem (7, "Follow the Song's Key");
+    }
     m.addSeparator();
     m.addItem (2, "Move up");
     m.addItem (3, "Move down");
@@ -1002,6 +1013,22 @@ void showTrackMenu (AppContext& ctx, Component& anchor, std::shared_ptr<Track> t
         else if (r == 5)
         {
             showExportDialog (*context, toExport);
+        }
+        else if (r == 6)
+        {
+            // Starts as the song's key there (or A minor), on a strip at the bottom of the track.
+            const double bar = edit.beatsPerBar();
+            const double from = std::floor (edit.insertMarker / bar + 1.0e-6) * bar;
+            KeyChange k { from, 9, Scale::minor };
+            if (auto* song = edit.keyAt (from))
+                k = { from, song->root, song->scale };
+            edit.commitUndoStep();
+            edit.setKey (k, track.get());
+        }
+        else if (r == 7)
+        {
+            edit.commitUndoStep();
+            edit.replaceKeys ({}, 0.0, -1.0, track.get());
         }
         else if (r == 200)
         {

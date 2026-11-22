@@ -588,14 +588,28 @@ private:
 class ArrangementView::KeyLane : public Component, public TooltipClient
 {
 public:
-    explicit KeyLane (ArrangementView& o) : owner (o) {}
+    /** The song's lane, or (track set) a strip on a track that has keys of its own. */
+    explicit KeyLane (ArrangementView& o, std::shared_ptr<Track> t = nullptr) : owner (o), track (std::move (t))
+    {
+        setOpaque (track == nullptr);
+    }
+
+    std::shared_ptr<Track> getTrack() const   { return track; }
+
+    // A track's strip lets clicks through before its first key change (the clips are there).
+    bool hitTest (int x, int y) override
+    {
+        if (track == nullptr)
+            return Component::hitTest (x, y);
+        return ! track->keys.empty() && (float) x >= owner.beatToX (track->keys.front().beat) - 5.0f;
+    }
 
     void paint (Graphics& g) override
     {
-        auto& edit = owner.ctx.edit;
-        g.fillAll (theme::window);
+        if (track == nullptr)
+            g.fillAll (theme::window);
 
-        const auto& list = edit.keys;
+        const auto& list = lane();
         for (size_t i = 0; i < list.size(); ++i)
         {
             const auto& k = list[i];
@@ -603,7 +617,8 @@ public:
             const float x2 = i + 1 < list.size() ? owner.beatToX (list[i + 1].beat) : (float) getWidth() + 10.0f;
             if (x2 < 0.0f || x1 > (float) getWidth())
                 continue;
-            auto block = Rectangle<float> (x1, 2.0f, x2 - x1, (float) getHeight() - 4.0f).reduced (0.5f, 0.0f);
+            auto block = Rectangle<float> (x1, track != nullptr ? 1.0f : 2.0f, x2 - x1,
+                                           (float) getHeight() - (track != nullptr ? 2.0f : 4.0f)).reduced (0.5f, 0.0f);
             const auto colour = theme::keyColour (k.root);
             g.setColour (colour.withAlpha (dragging == (int) i ? 1.0f : 0.8f));
             g.fillRoundedRectangle (block, 3.0f);
@@ -611,12 +626,14 @@ public:
             // The name stays in view while the block's start is scrolled off to the left.
             auto textArea = block.withLeft (jmax (block.getX(), 0.0f)).reduced (5.0f, 0.0f);
             const auto full = keys::keyName (k), brief = keys::shortName (k.root, k.scale);
-            g.setFont (theme::font (11.5f, true));
+            g.setFont (theme::font (track != nullptr ? 10.5f : 11.5f, true));
             g.setColour (theme::textOn (colour));
             const bool fits = GlyphArrangement::getStringWidth (g.getCurrentFont(), full) < textArea.getWidth();
             g.drawText (fits ? full : brief, textArea, Justification::centredLeft, true);
         }
 
+        if (track != nullptr)
+            return;
         if (list.empty())
         {
             g.setColour (theme::textDim);
@@ -630,6 +647,9 @@ public:
 
     String getTooltip() override
     {
+        if (track != nullptr)
+            return "\"" + track->name + "\"'s own key (before its first key change, it follows the song's). "
+                   "Click to change it; drag the start of a key change to move it.";
         return "The song's key, for Play Along (View > Play Along). Click to change it or add a key change; "
                "drag the start of a key change to move it.";
     }
@@ -650,7 +670,7 @@ public:
     {
         if (dragging < 0 || ! e.mouseWasDraggedSinceMouseDown())
             return;
-        auto& list = owner.ctx.edit.keys;
+        auto& list = lane();
         if ((size_t) dragging >= list.size())
             return;
         const double step = owner.gridStep();
@@ -674,10 +694,12 @@ public:
     }
 
 private:
+    std::vector<KeyChange>& lane() const   { return track != nullptr ? track->keys : owner.ctx.edit.keys; }
+
     /** The key change whose start is under x (to drag it), or -1. */
     int edgeAt (float x) const
     {
-        auto& list = owner.ctx.edit.keys;
+        auto& list = lane();
         for (size_t i = 0; i < list.size(); ++i)
             if (std::abs (owner.beatToX (list[i].beat) - x) < 5.0f)
                 return (int) i;
@@ -708,7 +730,7 @@ private:
                                                : jmax (0.0, std::floor (owner.xToBeat ((float) e.x) / barLen + 1.0e-6) * barLen);
         auto barWords = [barLen] (double b) { return String (b / barLen + 1.0, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
 
-        const auto* current = edit.keyAt (owner.xToBeat ((float) e.x));
+        const auto* current = keys::at (lane(), owner.xToBeat ((float) e.x));
         PopupMenu m;
         if (current != nullptr)
         {
@@ -725,6 +747,8 @@ private:
             if (std::abs (beat - at) > 1.0e-6)
                 m.addSubMenu ("Change key at bar " + barWords (beat), keyPicker (1000));
             m.addItem (2, "Remove this key change");
+            if (track != nullptr)
+                m.addItem (3, "Follow the song's key");
         }
         else
         {
@@ -737,23 +761,29 @@ private:
 
         const double at = current != nullptr ? current->beat : -1.0;
         Component::SafePointer<KeyLane> self (this);
+        auto* edPtr = &edit;
+        auto t = track;
         m.showMenuAsync (PopupMenu::Options().withTargetScreenArea ({ e.getScreenX(), e.getScreenY(), 1, 1 }),
-                         [self, beat, at] (int r)
+                         [self, edPtr, t, beat, at] (int r)
         {
-            if (self == nullptr || r == 0)
+            if (r == 0)
                 return;
-            auto& ed = self->owner.ctx.edit;
+            auto& ed = *edPtr;
             ed.commitUndoStep();
-            const auto* k = at >= 0.0 ? keys::at (ed.keys, at) : nullptr;
-            if (r == 2)                     ed.removeKey (at);
-            else if (r >= 1000)             ed.setKey ({ beat, (r - 1000) / 16, keys::allScales()[(size_t) ((r - 1000) % 16)] });
-            else if (k != nullptr && r >= 200) { auto c = *k; c.scale = keys::allScales()[(size_t) (r - 200)]; ed.setKey (c); }
-            else if (k != nullptr && r >= 100) { auto c = *k; c.root = r - 100; ed.setKey (c); }
-            self->repaint();
+            auto& list = t != nullptr ? t->keys : ed.keys;
+            const auto* k = at >= 0.0 ? keys::at (list, at) : nullptr;
+            if (r == 3)                     ed.replaceKeys ({}, 0.0, -1.0, t.get());
+            else if (r == 2)                ed.removeKey (at, t.get());
+            else if (r >= 1000)             ed.setKey ({ beat, (r - 1000) / 16, keys::allScales()[(size_t) ((r - 1000) % 16)] }, t.get());
+            else if (k != nullptr && r >= 200) { auto c = *k; c.scale = keys::allScales()[(size_t) (r - 200)]; ed.setKey (c, t.get()); }
+            else if (k != nullptr && r >= 100) { auto c = *k; c.root = r - 100; ed.setKey (c, t.get()); }
+            if (self != nullptr)
+                self->repaint();
         });
     }
 
     ArrangementView& owner;
+    std::shared_ptr<Track> track;
     int dragging = -1;
 };
 
@@ -1880,6 +1910,7 @@ void ArrangementView::refresh()
     }
 
     layoutRows();
+    updateTrackKeyStrips();
     for (auto* h : headers)
         h->update();
     for (auto* h : groupHeaders)
@@ -2061,6 +2092,28 @@ void ArrangementView::paint (Graphics& g)
     }
 }
 
+void ArrangementView::updateTrackKeyStrips()
+{
+    // One strip per track with keys of its own; kept (not remade) while the track keeps them,
+    // so a strip isn't deleted under the mouse.
+    for (int i = trackKeyStrips.size(); --i >= 0;)
+    {
+        auto t = trackKeyStrips[i]->getTrack();
+        if (t->keys.empty() || std::find (ctx.edit.tracks.begin(), ctx.edit.tracks.end(), t) == ctx.edit.tracks.end())
+            trackKeyStrips.remove (i);
+    }
+    for (auto& t : ctx.edit.tracks)
+    {
+        if (t->keys.empty())
+            continue;
+        bool have = false;
+        for (auto* s : trackKeyStrips)
+            have = have || s->getTrack() == t;
+        if (! have)
+            lanes->addAndMakeVisible (trackKeyStrips.add (new KeyLane (*this, t)));
+    }
+}
+
 void ArrangementView::setKeyLaneShown (bool shown)
 {
     if (shown == keyLaneShown)
@@ -2103,6 +2156,17 @@ void ArrangementView::resized()
     addMidiButton.setBounds (buttons);
 
     headerHolder.setBounds (left);
+    for (auto* s : trackKeyStrips)
+    {
+        const auto t = s->getTrack();
+        int index = -1;
+        for (size_t i = 0; i < ctx.edit.tracks.size(); ++i)
+            if (ctx.edit.tracks[i] == t)
+                index = (int) i;
+        s->setVisible (keyLaneShown && isTrackShown (index));
+        if (s->isVisible())
+            s->setBounds (0, trackTop (index) + theme::trackHeight - kTrackKeyHeight, lanes->getWidth(), kTrackKeyHeight);
+    }
     for (int i = 0; i < headers.size(); ++i)
     {
         headers[i]->setVisible (isTrackShown (i));

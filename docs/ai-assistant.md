@@ -36,7 +36,7 @@ Options > **AI Assistant...** > *Let AI apps on this computer connect to Lathe*.
 | `stop` | Stops, like the Stop button. Stop while recording keeps the take. |
 | `set_loop` | Sets the loop region (in bars) and turns it on, or turns it off. The loop is saved with the project, as when you drag the loop brackets. |
 | `list_plugins` | The plug-ins installed on this computer, each marked instrument, note generator or effect. |
-| `edit_session` | Builds or changes the session in one go: add, remove, rename and move tracks and returns; add, remove, move and bypass plug-ins; inputs (another track, an interface input, a MIDI device), outputs, sends, volume, pan, the channel EQ and where it sits among the plug-ins, mute, solo, monitoring, arm, MIDI channel, tempo, time signature and the [key lane](play-along.md) (the whole lane or a range of bars). All of it lands as one undo step, or, if one change can't be made, none of it does and the assistant is told why. |
+| `edit_session` | Builds or changes the session in one go: add, remove, rename and move tracks and returns; add, remove, move and bypass plug-ins; inputs (another track, an interface input, a MIDI device), outputs, sends, volume, pan, the channel EQ and where it sits among the plug-ins, mute, solo, monitoring, arm, MIDI channel, tempo, time signature and the [key lane](play-along.md) (the whole lane or a range of bars, or a track's own keys). All of it lands as one undo step, or, if one change can't be made, none of it does and the assistant is told why. |
 | `get_plugin_params` | Every setting a plug-in on a track publishes (Lathe's own devices and VST3s): name, id, current value, and its choices or its range. |
 | `set_plugin_params` | Turns a plug-in's knobs, flips its switches and picks from its menus ("Kit" to "Simple 808", Delay "Time" to 250 ms). Numbers are in the setting's own units. All the changes for one plug-in land, or none do. Like turning a knob by hand, it isn't an undo step; the reply gives the old values. |
 | `new_project` | Starts a new project, empty or from one of your templates by name, like File > New. |
@@ -56,7 +56,7 @@ Plug-ins go where they work: a note generator (an arpeggiator, a step sequencer,
 
 ## Setting the keys for Play Along
 
-Ask "work out the keys of this song" and the assistant reads the notes (`get_notes`, or `convert_to_midi` for audio tracks), decides where the key changes, and fills in the key lane with `edit_session`. It picks the scale a player would improvise with: minor pentatonic or blues over a blues-rock riff, the full major or minor scale when the tune uses all seven notes. Then open **View > Play Along** to see the notes on your instrument. It's one undo step, like any other change it makes.
+Ask "work out the keys of this song" and the assistant reads the notes (`get_notes`, or `convert_to_midi` for audio tracks), decides where the key changes, and fills in the key lane with `edit_session`. A part in a different key or mode from the band (a solo in dorian, say) can get keys of its own: `set_keys` with a `track`. It picks the scale a player would improvise with: minor pentatonic or blues over a blues-rock riff, the full major or minor scale when the tune uses all seven notes. Then open **View > Play Along** to see the notes on your instrument. It's one undo step, like any other change it makes.
 
 ## Working at the same time
 
