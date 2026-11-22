@@ -70,6 +70,12 @@ jobs:
         if: steps.juce-cache.outputs.cache-hit != 'true'
         run: git clone --depth 1 --branch "$JUCE_VERSION" https://github.com/juce-framework/JUCE.git .juce
 
+      # Lathe's fixes to JUCE (cmake/juce-*.patch). Configure stops if they're missing: releases
+      # 0.10.2 to 0.13.13 were built without them and shipped the Core Audio crash they fix.
+      - name: Patch JUCE
+        working-directory: .juce
+        run: cmake "-DPATCH=${{ github.workspace }}/cmake/juce-8.0.9-coreaudio-listener.patch|${{ github.workspace }}/cmake/juce-8.0.9-mac-menus.patch" -P "${{ github.workspace }}/cmake/ApplyPatch.cmake"
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -331,6 +337,12 @@ jobs:
       - name: Download JUCE
         if: steps.juce-cache.outputs.cache-hit != 'true'
         run: git clone --depth 1 --branch "$JUCE_VERSION" https://github.com/juce-framework/JUCE.git .juce
+
+      # Lathe's fixes to JUCE (cmake/juce-*.patch). Configure stops if they're missing: releases
+      # 0.10.2 to 0.13.13 were built without them and shipped the Core Audio crash they fix.
+      - name: Patch JUCE
+        working-directory: .juce
+        run: cmake "-DPATCH=${{ github.workspace }}/cmake/juce-8.0.9-coreaudio-listener.patch|${{ github.workspace }}/cmake/juce-8.0.9-mac-menus.patch" -P "${{ github.workspace }}/cmake/ApplyPatch.cmake"
 
       - name: Install Linux dependencies
         run: |

@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.13.13 LANGUAGES C CXX)
+project(Lathe VERSION 0.13.14 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,20 +34,32 @@ endif()
 # local checkout instead:  cmake -B build -DLATHE_JUCE_DIR=/path/to/JUCE
 set(LATHE_JUCE_DIR "" CACHE PATH "Optional local JUCE checkout")
 
+# Two patches, both macOS only (see their comments):
+#  - coreaudio-listener: a crash in JUCE 8.0.9's Core Audio code (separate input and output
+#    devices, one of them changing). JUCE 9 rewrote that code.
+#  - mac-menus: the menu bar shows each item's keyboard shortcut, and ticks stay up to date.
+set(LATHE_JUCE_PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/juce-8.0.9-coreaudio-listener.patch|${CMAKE_CURRENT_SOURCE_DIR}/cmake/juce-8.0.9-mac-menus.patch")
+
 if(LATHE_JUCE_DIR)
-    # A local checkout isn't patched: apply the cmake/juce-8.0.9-*.patch files to it yourself.
+    # A local checkout isn't patched here (it may be shared with other projects), but building
+    # without the patches ships the crash they fix, as releases 0.10.2 to 0.13.13 did. So it has
+    # to be patched already. To patch it, from the checkout:
+    #   cmake "-DPATCH=<lathe>/cmake/juce-8.0.9-coreaudio-listener.patch|<lathe>/cmake/juce-8.0.9-mac-menus.patch" -P <lathe>/cmake/ApplyPatch.cmake
+    execute_process(COMMAND ${CMAKE_COMMAND} "-DPATCH=${LATHE_JUCE_PATCHES}" -DCHECK_ONLY=ON
+                            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyPatch.cmake
+                    WORKING_DIRECTORY ${LATHE_JUCE_DIR}
+                    RESULT_VARIABLE juce_patched)
+    if(NOT juce_patched EQUAL 0)
+        message(FATAL_ERROR "${LATHE_JUCE_DIR} doesn't have Lathe's JUCE patches. Apply them (see the comment above this check in CMakeLists.txt).")
+    endif()
     add_subdirectory(${LATHE_JUCE_DIR} JUCE)
 else()
     include(FetchContent)
-    # Two patches, both macOS only (see their comments):
-    #  - coreaudio-listener: a crash in JUCE 8.0.9's Core Audio code (separate input and output
-    #    devices, one of them changing). JUCE 9 rewrote that code.
-    #  - mac-menus: the menu bar shows each item's keyboard shortcut, and ticks stay up to date.
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
         GIT_TAG        8.0.9
         GIT_SHALLOW    TRUE
-        PATCH_COMMAND  ${CMAKE_COMMAND} "-DPATCH=${CMAKE_CURRENT_SOURCE_DIR}/cmake/juce-8.0.9-coreaudio-listener.patch|${CMAKE_CURRENT_SOURCE_DIR}/cmake/juce-8.0.9-mac-menus.patch"
+        PATCH_COMMAND  ${CMAKE_COMMAND} "-DPATCH=${LATHE_JUCE_PATCHES}"
                        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ApplyPatch.cmake)
     FetchContent_MakeAvailable(JUCE)
 endif()

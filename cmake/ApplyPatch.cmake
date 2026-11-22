@@ -1,10 +1,20 @@
 # Applies patches to a fetched dependency once. Run as: cmake -DPATCH=<file>[|<file>...] -P ApplyPatch.cmake
 # from the dependency's source folder. Each patch already applied (a re-configure): nothing to do.
 # One that doesn't apply and isn't applied (the dependency changed): stop with an error.
+# With -DCHECK_ONLY=ON it changes nothing and fails unless every patch is already applied.
 find_package(Git REQUIRED)
 
 string(REPLACE "|" ";" patches "${PATCH}")
 foreach(PATCH IN LISTS patches)
+    if(CHECK_ONLY)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check "${PATCH}"
+                        RESULT_VARIABLE already OUTPUT_QUIET ERROR_QUIET)
+        if(NOT already EQUAL 0)
+            message(FATAL_ERROR "Not applied: ${PATCH}")
+        endif()
+        continue()
+    endif()
+
     execute_process(COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --check "${PATCH}"
                     RESULT_VARIABLE can_apply OUTPUT_QUIET ERROR_QUIET)
     if(can_apply EQUAL 0)
