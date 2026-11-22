@@ -3,6 +3,13 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.14.1
+
+- **A track can have a key of its own.** For a part in a different key or mode from the band, like a solo in
+  dorian: right-click the track's header and choose **Own Key**. Its keys show on a strip at the bottom of the
+  track. In **Play Along**, each instrument can follow the song's key or a track's own, and picks a track named
+  after it by itself ("Bass" for the bass). The AI assistant can set a track's keys too.
+
 ## New in 0.14.0
 
 - **Play Along.** A new **Key** lane under the bar numbers holds the song's key, bar by bar: click it to set the
