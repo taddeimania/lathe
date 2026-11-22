@@ -1,5 +1,7 @@
 # Lathe
 
+[![TDQS](https://tdqs.dev/reports/pij4jfw0uj/badge.svg)](https://tdqs.dev/reports/pij4jfw0uj)
+
 A small, dependable DAW. It opens, finds your interface, loads a template, and records. It hosts VST3 plug-ins, has a mixer with returns and sends, routes audio and MIDI to and from your interface, and exports a mix and stems. It doesn't try to do everything else.
 
 Built with C++20 and JUCE 8.0.9, the same setup as the plug-in projects. It runs on macOS (CoreAudio), Windows (ASIO, WASAPI) and Linux.
