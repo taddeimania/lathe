@@ -64,6 +64,9 @@ public:
     /** Convert to MIDI: finds the notes in an audio clip (and the other selected audio clips on its
         track) and puts them on a new MIDI track under it. `kind` is an audiotomidi::Kind. */
     void convertToMidi (int trackId, int clipId, int kind);
+    /** View > Key Lane: the strip under the bar ruler that shows (and edits) the song's keys. */
+    void setKeyLaneShown (bool);
+    bool isKeyLaneShown() const noexcept   { return keyLaneShown; }
     void zoom (double factor, float anchorX);
     void scrollToPlayhead();
     /** Shows a spot: scrolls to the track and beat, selects the track, moves the start marker there. */
@@ -101,10 +104,12 @@ public:
 private:
     void applyJoins (const std::vector<JoinPlan>&, const std::vector<File>& wavs, const std::vector<String>& errors);
     class Ruler;
+    class KeyLane;
     class Lanes;
     class Header;
     class GroupHeader;
     friend class Ruler;
+    friend class KeyLane;
     friend class Lanes;
     friend class Header;
     friend class GroupHeader;
@@ -152,6 +157,8 @@ private:
     float lastPlayheadX = -100.0f;
 
     std::unique_ptr<Ruler> ruler;
+    std::unique_ptr<KeyLane> keyLane;
+    bool keyLaneShown = true;
     std::unique_ptr<Lanes> lanes;
     Component headerHolder;
     OwnedArray<Header> headers;                 // one per track, in edit.tracks order

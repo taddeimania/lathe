@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # binary pass -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64". Set before project().
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(Lathe VERSION 0.13.14 LANGUAGES C CXX)
+project(Lathe VERSION 0.14.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -174,6 +174,7 @@ target_sources(Lathe PRIVATE
     ${LATHE_DEVICE_SOURCES}
     Source/Main.cpp
     Source/Model/Edit.cpp
+    Source/Model/Keys.cpp
     Source/Model/MidiImport.cpp
     Source/Model/MidiExport.cpp
     Source/Model/AudioToMidi.cpp
@@ -205,6 +206,7 @@ target_sources(Lathe PRIVATE
     Source/UI/CloudLinks.cpp
     Source/UI/Notes.cpp
     Source/UI/UndoHistory.cpp
+    Source/UI/PlayAlong.cpp
     Source/UI/CompareWindow.cpp
     Source/UI/UpdateNotice.cpp
     Source/Patcher/Updater.cpp
@@ -398,6 +400,7 @@ if(LATHE_BUILD_TESTS)
         Source/Host/RemotePlugin.cpp
         Source/Assistant/SessionWatch.cpp
         Source/Model/Edit.cpp
+        Source/Model/Keys.cpp
         Source/Model/MidiImport.cpp
         Source/Model/MidiExport.cpp
         Source/Model/AudioToMidi.cpp
@@ -427,6 +430,7 @@ if(LATHE_BUILD_TESTS)
         Source/UI/Dialogs.cpp
         Source/UI/CloudLinks.cpp
         Source/UI/UndoHistory.cpp
+        Source/UI/PlayAlong.cpp
         # The welcome song (Resources/Welcome.lathe).
         Source/Demo/Welcome.cpp)
     target_include_directories(LatheTests PRIVATE Source)

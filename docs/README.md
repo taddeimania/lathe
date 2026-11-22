@@ -21,6 +21,7 @@ Everything Lathe does, one task at a time: setting it up, recording, arranging, 
 | [Instruments and effects](devices.md) | Lathe's own synths, drums and effects, your VST3 plug-ins, and the plug-in browser |
 | [Mixing](mixing.md) | The mixer, routing, sends and returns, group buses, monitor mixes and the channel EQ |
 | [Compare and Undo History](compare-and-undo.md) | Hearing what a change did, and going back to any step |
+| [Play Along](play-along.md) | The key lane, and seeing the song's notes on guitar, bass, ukulele and keyboard as it plays |
 | [Exporting](exporting.md) | Mixes and stems in WAV, AIFF, FLAC, MP3 or Ogg |
 
 ## With other people

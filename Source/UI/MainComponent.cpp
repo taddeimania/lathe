@@ -2,6 +2,7 @@
 #include "../Assistant/AssistantService.h"
 #include "GlobalKeys.h"
 #include "UndoHistory.h"
+#include "PlayAlong.h"
 #include "CompareWindow.h"
 #include "../Compare/Compare.h"
 #include "../Assistant/AssistantShared.h"
@@ -24,7 +25,7 @@ namespace menu
         newProject = 1, open, save, saveAs, saveTemplate, importAudio, exportAudio, showFolder, quit, openWelcome, importMidi, exportMidi, importFolder,
         undo = 100, redo, undoHistory, compareMixes, deleteClip, duplicate, split, cutClips, copyClips, pasteClips, joinClips, selectAllClips,
         addAudio = 200, addMidi, addReturn, deleteTrack, groupTracks, ungroupTracks,
-        toggleView = 300, toggleDetail, followPlayhead, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote,
+        toggleView = 300, toggleDetail, followPlayhead, zoomIn, zoomOut, showNotes, notesAll, notesUnresolved, notesNone, addNote, addSongNote, keyLane, playAlong,
         settings = 400, scan, metronome, browser, checkUpdates, autoUpdates, assistant,
         templateBase = 1000, deleteTemplateBase = 1500, restoreTemplates = 1999, recentBase = 2000
     };
@@ -437,6 +438,7 @@ MainComponent::~MainComponent()
 {
     opener.reset();   // plug-ins it loaded go before the host that made them
     UndoHistoryWindow::closeIfOpen();
+    PlayAlongWindow::closeIfOpen();
     CompareWindow::closeIfOpen();
     globalkeys::uninstall();
     globalkeys::installCommands (nullptr);
@@ -1789,7 +1791,9 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::toggleView, mixerShown ? "Show Arrangement" : "Show Mixer", "Tab");
         item (menu::toggleDetail, "Show Bottom Panel", {}, true, detailShown);
         item (menu::followPlayhead, "Follow Playhead", "F", true, ctx.followPlayhead);
+        item (menu::keyLane, "Key Lane", {}, true, arrangement.isKeyLaneShown());
         m.addSeparator();
+        item (menu::playAlong, "Play Along...", {});
         item (menu::compareMixes, "Compare...", cmd + "K");
         item (menu::showNotes, "Comments...", cmd + "Shift+N");
         PopupMenu showOn;
@@ -1951,6 +1955,8 @@ void MainComponent::menuItemSelected (int id, int)
         case menu::toggleView:    setMixerShown (! mixerShown); break;
         case menu::toggleDetail:  detailShown = ! detailShown; resized(); menuItemsChanged(); break;
         case menu::followPlayhead: ctx.setFollowPlayhead (! ctx.followPlayhead); menuItemsChanged(); break;
+        case menu::keyLane:       arrangement.setKeyLaneShown (! arrangement.isKeyLaneShown()); menuItemsChanged(); break;
+        case menu::playAlong:     PlayAlongWindow::show (ctx); break;
         case menu::showNotes:     notes->showWindow(); break;
         case menu::notesAll:        notes->setShow (NotesController::Show::all); menuItemsChanged(); break;
         case menu::notesUnresolved: notes->setShow (NotesController::Show::unresolved); menuItemsChanged(); break;
@@ -2600,7 +2606,14 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                         self->compare->setPositionSeconds (self->compare->getLengthSeconds() * 0.38);
                         CompareWindow::show (*self->compare, nullptr);
                         UndoHistoryWindow::show (self->edit, nullptr, nullptr);
-                        Timer::callAfterDelay (600, [self, run, shot, done]
+                        // Play Along, halfway through the bar before a key change (not an undo step).
+                        const auto markerWas = self->edit.insertMarker;
+                        const double bar = self->edit.beatsPerBar();
+                        self->edit.keys = { { 0.0, 9, Scale::minorPentatonic }, { 4.0 * bar, 0, Scale::major } };
+                        self->edit.insertMarker = 3.5 * bar;
+                        self->settings.setValue ("playAlong.instruments", "Guitar,Keyboard");
+                        PlayAlongWindow::show (self->ctx);
+                        Timer::callAfterDelay (600, [self, run, shot, done, markerWas]
                         {
                             if (self == nullptr) return;
                             for (int i = 0; i < TopLevelWindow::getNumTopLevelWindows(); ++i)
@@ -2610,7 +2623,15 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                                     shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-compare.jpg");
                                 else if (dynamic_cast<UndoHistoryWindow*> (w) != nullptr)
                                     shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-undo-history.jpg");
+                                else if (dynamic_cast<PlayAlongWindow*> (w) != nullptr)
+                                    shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-play-along.jpg");
                             }
+                            if (saveShot (self->arrangement, run->outDir.getChildFile ("daw-key-lane.jpg"),
+                                          { 0, 0, jmin (self->arrangement.getWidth(), 900), theme::rulerHeight + theme::keyLaneHeight + 140 }))
+                                run->written.add ("daw-key-lane.jpg");
+                            PlayAlongWindow::closeIfOpen();
+                            self->edit.keys.clear();
+                            self->edit.insertMarker = markerWas;
                             {
                                 // The one-time question about anonymous milestones (privacy page).
                                 const auto f = run->outDir.getChildFile ("welcome-milestones.jpg");

@@ -141,6 +141,7 @@ void Edit::reset()
 {
     tempo = 120.0;
     timeSigNum = timeSigDen = 4;
+    keys.clear();
     loopEnabled = false;
     loopStart = 0.0;
     loopEnd = 16.0;
@@ -573,6 +574,60 @@ double Edit::getEndBeat() const
     return end;
 }
 
+void Edit::setKey (const KeyChange& k)
+{
+    keys.push_back (k);
+    keys::tidy (keys);
+    touched();
+}
+
+bool Edit::removeKey (double beat)
+{
+    const auto before = keys.size();
+    keys.erase (std::remove_if (keys.begin(), keys.end(), [beat] (auto& k) { return std::abs (k.beat - beat) < 1.0e-6; }),
+                keys.end());
+    if (keys.size() == before)
+        return false;
+    touched();
+    return true;
+}
+
+void Edit::replaceKeys (std::vector<KeyChange> list, double from, double to)
+{
+    const bool toEnd = to < 0.0;
+    std::optional<KeyChange> carry;
+    if (! toEnd)
+        if (auto* k = keyAt (to))
+            carry = *k;
+
+    std::vector<KeyChange> out;
+    for (auto& k : keys)
+        if (k.beat < from - 1.0e-6 || (! toEnd && k.beat >= to - 1.0e-6))
+            out.push_back (k);
+    for (auto& k : list)
+        if (k.beat >= from - 1.0e-6 && (toEnd || k.beat < to - 1.0e-6))
+            out.push_back (k);
+    keys::tidy (out);
+
+    // The key that was playing at `to` still starts there, unless one is already there.
+    if (carry && ! toEnd)
+    {
+        auto* now = keys::at (out, to);
+        if (now == nullptr || now->root != carry->root || now->scale != carry->scale)
+        {
+            auto c = *carry;
+            c.beat = to;
+            if (now == nullptr || std::abs (now->beat - to) > 1.0e-6)
+            {
+                out.push_back (c);
+                keys::tidy (out);
+            }
+        }
+    }
+    keys = std::move (out);
+    touched();
+}
+
 void Edit::setTempo (double newTempo)
 {
     newTempo = jlimit (20.0, 400.0, newTempo);
@@ -744,6 +799,7 @@ struct EditSnapshot
 {
     double tempo = 120.0;
     int timeSigNum = 4, timeSigDen = 4;
+    std::vector<KeyChange> keys;
     std::vector<TrackState> tracks, buses;
     TrackState master;
     std::vector<GroupState> groups;
@@ -891,7 +947,7 @@ static bool sameTracks (const std::vector<TrackState>& a, const std::vector<Trac
 static bool sameSnapshot (const EditSnapshot& a, const EditSnapshot& b)
 {
     if (! exactlyEqual (a.tempo, b.tempo) || a.timeSigNum != b.timeSigNum || a.timeSigDen != b.timeSigDen
-        || ! sameTracks (a.tracks, b.tracks) || ! sameTracks (a.buses, b.buses) || ! sameTrack (a.master, b.master)
+        || a.keys != b.keys || ! sameTracks (a.tracks, b.tracks) || ! sameTracks (a.buses, b.buses) || ! sameTrack (a.master, b.master)
         || a.groups.size() != b.groups.size() || a.cues.size() != b.cues.size())
         return false;
     for (size_t i = 0; i < a.groups.size(); ++i)
@@ -918,6 +974,26 @@ static String panWords (float p)
     return v == 0 ? String ("centre") : String (std::abs (v)) + (v < 0 ? "L" : "R");
 }
 
+// "Key at bar 17: C major", "Removed the key at bar 9", or "Key changes" for several at once.
+static String describeKeyStep (const EditSnapshot& a, const EditSnapshot& b)
+{
+    const double bpb = b.timeSigNum * 4.0 / b.timeSigDen;
+    auto bar = [bpb] (double beat) { return String (beat / bpb + 1.0, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
+    auto has = [] (const std::vector<KeyChange>& list, const KeyChange& k)
+    {
+        return std::find (list.begin(), list.end(), k) != list.end();
+    };
+    std::vector<KeyChange> added, removed;
+    for (auto& k : b.keys) if (! has (a.keys, k)) added.push_back (k);
+    for (auto& k : a.keys) if (! has (b.keys, k)) removed.push_back (k);
+
+    if (added.size() == 1 && removed.size() <= 1)
+        return "Key at bar " + bar (added[0].beat) + ": " + keys::keyName (added[0]);
+    if (added.empty() && removed.size() == 1)
+        return "Removed the key at bar " + bar (removed[0].beat);
+    return "Key changes";
+}
+
 static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
 {
     StringArray out;
@@ -927,6 +1003,8 @@ static String describeStep (const EditSnapshot& a, const EditSnapshot& b)
         out.add ("Tempo " + String (b.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + " BPM");
     if (a.timeSigNum != b.timeSigNum || a.timeSigDen != b.timeSigDen)
         out.add ("Time signature " + String (b.timeSigNum) + "/" + String (b.timeSigDen));
+    if (a.keys != b.keys)
+        out.add (describeKeyStep (a, b));
 
     auto find = [] (const std::vector<TrackState>& list, const std::shared_ptr<Track>& t) -> const TrackState*
     {
@@ -1083,6 +1161,7 @@ std::shared_ptr<const EditSnapshot> Edit::capture() const
     s->tempo = tempo;
     s->timeSigNum = timeSigNum;
     s->timeSigDen = timeSigDen;
+    s->keys = keys;
     for (auto& t : tracks) s->tracks.push_back (captureTrack (t));
     for (auto& t : buses)  s->buses.push_back (captureTrack (t));
     s->master = captureTrack (master);
@@ -1115,6 +1194,7 @@ void Edit::restore (const EditSnapshot& s)
     tempo = s.tempo;
     timeSigNum = s.timeSigNum;
     timeSigDen = s.timeSigDen;
+    keys = s.keys;
 
     tracks.clear();
     for (auto& ts : s.tracks) { restoreTrack (ts); tracks.push_back (ts.track); }
@@ -1608,6 +1688,13 @@ var Edit::toVar (bool asTemplate) const
 
     if (! asTemplate)
         o->setProperty ("insertMarker", insertMarker);
+    if (! asTemplate && ! keys.empty())
+    {
+        Array<var> list;
+        for (auto& k : keys)
+            list.add (keys::toVar (k));
+        o->setProperty ("keys", list);
+    }
     if (! asTemplate && ! localNotes.empty())
     {
         Array<var> list;
@@ -1698,6 +1785,13 @@ Result Edit::loadFrom (const var& data, const File& baseDir, const PluginFactory
     }
 
     insertMarker = (double) data["insertMarker"];
+
+    keys.clear();
+    if (auto* list = data["keys"].getArray())
+        for (auto& v : *list)
+            if (auto k = keys::fromVar (v))
+                keys.push_back (*k);
+    keys::tidy (keys);
 
     tracks.clear();
     buses.clear();

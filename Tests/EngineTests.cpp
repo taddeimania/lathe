@@ -27,6 +27,7 @@
 #include "Demo/Welcome.h"
 #include "UI/CloudLinks.h"
 #include "UI/UndoHistory.h"
+#include "UI/PlayAlong.h"
 #include "UI/GlobalKeys.h"
 #include "Model/StemFolder.h"
 #include "Model/AudioToMidi.h"
@@ -6422,6 +6423,160 @@ int main (int argc, char** argv)
         check (translocated.contains ("Applications") && installed.isEmpty(),
                "a Mac app run from where it was downloaded says to move it to Applications; one in Applications is fine");
        #endif
+    }
+
+    // --- The key lane and Play Along ------------------------------------------------------------
+    std::cout << "Keys: names, scales, the lane, undo and the assistant" << std::endl;
+    {
+        auto is = [] (const char* text, int root, Scale scale)
+        {
+            auto p = keys::parse (text);
+            return p && p->first == root && p->second == scale;
+        };
+        check (is ("A minor pentatonic", 9, Scale::minorPentatonic) && is ("Am pentatonic", 9, Scale::minorPentatonic)
+               && is ("Am pent", 9, Scale::minorPentatonic) && is ("Am", 9, Scale::minor) && is ("A", 9, Scale::major)
+               && is ("a minor", 9, Scale::minor) && is ("Amin", 9, Scale::minor) && is ("C major", 0, Scale::major),
+               "key names: \"Am pent\", \"Am\", \"A\" and the full names");
+        check (is ("F# blues", 6, Scale::blues) && is ("Bb", 10, Scale::major) && is ("Bbm", 10, Scale::minor)
+               && is ("Eb major pentatonic", 3, Scale::majorPentatonic) && is ("B blues", 11, Scale::blues)
+               && is ("Ab blues", 8, Scale::blues) && is ("D dorian", 2, Scale::dorian) && is ("A mixolydian", 9, Scale::mixolydian)
+               && is ("e harmonic minor", 4, Scale::harmonicMinor) && is ("Cb", 11, Scale::major),
+               "sharps, flats, \"B blues\" (not B-flat) and the modes");
+        check (! keys::parse ("H minor") && ! keys::parse ("A lydian dominant") && ! keys::parse (""),
+               "names Lathe doesn't know are refused");
+        for (int r = 0; r < 12; ++r)
+            for (auto sc : keys::allScales())
+            {
+                auto p = keys::parse (keys::keyName (r, sc));
+                if (! p || p->first != r || p->second != sc)
+                    check (false, "every key name reads back: " + keys::keyName (r, sc));
+            }
+        check (keys::keyName (5, Scale::major) == "F major" && keys::keyName (10, Scale::major) == "Bb major"
+               && keys::keyName (2, Scale::minor) == "D minor" && keys::keyName (6, Scale::major) == "F# major"
+               && keys::noteName (10, keys::usesFlats (5, Scale::major)) == "Bb"
+               && keys::noteName (10, keys::usesFlats (11, Scale::major)) == "A#"
+               && keys::shortName (9, Scale::minorPentatonic) == "Am pent",
+               "keys are spelled as players spell them (Bb in F major, A# in B major)");
+
+        int inAmPent = 0;
+        for (int p = 60; p < 72; ++p)
+            inAmPent += keys::contains (9, Scale::minorPentatonic, p) ? 1 : 0;
+        check (inAmPent == 5 && keys::contains (9, Scale::minorPentatonic, 48) && keys::contains (9, Scale::minorPentatonic, 55)
+               && ! keys::contains (9, Scale::minorPentatonic, 59) && keys::isRoot (9, 33) && ! keys::isRoot (9, 36)
+               && keys::intervals (Scale::blues).size() == 6,
+               "A minor pentatonic is A C D E G, in every octave");
+
+        // Where the notes are on a guitar: open strings E A D G B E; frets 0 to 15.
+        const auto& guitar = fretboard::instruments()[0];
+        const auto spots = fretboard::spots (guitar, 9, Scale::minorPentatonic);
+        auto spotAt = [&] (int string, int fret) -> const fretboard::Spot*
+        {
+            for (auto& sp : spots)
+                if (sp.string == string && sp.fret == fret)
+                    return &sp;
+            return nullptr;
+        };
+        const auto* lowA = spotAt (0, 5);
+        const auto* lowF = spotAt (0, 1);
+        const auto* bString = spotAt (4, 1);   // B string, fret 1: C
+        check (spots.size() == 6 * 16 && lowA != nullptr && lowA->inKey && lowA->root && lowA->pitch == 45
+               && lowF != nullptr && ! lowF->inKey && bString != nullptr && bString->inKey && ! bString->root
+               && spotAt (0, 0)->inKey && spotAt (3, 2)->root,
+               "guitar: A is at the 5th fret of the low E string and the 2nd of the G; F isn't in A minor pentatonic");
+        const auto& uke = fretboard::instruments()[2];
+        const auto& kbd = fretboard::instruments()[3];
+        const auto ukeSpots = fretboard::spots (uke, 0, Scale::major);
+        const auto kbdSpots = fretboard::spots (kbd, 0, Scale::major);
+        int kbdIn = 0;
+        for (auto& sp : kbdSpots)
+            kbdIn += sp.inKey ? 1 : 0;
+        check (uke.strings == std::vector<int> { 67, 60, 64, 69 } && fretboard::instruments()[1].strings.size() == 4
+               && ukeSpots.size() == 4 * 13 && ukeSpots[0].pitch == 67 && ukeSpots[0].inKey
+               && kbdSpots.size() == 24 && kbdIn == 14 && kbdSpots[0].root,
+               "ukulele in GCEA (G first), 4-string bass, and two octaves of keyboard");
+
+        // The lane on a song.
+        Edit e;
+        check (e.keyAt (0.0) == nullptr, "a new song has no key");
+        e.setKey ({ 64.0, 0, Scale::major });   // bar 17 in 4/4
+        e.setKey ({ 0.0, 9, Scale::minorPentatonic });
+        check (e.keys.size() == 2 && e.keys[0].beat == 0.0 && e.keyAt (10.0)->root == 9 && e.keyAt (64.0)->root == 0
+               && e.keyAt (500.0)->root == 0 && keys::after (e.keys, 10.0)->beat == 64.0 && keys::after (e.keys, 64.0) == nullptr,
+               "key changes are kept in order and last until the next");
+        e.setKey ({ 64.0, 7, Scale::major });
+        check (e.keys.size() == 2 && e.keyAt (70.0)->root == 7, "setting a key where there is one replaces it");
+
+        // Play Along: the next key fades in over the bar before it.
+        const auto far = PlayAlongWindow::stateAt (e, 10.0), near = PlayAlongWindow::stateAt (e, 62.0), on = PlayAlongWindow::stateAt (e, 64.0);
+        check (far.key != nullptr && far.key->root == 9 && far.next != nullptr && far.nextFade == 0.0f
+               && std::abs (near.nextFade - 0.5f) < 1.0e-4f && on.key->root == 7 && on.next == nullptr && on.nextFade == 0.0f,
+               "Play Along fades the next key in over the last bar before it");
+
+        // Undo, and the words for it.
+        e.commitUndoStep();
+        e.clearUndo();
+        e.setKey ({ 32.0, 4, Scale::blues });
+        e.commitUndoStep();
+        const auto label = e.getDoneSteps().empty() ? String() : e.getDoneSteps().back().label;
+        e.removeKey (32.0);
+        e.commitUndoStep();
+        const auto label2 = e.getDoneSteps().back().label;
+        check (label == "Key at bar 9: E blues" && label2 == "Removed the key at bar 9", "undo history says what changed in the key lane");
+        e.undo();
+        check (e.keys.size() == 3 && e.keyAt (33.0)->root == 4, "undo brings a removed key change back");
+        e.undo();
+        check (e.keys.size() == 2 && e.keyAt (33.0)->root == 9, "...and takes an added one away");
+
+        // Saved with the project (not in templates), and read back.
+        const auto saved = e.toVar (false);
+        check (saved["keys"].size() == 2 && saved["keys"][0]["key"].toString() == "A minor pentatonic"
+               && (double) saved["keys"][1]["beat"] == 64.0 && ! e.toVar (true).hasProperty ("keys"),
+               "the project file keeps the keys as names; templates leave them out");
+        Edit loaded;
+        const auto r = loaded.loadFrom (JSON::parse (JSON::toString (saved)), File(), [] (auto&, auto&, bool) { return std::shared_ptr<PluginSlot>(); });
+        check (r.wasOk() && loaded.keys == e.keys, "keys load back from the file");
+        Edit older;
+        older.loadFrom (JSON::parse (R"({"format":"lathe-project","tracks":[],"returns":[],"keys":[{"beat":0,"key":"nonsense"},{"beat":8,"key":"D dorian"}]})"),
+                        File(), [] (auto&, auto&, bool) { return std::shared_ptr<PluginSlot>(); });
+        check (older.keys.size() == 1 && older.keys[0].root == 2, "a key Lathe can't read is skipped, not fatal");
+
+        // replaceKeys: the whole lane, or a range with the key at its end carrying on.
+        Edit lane;
+        lane.replaceKeys ({ { 0.0, 9, Scale::minor }, { 32.0, 0, Scale::major } });
+        lane.replaceKeys ({ { 16.0, 4, Scale::minor } }, 16.0, 48.0);
+        check (lane.keys.size() == 3 && lane.keys[0].root == 9 && lane.keys[1].beat == 16.0 && lane.keys[1].root == 4
+               && lane.keys[2].beat == 48.0 && lane.keys[2].root == 0,
+               "replacing a range keeps what's outside it, and the key at its end starts there");
+        lane.replaceKeys ({});
+        check (lane.keys.empty(), "an empty list clears the lane");
+
+        // The assistant: set_keys, describe_session, and refusals.
+        Edit ae;
+        assistant::Tools tools (ae, engine);
+        String status;
+        auto setKeys = [&] (const String& json)
+        {
+            return tools.call ("edit_session", JSON::parse (R"({"changes":[)" + json + "]}"), status);
+        };
+        auto res = setKeys (R"({"action":"set_keys","keys":[{"bar":1,"key":"Am pent"},{"bar":17,"key":"C major"}]})");
+        check (! (bool) res["isError"] && ae.keys.size() == 2 && ae.keys[1].beat == 64.0 && ae.keys[0].scale == Scale::minorPentatonic
+               && res["content"][0]["text"].toString().contains ("bar 1 A minor pentatonic, bar 17 C major"),
+               "set_keys sets the lane, by bar");
+        const auto desc = JSON::parse (tools.call ("describe_session", var (new DynamicObject()), status)["content"][0]["text"].toString());
+        check (desc["keys"].size() == 2 && desc["keys"][1]["key"].toString() == "C major" && (double) desc["keys"][1]["bar"] == 17.0,
+               "describe_session lists the key changes");
+        res = setKeys (R"({"action":"set_keys","keys":[{"bar":1,"key":"G lydian flat 13"}]})");
+        check ((bool) res["isError"] && res["content"][0]["text"].toString().contains ("minor pentatonic") && ae.keys.size() == 2,
+               "an unknown key is refused, the lane untouched, with the scales Lathe knows");
+        res = setKeys (R"({"action":"set_tempo","bpm":90},{"action":"set_keys","keys":[{"bar":0,"key":"C"}]})");
+        check ((bool) res["isError"] && ae.keys.size() == 2 && ae.tempo == 120.0, "a bad set_keys undoes the whole batch");
+        res = setKeys (R"({"action":"set_keys","from_bar":9,"to_bar":17,"keys":[{"bar":9,"key":"E minor"}]})");
+        check (! (bool) res["isError"] && ae.keys.size() == 3 && ae.keyAt (40.0)->root == 4 && ae.keyAt (64.0)->root == 0,
+               "set_keys can replace a range of bars");
+        res = setKeys (R"({"action":"set_keys","keys":[]})");
+        check (! (bool) res["isError"] && ae.keys.empty() && res["content"][0]["text"].toString().contains ("Cleared"),
+               "an empty set_keys clears the lane");
+        check (ae.getDoneSteps().size() >= 3 && ae.getDoneSteps().back().byAssistant, "each set_keys is an undo step, marked as the assistant's");
     }
 
     engine.setEdit (nullptr);

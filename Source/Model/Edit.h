@@ -2,6 +2,7 @@
 
 #include "../Common.h"
 #include "ChannelEq.h"
+#include "Keys.h"
 #include "Notes.h"
 
 namespace lathe
@@ -223,6 +224,9 @@ public:
     double loopStart = 0.0, loopEnd = 16.0;   // beats
     double insertMarker = 0.0;                // where Play starts from, beats
     double sampleRate = 48000.0;              // rate the project's audio was recorded at
+    /** The key lane, in order of beat (see Keys.h). Change it with setKey / removeKey /
+        replaceKeys, which keep it in order and make it an undo step. */
+    std::vector<KeyChange> keys;
 
     std::vector<std::shared_ptr<Track>> tracks;   // audio + MIDI, in display order
     std::vector<std::shared_ptr<Track>> buses;    // return tracks
@@ -297,6 +301,17 @@ public:
     double getEndBeat() const;   // end of the last clip
     void setTempo (double newTempo);   // keeps audio clips the same length in seconds
 
+    // --- the key lane
+    /** The key in effect at a beat, or null before the first key change. */
+    const KeyChange* keyAt (double beat) const   { return keys::at (keys, beat); }
+    /** Adds a key change, or replaces the one already at that beat. */
+    void setKey (const KeyChange&);
+    /** Removes the key change at that beat, if there is one. Returns whether it did. */
+    bool removeKey (double beat);
+    /** Replaces the key changes from `from` up to (not including) `to` with `list`; to < 0
+        means the end of the song. The key in effect at `to` carries on there afterwards. */
+    void replaceKeys (std::vector<KeyChange> list, double from = 0.0, double to = -1.0);
+
     // --- clip editing helpers (all positions in beats)
     /** Removes everything on the track between from and to, trimming and splitting clips that overlap. */
     void clearRange (Track&, double from, double to, int exceptClipId = -1);
@@ -324,7 +339,7 @@ public:
 
     // --- undo
     // Covers tracks, returns, groups, cue mixes, routing, sends, plug-ins (added, removed,
-    // moved, bypassed), names, colours, tempo, time signature, clips and notes, and the mix
+    // moved, bypassed), names, colours, tempo, time signature, key changes, clips and notes, and the mix
     // controls: faders, pans, send levels and the channel EQ (a drag is one step). Not
     // plug-in settings, cue mix levels, mute/solo/arm, the loop or the playhead: those keep
     // their current values.

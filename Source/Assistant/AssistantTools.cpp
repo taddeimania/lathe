@@ -248,6 +248,18 @@ var Tools::describeSession() const
     set (o, "tempo_bpm", edit.tempo);
     set (o, "time_signature", String (edit.timeSigNum) + "/" + String (edit.timeSigDen));
     set (o, "project_sample_rate", edit.sampleRate);
+    if (! edit.keys.empty())
+    {
+        Array<var> list;
+        for (auto& k : edit.keys)
+        {
+            var ko = obj();
+            set (ko, "bar", rounded (toBar (k.beat), 0.01));
+            set (ko, "key", keys::keyName (k));
+            list.add (ko);
+        }
+        set (o, "keys", list);
+    }
 
     var transport = obj();
     set (transport, "playing", engine.isPlaying());
@@ -1896,6 +1908,51 @@ var Tools::editSession (const var& args, String& status)
             if (bpm < 20.0 || bpm > 400.0) { error = "bpm is 20 to 400."; return {}; }
             edit.setTempo (bpm);
             return "Tempo " + String (edit.tempo, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + " BPM";
+        }
+
+        if (action == "set_keys")
+        {
+            auto* list = c.getProperty ("keys", {}).getArray();
+            if (list == nullptr) { error = "set_keys needs \"keys\": a list of {\"bar\", \"key\"} (empty to clear the lane)."; return {}; }
+            const bool ranged = hasKey (c, "from_bar") || hasKey (c, "to_bar");
+            const double from = hasKey (c, "from_bar") ? toBeats ((double) c["from_bar"]) : 0.0;
+            const double to = hasKey (c, "to_bar") ? toBeats ((double) c["to_bar"]) : -1.0;
+            if (from < 0.0 || (to >= 0.0 && to <= from)) { error = "from_bar is 1 or more, and to_bar after it."; return {}; }
+
+            std::vector<KeyChange> wanted;
+            for (auto& v : *list)
+            {
+                const double bar = (double) v.getProperty ("bar", 0.0);
+                if (bar < 1.0) { error = "each key needs a \"bar\", 1 or more."; return {}; }
+                const auto name = v.getProperty ("key", {}).toString();
+                auto parsed = keys::parse (name);
+                if (! parsed)
+                {
+                    StringArray scales;
+                    for (auto sc : keys::allScales())
+                        scales.add (keys::scaleName (sc));
+                    error = quoted (name) + " isn't a key Lathe knows. Give a root (C, F#, Bb...) and one of: "
+                            + scales.joinIntoString (", ") + ".";
+                    return {};
+                }
+                const double beat = toBeats (bar);
+                if (ranged && (beat < from - 1.0e-6 || (to >= 0.0 && beat >= to - 1.0e-6)))
+                {
+                    error = "bar " + barText (beat) + " is outside from_bar to to_bar.";
+                    return {};
+                }
+                wanted.push_back ({ beat, parsed->first, parsed->second });
+            }
+            edit.replaceKeys (wanted, from, to);
+
+            if (wanted.empty())
+                return ranged ? "Cleared the keys from bar " + barText (from) + (to >= 0.0 ? " to " + barText (to) : String())
+                              : String ("Cleared the key lane");
+            keys::tidy (wanted);
+            StringArray words;
+            for (auto& k : wanted)
+                words.add ("bar " + barText (k.beat) + " " + keys::keyName (k));
+            return "Keys: " + words.joinIntoString (", ");
         }
 
         if (action == "set_time_signature")

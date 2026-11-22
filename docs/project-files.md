@@ -10,7 +10,7 @@ Song/
   Exports/
 ```
 
-`.lathe` files are plain JSON. They hold tempo, time signature, loop, tracks (input, output, sends, fader, pan, mute, solo, arm, monitor, EQ), monitor mixes, plug-ins (VST3 description plus base64 state), and clips. Audio paths are relative to the project folder, so you can move or copy the folder between your Mac and the Windows machine. Plug-ins are matched by identity, not by file path. A plug-in that isn't installed on the current machine keeps its saved settings and comes back when it's installed. Templates use the same format without clips.
+`.lathe` files are plain JSON. They hold tempo, time signature, loop, tracks (input, output, sends, fader, pan, mute, solo, arm, monitor, EQ), monitor mixes, key changes (`"keys"`: each a beat and a name such as `"A minor pentatonic"`), plug-ins (VST3 description plus base64 state), and clips. Audio paths are relative to the project folder, so you can move or copy the folder between your Mac and the Windows machine. Plug-ins are matched by identity, not by file path. A plug-in that isn't installed on the current machine keeps its saved settings and comes back when it's installed. Templates use the same format without clips.
 
 Opening a project with plug-ins (other than Lathe's own) shows a progress bar naming each one as it loads ("Loading Kontakt 7 (3 of 12)..."). Big instruments can take a few seconds each. **Cancel** stops after the one that's loading and leaves the song you had open as it was.
 

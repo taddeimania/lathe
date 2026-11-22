@@ -25,7 +25,7 @@ Under the versions, each one is measured: loudness, true peak, crest, width, cor
 
 ## Undo and redo
 
-**Cmd/Ctrl+Z** undoes, **Cmd/Ctrl+Shift+Z** redoes. Undo covers clips and notes, tracks, returns, groups, plug-ins, routing, sends, names, tempo, and fader, pan, send level and channel EQ moves. Everything the AI assistant changes in one go is a single step.
+**Cmd/Ctrl+Z** undoes, **Cmd/Ctrl+Shift+Z** redoes. Undo covers clips and notes, tracks, returns, groups, plug-ins, routing, sends, names, tempo, key changes, and fader, pan, send level and channel EQ moves. Everything the AI assistant changes in one go is a single step.
 
 ## Undo History
 

@@ -90,6 +90,10 @@ Got the stems of a song (from a bandmate, a session, another DAW)? Choose **File
 - **Stop** twice goes back to the start of the song.
 - **Follow** (**F**) scrolls the arrangement to keep the playhead in view while the song plays.
 
+## The key lane
+
+The **Key** strip under the bar numbers says what key the song is in, bar by bar. Click it to set the key or add a key change, and drag the start of a key change to move it. **View > Play Along** shows those notes on guitar, bass, ukulele and keyboard as the song plays. See [Play Along](play-along.md).
+
 ## Zoom and scroll
 
 - **Cmd/Ctrl+scroll** zooms in and out.

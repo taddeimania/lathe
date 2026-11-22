@@ -582,6 +582,182 @@ private:
 };
 
 //==============================================================================
+// The key lane: one block per key change, from where it starts to the next. Click a block to
+// change its root or scale, add a key change, or remove it; drag a block's left edge to move it.
+//==============================================================================
+class ArrangementView::KeyLane : public Component, public TooltipClient
+{
+public:
+    explicit KeyLane (ArrangementView& o) : owner (o) {}
+
+    void paint (Graphics& g) override
+    {
+        auto& edit = owner.ctx.edit;
+        g.fillAll (theme::window);
+
+        const auto& list = edit.keys;
+        for (size_t i = 0; i < list.size(); ++i)
+        {
+            const auto& k = list[i];
+            const float x1 = owner.beatToX (k.beat);
+            const float x2 = i + 1 < list.size() ? owner.beatToX (list[i + 1].beat) : (float) getWidth() + 10.0f;
+            if (x2 < 0.0f || x1 > (float) getWidth())
+                continue;
+            auto block = Rectangle<float> (x1, 2.0f, x2 - x1, (float) getHeight() - 4.0f).reduced (0.5f, 0.0f);
+            const auto colour = theme::keyColour (k.root);
+            g.setColour (colour.withAlpha (dragging == (int) i ? 1.0f : 0.8f));
+            g.fillRoundedRectangle (block, 3.0f);
+
+            // The name stays in view while the block's start is scrolled off to the left.
+            auto textArea = block.withLeft (jmax (block.getX(), 0.0f)).reduced (5.0f, 0.0f);
+            const auto full = keys::keyName (k), brief = keys::shortName (k.root, k.scale);
+            g.setFont (theme::font (11.5f, true));
+            g.setColour (theme::textOn (colour));
+            const bool fits = GlyphArrangement::getStringWidth (g.getCurrentFont(), full) < textArea.getWidth();
+            g.drawText (fits ? full : brief, textArea, Justification::centredLeft, true);
+        }
+
+        if (list.empty())
+        {
+            g.setColour (theme::textDim);
+            g.setFont (theme::font (11.0f));
+            g.drawText ("Click to set the song's key", getLocalBounds().reduced (6, 0), Justification::centredLeft);
+        }
+
+        g.setColour (theme::border);
+        g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+    }
+
+    String getTooltip() override
+    {
+        return "The song's key, for Play Along (View > Play Along). Click to change it or add a key change; "
+               "drag the start of a key change to move it.";
+    }
+
+    void mouseMove (const MouseEvent& e) override
+    {
+        setMouseCursor (edgeAt ((float) e.x) >= 0 ? MouseCursor::LeftRightResizeCursor : MouseCursor::PointingHandCursor);
+    }
+
+    void mouseDown (const MouseEvent& e) override
+    {
+        dragging = e.mods.isPopupMenu() ? -1 : edgeAt ((float) e.x);
+        if (dragging >= 0)
+            owner.ctx.edit.commitUndoStep();
+    }
+
+    void mouseDrag (const MouseEvent& e) override
+    {
+        if (dragging < 0 || ! e.mouseWasDraggedSinceMouseDown())
+            return;
+        auto& list = owner.ctx.edit.keys;
+        if ((size_t) dragging >= list.size())
+            return;
+        const double step = owner.gridStep();
+        const double lo = dragging > 0 ? list[(size_t) dragging - 1].beat + step : 0.0;
+        const double hi = (size_t) dragging + 1 < list.size() ? list[(size_t) dragging + 1].beat - step : 1.0e9;
+        list[(size_t) dragging].beat = jlimit (lo, jmax (lo, hi), owner.snap (owner.xToBeat ((float) e.x), e.mods.isAltDown()));
+        repaint();
+    }
+
+    void mouseUp (const MouseEvent& e) override
+    {
+        const int was = dragging;
+        dragging = -1;
+        if (was >= 0 && e.mouseWasDraggedSinceMouseDown())
+        {
+            owner.ctx.edit.touched();
+            repaint();
+            return;
+        }
+        showMenu (e);
+    }
+
+private:
+    /** The key change whose start is under x (to drag it), or -1. */
+    int edgeAt (float x) const
+    {
+        auto& list = owner.ctx.edit.keys;
+        for (size_t i = 0; i < list.size(); ++i)
+            if (std::abs (owner.beatToX (list[i].beat) - x) < 5.0f)
+                return (int) i;
+        return -1;
+    }
+
+    // Menu ids: change root 100+root, change scale 200+scale, add 1000 + root*16 + scale, remove 2.
+    static PopupMenu keyPicker (int base)
+    {
+        PopupMenu roots;
+        for (int r = 0; r < 12; ++r)
+        {
+            PopupMenu scales;
+            for (size_t s = 0; s < keys::allScales().size(); ++s)
+                scales.addItem (base + r * 16 + (int) s, keys::keyName (r, keys::allScales()[s]));
+            const auto a = keys::noteName (r, false), b = keys::noteName (r, true);
+            roots.addSubMenu (a == b ? a : a + " / " + b, scales, true, nullptr, false, 0);
+        }
+        return roots;
+    }
+
+    void showMenu (const MouseEvent& e)
+    {
+        auto& edit = owner.ctx.edit;
+        const double barLen = edit.beatsPerBar();
+        // Key changes go on a bar (Alt: on the grid instead).
+        const double beat = e.mods.isAltDown() ? owner.snap (owner.xToBeat ((float) e.x), false)
+                                               : jmax (0.0, std::floor (owner.xToBeat ((float) e.x) / barLen + 1.0e-6) * barLen);
+        auto barWords = [barLen] (double b) { return String (b / barLen + 1.0, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
+
+        const auto* current = edit.keyAt (owner.xToBeat ((float) e.x));
+        PopupMenu m;
+        if (current != nullptr)
+        {
+            const double at = current->beat;
+            m.addSectionHeader (keys::keyName (*current) + ", from bar " + barWords (at));
+            PopupMenu roots, scales;
+            for (int r = 0; r < 12; ++r)
+                roots.addItem (100 + r, keys::noteName (r, keys::usesFlats (r, current->scale)), true, r == current->root);
+            for (size_t s = 0; s < keys::allScales().size(); ++s)
+                scales.addItem (200 + (int) s, keys::scaleName (keys::allScales()[s]), true, keys::allScales()[s] == current->scale);
+            m.addSubMenu ("Root", roots);
+            m.addSubMenu ("Scale", scales);
+            m.addSeparator();
+            if (std::abs (beat - at) > 1.0e-6)
+                m.addSubMenu ("Change key at bar " + barWords (beat), keyPicker (1000));
+            m.addItem (2, "Remove this key change");
+        }
+        else
+        {
+            m.addSectionHeader ("Key from bar " + barWords (beat));
+            const auto picker = keyPicker (1000);
+            PopupMenu::MenuItemIterator it (picker);
+            while (it.next())
+                m.addItem (it.getItem());
+        }
+
+        const double at = current != nullptr ? current->beat : -1.0;
+        Component::SafePointer<KeyLane> self (this);
+        m.showMenuAsync (PopupMenu::Options().withTargetScreenArea ({ e.getScreenX(), e.getScreenY(), 1, 1 }),
+                         [self, beat, at] (int r)
+        {
+            if (self == nullptr || r == 0)
+                return;
+            auto& ed = self->owner.ctx.edit;
+            ed.commitUndoStep();
+            const auto* k = at >= 0.0 ? keys::at (ed.keys, at) : nullptr;
+            if (r == 2)                     ed.removeKey (at);
+            else if (r >= 1000)             ed.setKey ({ beat, (r - 1000) / 16, keys::allScales()[(size_t) ((r - 1000) % 16)] });
+            else if (k != nullptr && r >= 200) { auto c = *k; c.scale = keys::allScales()[(size_t) (r - 200)]; ed.setKey (c); }
+            else if (k != nullptr && r >= 100) { auto c = *k; c.root = r - 100; ed.setKey (c); }
+            self->repaint();
+        });
+    }
+
+    ArrangementView& owner;
+    int dragging = -1;
+};
+
+//==============================================================================
 // Lanes: grid, clips, playhead
 //==============================================================================
 class ArrangementView::Lanes : public Component, public TooltipClient, private ChangeListener, private Timer
@@ -1597,8 +1773,12 @@ private:
 ArrangementView::ArrangementView (AppContext& c) : ctx (c)
 {
     ruler = std::make_unique<Ruler> (*this);
+    keyLane = std::make_unique<KeyLane> (*this);
     lanes = std::make_unique<Lanes> (*this);
     addAndMakeVisible (*ruler);
+    keyLaneShown = ctx.settings.getBoolValue ("keyLane", true);
+    addChildComponent (*keyLane);
+    keyLane->setVisible (keyLaneShown);
     addAndMakeVisible (*lanes);
     addAndMakeVisible (headerHolder);
 
@@ -1868,6 +2048,28 @@ void ArrangementView::paint (Graphics& g)
     g.fillRect (0, 0, theme::headerWidth, theme::rulerHeight);
     g.setColour (theme::border);
     g.drawHorizontalLine (theme::rulerHeight - 1, 0.0f, (float) theme::headerWidth);
+    if (keyLaneShown)
+    {
+        const int y = theme::rulerHeight;
+        g.setColour (theme::window);
+        g.fillRect (0, y, theme::headerWidth, theme::keyLaneHeight);
+        g.setColour (theme::textDim);
+        g.setFont (theme::font (11.5f));
+        g.drawText ("Key", 10, y, theme::headerWidth - 20, theme::keyLaneHeight, Justification::centredLeft);
+        g.setColour (theme::border);
+        g.drawHorizontalLine (y + theme::keyLaneHeight - 1, 0.0f, (float) theme::headerWidth);
+    }
+}
+
+void ArrangementView::setKeyLaneShown (bool shown)
+{
+    if (shown == keyLaneShown)
+        return;
+    keyLaneShown = shown;
+    ctx.settings.setValue ("keyLane", shown);
+    keyLane->setVisible (shown);
+    resized();
+    repaint();
 }
 
 void ArrangementView::resized()
@@ -1877,6 +2079,13 @@ void ArrangementView::resized()
     top.removeFromLeft (theme::headerWidth);
     top.removeFromRight (vbar.getWidth() > 0 ? 10 : 0);
     ruler->setBounds (top);
+    if (keyLaneShown)
+    {
+        auto strip = r.removeFromTop (theme::keyLaneHeight);
+        strip.removeFromLeft (theme::headerWidth);
+        strip.removeFromRight (vbar.getWidth() > 0 ? 10 : 0);
+        keyLane->setBounds (strip);
+    }
 
     auto bottom = r.removeFromBottom (10);
     hbar.setBounds (bottom.withTrimmedLeft (theme::headerWidth).withTrimmedRight (10));

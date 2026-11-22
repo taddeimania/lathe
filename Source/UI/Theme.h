@@ -47,6 +47,15 @@ namespace theme
     inline const Colour meterMid    { 0xffd8c34a };
     inline const Colour meterHigh   { 0xffdb4b40 };
 
+    /** A key's colour, by its root: the hues go round the circle of fifths, so closely related
+        keys (C and G, A minor and E minor) get neighbouring colours. */
+    inline Colour keyColour (int root)
+    {
+        const int fifths = (((root % 12) + 12) % 12 * 7) % 12;
+        return Colour::fromHSV ((float) fifths / 12.0f, 0.55f, 0.85f, 1.0f);
+    }
+
+    constexpr int keyLaneHeight = 20;
     constexpr int transportHeight = 40;
     constexpr int statusHeight = 22;
     constexpr int rulerHeight = 26;

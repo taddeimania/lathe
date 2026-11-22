@@ -35,6 +35,8 @@ Each track has a header on the left and a lane of clips on the right. In the hea
 
 Clips are the coloured blocks in the lanes: audio clips show their waveform, MIDI clips their notes. Click empty lane space to put the **start marker** there (where Play starts and Paste goes). **+ Audio** and **+ MIDI** under the tracks add a track. [Arranging](arranging.md) has the rest.
 
+The **Key** strip under the bar numbers shows the song's key, bar by bar. Click it to set the key; **View > Play Along** then shows those notes on your instrument. See [Play Along](play-along.md).
+
 Speech bubbles on a lane are comments about that moment in the song. Click one to open the conversation.
 
 ## The device panel

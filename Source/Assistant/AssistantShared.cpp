@@ -283,7 +283,7 @@ var toolDefinitions()
 {
     Array<var> tools;
     tools.add (tool ("describe_session", "Describe the session",
-                     "Overview of the project open in Lathe: tempo, time signature, transport (playing, recording, "
+                     "Overview of the project open in Lathe: tempo, time signature, key changes (the key lane), transport (playing, recording, "
                      "position), every track with its kind, input, output, monitoring, arm/mute/solo, volume and pan, "
                      "plug-ins in signal order (and which ones generate notes), number of clips, the returns and "
                      "the master. Also lists likely reasons a track can't be heard. Start here.",
@@ -419,7 +419,7 @@ var toolDefinitions()
                                   { "enum", Array<var> { "add_track", "remove_track", "rename_track", "move_track",
                                                          "add_plugin", "remove_plugin", "move_plugin", "set_plugin_on",
                                                          "set_input", "set_output", "set_send", "set_mixer", "set_eq", "set_track",
-                                                         "set_tempo", "set_time_signature" } },
+                                                         "set_tempo", "set_time_signature", "set_keys" } },
                                   { "description", "What to change" } }) },
             { "track", prop ("string", "The track it applies to: name or id. Tracks added earlier in the same call can be named") },
             { "kind", prop ("string", "add_track: \"audio\", \"midi\" or \"return\"") },
@@ -455,7 +455,16 @@ var toolDefinitions()
             { "midi_channel", prop ("integer", "set_track (MIDI tracks): 1-16") },
             { "bpm", prop ("number", "set_tempo") },
             { "numerator", prop ("integer", "set_time_signature") },
-            { "denominator", prop ("integer", "set_time_signature: 2, 4, 8 or 16") } },
+            { "denominator", prop ("integer", "set_time_signature: 2, 4, 8 or 16") },
+            { "keys", object ({ { "type", "array" },
+                                { "items", schema ({ { "bar", prop ("number", "Where this key starts (1-based; 17.5 is halfway through bar 17)") },
+                                                     { "key", prop ("string", "Root and scale: \"A minor pentatonic\", \"C major\", \"F# blues\", "
+                                                                              "\"D dorian\", \"G mixolydian\", \"E harmonic minor\", \"Bb major pentatonic\". "
+                                                                              "\"Am\" is A minor, \"A\" alone A major") } },
+                                                   { "bar", "key" }) },
+                                { "description", "set_keys: the key changes, each lasting until the next" } }) },
+            { "from_bar", prop ("number", "set_keys: only replace the key changes from this bar on (default: the whole lane)") },
+            { "to_bar", prop ("number", "set_keys: ...up to this bar; the key that was playing there carries on from it") } },
             { "action" });
 
         tools.add (tool ("edit_session", "Change the session",
@@ -481,6 +490,13 @@ var toolDefinitions()
                          "{\"action\":\"set_eq\",\"track\":\"Master\",\"before\":\"Mastering\"}. On the master, put the EQ "
                          "before Mastering (or any limiter) for tonal moves on the whole mix: after it, a boost can push the "
                          "output past the limiter's ceiling. On a MIDI track it can't go before the instrument.\n"
+                         "The key lane says what key the song is in, bar by bar; Lathe's Play Along window shows the person "
+                         "where those notes are on guitar, bass, ukulele and keyboard so they can jam along. set_keys replaces "
+                         "the lane (or a range of it): {\"action\":\"set_keys\",\"keys\":[{\"bar\":1,\"key\":\"A minor pentatonic\"},"
+                         "{\"bar\":17,\"key\":\"C major\"}]}. An empty list clears it. Work the keys out from the notes "
+                         "(get_notes; convert_to_midi for audio) and pick the scale a player would improvise with: minor "
+                         "pentatonic or blues over a minor blues-rock riff, the full major or minor scale when the melody "
+                         "uses all seven notes.\n"
                          "Volume, pan, send levels and the EQ are part of the undo step; mute, solo, monitoring and arm change "
                          "live and aren't.",
                          schema ({ { "changes", object ({ { "type", "array" }, { "items", change },

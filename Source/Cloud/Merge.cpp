@@ -342,7 +342,7 @@ private:
             else if (side == Side::conflict)
             {
                 const auto mine = copyOf (yours[k]);
-                conflict (key == "timeSignature" ? String ("Time signature") : key == "tempo" ? String ("Tempo") : key,
+                conflict (key == "timeSignature" ? String ("Time signature") : key == "tempo" ? String ("Tempo") : key == "keys" ? String ("Key changes") : key,
                           songWords (base, yours, key), songWords (base, theirs, key),
                           [k, mine] (var& p) { setOrRemove (p.getDynamicObject(), k, mine); });
             }
