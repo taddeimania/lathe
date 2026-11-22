@@ -469,7 +469,8 @@ var toolDefinitions()
             { "action" });
 
         tools.add (tool ("edit_session", "Change the session",
-                         "Builds or changes the project: tracks, returns, plug-ins, routing, sends, mixer, channel EQ, tempo. Give every "
+                         "Builds or changes the project: adds, removes, renames and moves tracks and returns, and sets plug-ins, "
+                         "routing, sends, mixer, channel EQ, tempo and keys. Give every "
                          "change for one request in a single call, in order: they all land as ONE undo step in Lathe, or, if one "
                          "can't be made, none of them do (the reply says which and why). Plug-in placement is automatic unless "
                          "position is given: a note generator goes before the instrument it drives, an instrument before the "
@@ -564,7 +565,8 @@ var toolDefinitions()
                      "same band at the same time, within 6 dB of each other, and for how much of the time. Plus notes on "
                      "anything measurably off (clipping, true peak above -1 dBTP, a wide or out-of-phase low end). The loop if "
                      "it's on, else the whole song, unless bars are given. Use it after changing a mix to check the change. "
-                     "To act on masking, cut one of the pair where they collide with edit_session's set_eq.",
+                     "To act on masking, cut one of the pair where they collide with edit_session's set_eq. "
+                     "To compare the mix with an earlier version of itself or a reference track, use compare_mix.",
                      schema ({ { "from_bar", prop ("number", "First bar (1-based)") },
                                { "to_bar", prop ("number", "Where it ends (the bar it stops at)") },
                                { "section_bars", prop ("integer", "Bars per entry in sections (default 4)") } }),
@@ -633,8 +635,8 @@ var toolDefinitions()
                      false));
 
     tools.add (tool ("stop", "Stop",
-                     "Stops playback, like pressing Stop. If Lathe is recording, this finishes the recording and "
-                     "keeps the take, exactly as the Stop button does.",
+                     "Stops playback, like pressing Stop. If the person is recording, this finishes the recording and "
+                     "keeps the take, exactly as the Stop button does. Only the person can start a recording; no tool does.",
                      schema ({}), false));
     return tools;
 }
