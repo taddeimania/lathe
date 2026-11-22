@@ -3,6 +3,14 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.13.14
+
+- **Fixed a crash at start-up on Macs using one device for input and another for output** (say, the built-in
+  microphone and headphones), when either one changed as Lathe opened it, like after waking from sleep. The fix
+  was made in 0.10.2 but never made it into a download, up to and including 0.13.13: the release builds left out Lathe's changes to JUCE,
+  the library Lathe is built on. They're in now, and a build without them stops instead of shipping. The same
+  slip kept the keyboard shortcuts out of the Mac menu bar; they're back too.
+
 ## New in 0.13.13
 
 - **Opening a song shows its plug-ins loading.** A song with big instruments used to freeze Lathe for as long
