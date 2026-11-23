@@ -1,6 +1,6 @@
 # Lathe
 
-[![TDQS](https://tdqs.dev/reports/pij4jfw0uj/badge.svg)](https://tdqs.dev/reports/pij4jfw0uj)
+[![TDQS](https://tdqs.dev/reports/pij4jfw0uj/badge.svg)](https://tdqs.dev/reports/pij4jfw0uj) [![Lathe MCP server on Glama](https://glama.ai/mcp/servers/taddeimania/lathe/badges/score.svg)](https://glama.ai/mcp/servers/taddeimania/lathe)
 
 A small, dependable DAW. It opens, finds your interface, loads a template, and records. It hosts VST3 plug-ins, has a mixer with returns and sends, routes audio and MIDI to and from your interface, and exports a mix and stems. It doesn't try to do everything else.
 
