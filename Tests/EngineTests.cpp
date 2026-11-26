@@ -22,6 +22,7 @@
 #include "Assistant/Notation.h"
 #include "Model/MidiImport.h"
 #include "Model/Chords.h"
+#include "Model/NoteEdit.h"
 #include "Model/MidiExport.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
@@ -6912,6 +6913,139 @@ int main (int argc, char** argv)
         check (midMixer.sends && midMixer.faderHeight() >= sl::faderComfortable && ! midMixer.scrolls (420),
                "a mid-height mixer drops sections to keep a comfortable fader, without scrolling");
         check (sl::sendRowsFor (0) == 0 && sl::sendRowsFor (3) == 1 && sl::sendRowsFor (4) == 2, "send knobs wrap three to a row");
+    }
+
+    std::cout << "\nThe piano roll's note editing" << std::endl;
+    {
+        namespace ne = noteedit;
+        auto near = [] (double a, double b) { return std::abs (a - b) < 1.0e-6; };
+        // A bar of C, E, G eighths and a held low C under them.
+        auto phrase = []
+        {
+            return ne::Notes { { 60, 0.0, 0.5, 0.9f }, { 64, 0.5, 0.5, 0.5f }, { 67, 1.0, 0.5, 0.7f }, { 48, 0.0, 2.0, 0.6f } };
+        };
+
+        // Copy, paste and duplicate.
+        {
+            auto n = phrase();
+            const auto clip = ne::copy (n, { 1, 2 });
+            check (clip.size() == 2 && near (clip[0].start, 0.0) && near (clip[1].start, 0.5) && clip[0].pitch == 64,
+                   "copy keeps the notes' spacing from the first one");
+            const auto added = ne::paste (n, clip, 3.0, 4.0);
+            check (n.size() == 6 && added == ne::Selection { 4, 5 } && near (n[4].start, 3.0) && near (n[5].start, 3.5),
+                   "paste puts the notes at the marker and selects them");
+            const auto cut = ne::paste (n, clip, 3.75, 4.0);
+            check (cut.size() == 1 && n.size() == 7, "paste leaves out notes past the clip's end");
+
+            auto d = phrase();
+            const auto dup = ne::duplicate (d, { 0, 1 }, 0.25, 8.0);
+            check (d.size() == 6 && dup == ne::Selection { 4, 5 } && near (d[4].start, 1.0) && near (d[5].start, 1.5) && d[5].pitch == 64,
+                   "duplicate copies the selection to just after itself");
+            auto d2 = phrase();
+            ne::duplicate (d2, { 0, 1, 2 }, 1.0, 8.0);
+            check (near (d2.back().start, 3.0), "duplicate rounds the selection's span up to whole grid steps");
+            auto d3 = phrase();
+            check (ne::duplicate (d3, { 3 }, 0.25, 2.0).empty() && d3.size() == 4, "a copy past the clip's end is left out");
+        }
+
+        // Nudging, lengthening, the left edge, transposing.
+        {
+            auto n = phrase();
+            ne::nudge (n, { 1, 2 }, 0.25);
+            check (near (n[1].start, 0.75) && near (n[2].start, 1.25) && near (n[0].start, 0.0), "nudge moves only the selection");
+            ne::nudge (n, { 1, 2 }, -2.0);
+            check (near (n[1].start, 0.0) && near (n[2].start, 0.5), "nudging back stops at the clip's start, keeping the spacing");
+            ne::lengthen (n, { 0 }, -1.0, 0.125);
+            check (near (n[0].length, 0.125), "shortening stops at the shortest length");
+            auto edge = n[3];
+            ne::moveStart (edge, 1.0, 0.125);
+            check (near (edge.start, 1.0) && near (edge.start + edge.length, 2.0), "dragging the left edge keeps the end");
+            ne::moveStart (edge, 5.0, 0.125);
+            check (near (edge.length, 0.125), "the left edge can't pass the end");
+            ne::transpose (n, { 0, 3 }, 70);
+            check (n[0].pitch == 127 && n[3].pitch == 118, "transposing keeps pitches in range");
+        }
+
+        // Velocity: relative drags and ramps.
+        {
+            auto n = phrase();
+            const auto before = n;
+            ne::offsetVelocity (n, before, { 0, 1, 2 }, -0.2f);
+            check (std::abs (n[0].velocity - 0.7f) < 1.0e-4f && std::abs (n[1].velocity - 0.3f) < 1.0e-4f && n[0].velocity > n[2].velocity,
+                   "a velocity drag moves the notes together, keeping louder ones louder");
+            ne::offsetVelocity (n, before, { 0, 1 }, 0.5f);
+            check (exactlyEqual (n[0].velocity, 1.0f) && std::abs (n[1].velocity - 1.0f) < 1.0e-4f, "velocity tops out at full");
+
+            auto r = phrase();
+            const int changed = ne::velocityLine (r, { 0, 1, 2, 3 }, 0.0, 0.2f, 1.0, 1.0f);
+            check (changed == 4 && std::abs (r[0].velocity - 0.2f) < 1.0e-4f && std::abs (r[1].velocity - 0.6f) < 1.0e-4f
+                       && std::abs (r[2].velocity - 1.0f) < 1.0e-4f,
+                   "a line across the velocity lane ramps the notes under it");
+            auto r2 = phrase();
+            check (ne::velocityLine (r2, { 0, 1, 2 }, 0.4, 0.1f, 0.6, 0.1f) == 1 && exactlyEqual (r2[0].velocity, 0.9f),
+                   "a ramp changes only the notes it crosses");
+        }
+
+        // Legato, split, glue, reverse, invert.
+        {
+            ne::Notes n { { 60, 0.0, 0.25, 0.8f }, { 64, 0.0, 0.25, 0.8f }, { 62, 1.0, 0.25, 0.8f }, { 65, 2.5, 0.25, 0.8f } };
+            ne::legato (n, { 0, 1, 2, 3 });
+            check (near (n[0].length, 1.0) && near (n[1].length, 1.0) && near (n[2].length, 1.5) && near (n[3].length, 0.25),
+                   "legato runs each note (a chord's together) on to the next, leaving the last");
+
+            ne::Notes s { { 60, 0.1, 0.9, 0.7f } };
+            const auto pieces = ne::splitAtGrid (s, { 0 }, 0.25);
+            check (s.size() == 4 && pieces.size() == 4 && near (s[0].length, 0.15) && near (s[1].start, 0.25) && near (s[3].start, 0.75)
+                       && near (s[3].start + s[3].length, 1.0),
+                   "split cuts a note at each grid line inside it");
+            const auto glued = ne::glue (s, pieces);
+            check (s.size() == 1 && glued == ne::Selection { 0 } && near (s[0].start, 0.1) && near (s[0].length, 0.9),
+                   "glue joins a pitch's notes back into one");
+
+            auto g = phrase();
+            g.push_back ({ 64, 3.0, 0.5, 0.4f });
+            const auto kept = ne::glue (g, { 0, 1, 4 });
+            check (g.size() == 4 && kept == ne::Selection { 0, 1 } && g[1].pitch == 64 && near (g[1].start, 0.5) && near (g[1].length, 3.0)
+                       && std::abs (g[1].velocity - 0.5f) < 1.0e-4f,
+                   "glue joins only notes of the same pitch, keeping the first one's velocity");
+
+            auto rv = phrase();
+            ne::reverse (rv, { 0, 1, 2 });
+            check (near (rv[0].start, 1.0) && near (rv[1].start, 0.5) && near (rv[2].start, 0.0) && near (rv[3].start, 0.0),
+                   "reverse plays the selection backwards in the same span");
+            auto iv = phrase();
+            ne::invert (iv, { 0, 1, 2 });
+            check (iv[0].pitch == 67 && iv[1].pitch == 63 && iv[2].pitch == 60 && iv[3].pitch == 48,
+                   "invert swaps the lowest and highest pitches");
+        }
+
+        // Quantize: strength, swing, ends, everything when nothing is selected.
+        {
+            ne::Notes n { { 60, 0.3, 0.4, 0.8f }, { 62, 1.1, 0.3, 0.8f } };
+            auto full = n;
+            ne::quantize (full, {}, { 0.25, 1.0f, 0.0f, true });
+            check (near (full[0].start, 0.25) && near (full[0].length, 0.5) && near (full[1].start, 1.0) && near (full[1].length, 0.5),
+                   "quantize moves every note's start and end to the grid when none are selected");
+            auto half = n;
+            ne::quantize (half, { 0 }, { 0.25, 0.5f, 0.0f, true });
+            check (near (half[0].start, 0.275) && near (half[1].start, 1.1), "half strength goes half way, and only the selection");
+            auto starts = n;
+            ne::quantize (starts, {}, { 0.25, 1.0f, 0.0f, false });
+            check (near (starts[0].start, 0.25) && near (starts[0].length, 0.4), "quantizing starts only keeps the lengths");
+
+            const ne::QuantizeOptions swung { 0.5, 1.0f, 1.0f, true };
+            check (near (ne::quantizeTarget (0.6, swung), 0.5 + 0.5 / 3.0) && near (ne::quantizeTarget (0.95, swung), 1.0)
+                       && near (ne::quantizeTarget (1.7, swung), 1.5 + 0.5 / 3.0),
+                   "full swing puts the off-beat eighths on the triplet");
+            check (near (ne::quantizeTarget (0.6, { 0.5, 1.0f, 0.5f, true }), 0.5 + 0.5 / 6.0), "half swing goes half as late");
+        }
+
+        auto n = phrase();
+        n.push_back ({ 60, 3.0, 0.5, 0.5f });
+        check (ne::notesOfPitch (n, 60) == ne::Selection { 0, 4 }, "clicking a key selects every note of its pitch");
+        auto r = phrase();
+        ne::remove (r, { 0, 2 });
+        check (r.size() == 2 && r[0].pitch == 64 && r[1].pitch == 48, "delete removes the selected notes");
     }
 
     engine.setEdit (nullptr);

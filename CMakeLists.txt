@@ -176,6 +176,7 @@ target_sources(Lathe PRIVATE
     Source/Model/Edit.cpp
     Source/Model/Keys.cpp
     Source/Model/Chords.cpp
+    Source/Model/NoteEdit.cpp
     Source/Model/MidiImport.cpp
     Source/Model/MidiExport.cpp
     Source/Model/AudioToMidi.cpp
@@ -403,6 +404,7 @@ if(LATHE_BUILD_TESTS)
         Source/Model/Edit.cpp
         Source/Model/Keys.cpp
         Source/Model/Chords.cpp
+        Source/Model/NoteEdit.cpp
         Source/Model/MidiImport.cpp
         Source/Model/MidiExport.cpp
         Source/Model/AudioToMidi.cpp

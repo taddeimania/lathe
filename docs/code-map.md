@@ -5,6 +5,7 @@ Source/
   Model/Edit.*          project model, clip split/trim/clear, undo (with step labels and who), JSON, monitor (cue) mixes
   Model/Keys.*          the key lane: scales, key names (read and spelled), the key at a beat; where notes sit on a guitar, bass, ukulele and keyboard
   Model/Chords.*        a key's chords by degree (numerals, 7ths, sus, power; letter spelling) and their voicings on guitar, bass, ukulele and keyboard
+  Model/NoteEdit.*      the piano roll's note edits without the UI: copy/paste, duplicate, nudge, velocity ramps, legato, split, glue, reverse, invert, quantize with strength and swing
   Model/ChannelEq.*     the built-in channel EQ: settings, biquads, response curve
   Model/MidiImport.*    reads .mid files into parts and places them as MIDI clips (drag and drop, import_midi)
   Model/MidiExport.*    writes MIDI clips as a .mid file (File menu, clip menu, dragging out, export_midi)

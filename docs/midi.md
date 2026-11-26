@@ -16,25 +16,78 @@ Double-click a MIDI clip (or right-click it > **Edit notes...**) to open it. **E
 
 ![The piano roll on the lead line, with the keyboard on the left, the notes in the middle and the velocity lane underneath.](https://getlathe.app/img/daw/daw-pianoroll.jpg)
 
-### Writing and editing notes
+### Writing notes
 
 | | |
 |---|---|
-| Double-click | Add a note, or delete the one you clicked |
-| Drag a note | Move it |
-| Drag a note's end | Make it longer or shorter |
-| Drag on empty space | Select the notes in the box |
-| Cmd/Ctrl+A | Select every note in the clip |
-| ↑ ↓ | Move the selected notes up or down a semitone. With Shift, an octave. |
-| Q | Quantize: snap the selected notes (or all of them) to the grid |
-| Delete | Delete the selected notes |
-| Alt while dragging | Ignore the grid |
+| Double-click empty space | Add a note. Keep the button down and drag to set how long it is. |
+| **Draw** (B) | Click or drag on empty space to add notes, without double-clicking |
+| Double-click a note | Delete it |
 
-The **grid** in the toolbar sets the step for drawing, moving and quantizing: 1/4, 1/8, 1/16, 1/32, or 1/8 and 1/16 triplets.
+A new note is as long as the last one you drew or resized (one grid step at first).
+
+### Selecting
+
+| | |
+|---|---|
+| Click a note | Select it. Shift-click adds or removes one. |
+| Drag on empty space | Select the notes in the box (with Shift, add them) |
+| Click a key on the keyboard | Hear it and select every note of that pitch (with Shift, add them) |
+| Cmd/Ctrl+A | Select every note in the clip |
+
+Selected notes are lit with a light outline, and the rest dim a little.
+
+### Editing notes
+
+| | |
+|---|---|
+| Drag a note | Move it (and the rest of the selection) |
+| Alt-drag a note | Copy it: the copies move and the notes stay |
+| Drag a note's left or right end | Make it start earlier or later, or end earlier or later |
+| ↑ ↓ | Move the selected notes up or down a semitone. With Shift, an octave. |
+| ← → | Move them earlier or later by a grid step. With Alt, by a 1/128 note. |
+| Shift+← → | Make them shorter or longer by a grid step |
+| Cmd/Ctrl+C, X, V | Copy, cut and paste notes |
+| Cmd/Ctrl+D | Duplicate the selected notes just after themselves |
+| Cmd/Ctrl+E | Split the selected notes at every grid line |
+| Cmd/Ctrl+J | Glue: join the selected notes of each pitch into one |
+| Q | Quantize the selected notes (or all of them) |
+| Delete | Delete the selected notes |
+| Cmd/Ctrl while dragging | Ignore the grid |
+
+Paste puts the notes at the start marker when it's inside the clip, and moves the marker on past them so pasting again adds the next copy. While the piano roll has the keys, the **Edit** menu's commands (Cut, Copy, Paste, Duplicate, Split, Glue, Delete, Select All) act on notes rather than clips.
+
+Right-click a note or empty space for the same commands, and for **Legato** (each note runs on to the next), **Reverse** (play the selection backwards), **Invert** (turn it upside down, the lowest note swapping with the highest) and **Select All** of one pitch. Every edit is one undo step.
+
+### The grid and quantize
+
+The **grid** in the toolbar sets the step for drawing, moving, nudging and quantizing: a bar, 1/2 to 1/64, 1/8 and 1/16 triplets, **Adaptive** (finer as you zoom in), or **Off**. Lathe remembers it.
+
+**Quantize** (or Q) moves notes to the grid. The **...** button beside it sets how:
+
+- **Strength:** how far the notes move towards the grid, from 25% (a little tighter, still human) to 100%.
+- **Swing:** pushes every other grid step later. At 100%, straight eighths (on a 1/8 grid) play as a triplet's long-short.
+- **Move note ends too:** on, the ends snap to the grid as well; off, the notes keep their lengths.
+
+### Finding your way
+
+The ruler above the notes counts the song's bars. Click it to move the start marker there (and the playhead); drag the clip's end in the ruler to make the clip longer or shorter, up to the next clip on the track.
+
+| | |
+|---|---|
+| Cmd/Ctrl+scroll, or pinch | Zoom in and out in time |
+| Alt+scroll | Taller or shorter rows |
+| Z | Zoom to fit the selected notes (or all of them) |
+| Shift+scroll | Scroll sideways |
+
+The line at the top of the piano roll shows the note under the mouse, or the one you're dragging: its pitch, where it starts (bar.beat.sixteenth), its length and velocity. When the song has a key (or the track has its own), rows outside the key are darker and the root's rows are tinted, so you can see which notes fit.
 
 ### Velocity
 
-The lane under the notes shows how hard each note is played. Drag a bar up or down to change it. Louder notes are drawn brighter.
+The lane under the notes shows how hard each note is played. Louder notes are drawn brighter.
+
+- **Drag a note's stem** up or down to change it. With several notes selected, they all move by the same amount, so the louder ones stay louder.
+- **Drag across empty space in the lane** to draw a line: the notes under it (the selected ones, or all of them) ramp from where you started to where you let go. A crescendo in one stroke.
 
 ### Hearing notes
 

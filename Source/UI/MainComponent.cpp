@@ -1755,6 +1755,22 @@ PopupMenu MainComponent::getMenuForIndex (int index, const String&)
         item (menu::redo, "Redo", cmd + "Shift+Z", edit.canRedo() && ! engine.isRecording());
         item (menu::undoHistory, "Undo History...", cmd + "Alt+Z");
         m.addSeparator();
+        if (pianoRollShown && pianoRoll.editsNotes())
+        {
+            // The piano roll has the keys: the same commands act on its notes.
+            const bool anyNotes = pianoRoll.numSelectedNotes() > 0;
+            item (menu::cutClips, "Cut Notes", cmd + "X", anyNotes);
+            item (menu::copyClips, "Copy Notes", cmd + "C", anyNotes);
+            item (menu::pasteClips, "Paste Notes", cmd + "V", PianoRoll::canPasteNotes());
+            item (menu::duplicate, "Duplicate Notes", cmd + "D", anyNotes);
+            m.addSeparator();
+            item (menu::joinClips, "Glue Notes", cmd + "J", pianoRoll.numSelectedNotes() > 1);
+            item (menu::split, "Split Notes at Grid", cmd + "E", anyNotes);
+            item (menu::deleteClip, "Delete Notes", "Delete", anyNotes);
+            m.addSeparator();
+            item (menu::selectAllClips, "Select All Notes", cmd + "A", true);
+            return m;
+        }
         const int numClips = arrangement.numSelectedClips();
         const bool hasClip = numClips > 0;
         const String clips = numClips > 1 ? "Clips" : "Clip";
@@ -1833,6 +1849,8 @@ void MainComponent::menuItemSelected (int id, int)
         cloud->handleMenuItem (id);
         return;
     }
+    // While the piano roll has the keys, the Edit menu's commands act on its notes.
+    const bool onNotes = pianoRollShown && pianoRoll.editsNotes();
 
     if (id >= menu::recentBase)
     {
@@ -1930,14 +1948,14 @@ void MainComponent::menuItemSelected (int id, int)
                                      },
                                      [this] (const String& st) { setStatus (st); });
             break;
-        case menu::deleteClip:    arrangement.deleteSelectedClip(); break;
-        case menu::duplicate:     arrangement.duplicateSelectedClip(); break;
-        case menu::split:         arrangement.splitSelectedClip(); break;
-        case menu::cutClips:      arrangement.cutSelectedClips(); break;
-        case menu::copyClips:     arrangement.copySelectedClips(); break;
-        case menu::pasteClips:    arrangement.pasteClips(); break;
-        case menu::joinClips:     arrangement.joinSelectedClips(); break;
-        case menu::selectAllClips: arrangement.selectAllClips(); break;
+        case menu::deleteClip:    if (onNotes) pianoRoll.deleteNotes();    else arrangement.deleteSelectedClip(); break;
+        case menu::duplicate:     if (onNotes) pianoRoll.duplicateNotes(); else arrangement.duplicateSelectedClip(); break;
+        case menu::split:         if (onNotes) pianoRoll.splitNotes();     else arrangement.splitSelectedClip(); break;
+        case menu::cutClips:      if (onNotes) pianoRoll.cutNotes();       else arrangement.cutSelectedClips(); break;
+        case menu::copyClips:     if (onNotes) pianoRoll.copyNotes();      else arrangement.copySelectedClips(); break;
+        case menu::pasteClips:    if (onNotes) pianoRoll.pasteNotes();     else arrangement.pasteClips(); break;
+        case menu::joinClips:     if (onNotes) pianoRoll.glueNotes();      else arrangement.joinSelectedClips(); break;
+        case menu::selectAllClips: if (onNotes) pianoRoll.selectAllNotes(); else arrangement.selectAllClips(); break;
 
         case menu::addAudio:      ctx.selectTrack (edit.addTrack (TrackKind::audio)->id); break;
         case menu::addMidi:       ctx.selectTrack (edit.addTrack (TrackKind::midi)->id); break;
