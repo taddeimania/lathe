@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.15.1
+
+- **Play Along's chords on every instrument.** The chord sheet now shows ways to play each chord on the
+  instrument you've picked: ukulele shapes on all four strings, bass shapes with the root lowest, and keyboard
+  voicings in each inversion (and spread), drawn as keys. The one you pick is outlined on that instrument.
+
 ## New in 0.15.0
 
 - **A chord sheet in Play Along.** Turn on **Chords** to see the chords of the key at the playhead, step by
