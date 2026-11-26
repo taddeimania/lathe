@@ -3,6 +3,20 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.16.0
+
+- **A much better piano roll.** Draw a note and its length in one drag (double-click and drag, or turn on
+  **Draw** with B), and new notes take the last length you used. Copy, cut, paste and duplicate notes
+  (Cmd/Ctrl+C, X, V, D), Alt-drag to copy, nudge with ← → and change lengths with Shift+← →, resize from
+  either end, and right-click for Legato, Split at Grid, Glue, Reverse and Invert. Every edit is one undo step.
+- **Velocity that keeps the dynamics.** Dragging several notes' velocity moves them together, louder ones
+  staying louder, and a drag across the velocity lane draws a ramp.
+- **See where you are.** A ruler with the song's bars (click it to move the start marker, drag the clip's end
+  to resize it), note names on notes and keys, a readout of the note under the mouse, and rows outside the
+  song's key shaded. Z zooms to fit, Alt+scroll makes rows taller, and pinch zooms.
+- **More grid and quantize.** A bar to 1/64, Adaptive (follows the zoom) and Off; quantize strength, swing,
+  and starts only. Click a key to select every note of that pitch.
+
 ## New in 0.15.1
 
 - **Play Along's chords on every instrument.** The chord sheet now shows ways to play each chord on the
