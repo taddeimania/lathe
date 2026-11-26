@@ -1,11 +1,11 @@
 #include "Mixer.h"
 #include "EqEditor.h"
+#include "StripLayout.h"
 
 namespace lathe
 {
 namespace
 {
-constexpr int kInsertRows = 4;
 
 /** One insert in a strip: click opens, right-click for bypass / move / remove. */
 class InsertSlot : public Component, public SettableTooltipClient
@@ -189,9 +189,8 @@ public:
         pan.setEnabled (! viaReturn);
         solo.setEnabled (cue == nullptr);
         pan.setVisible (! cueMaster);
-        // The master's inserts and EQ only shape the main mix, so they step aside in a cue mix.
-        addInsert.setVisible (! cueMaster);
-        eqThumb.setVisible (! cueMaster);
+        // The master's inserts and EQ only shape the main mix, so they step aside in a cue mix
+        // (resized() hides them).
         if (track->isMaster())
             mute.setVisible (cueMaster);
         if (cue != nullptr) fader.setColour (Slider::thumbColourId, cue->colour.withMultipliedBrightness (0.8f));
@@ -336,10 +335,13 @@ public:
         {
             g.setColour (group->colour.withAlpha (0.55f));
             g.fillRect (0, 4, getWidth(), 3);
-            g.setColour (group->mute.load() ? theme::mute : group->solo.load() ? theme::solo : theme::textDim);
-            g.setFont (theme::font (10.0f));
-            g.drawText (group->name + (group->mute.load() ? " (muted)" : group->solo.load() ? " (solo)" : ""),
-                        getLocalBounds().withTrimmedTop (8).withHeight (12).reduced (5, 0), Justification::centredRight, true);
+            if (! plan.compact)   // compact strips have no row for the group's name; the colour stays
+            {
+                g.setColour (group->mute.load() ? theme::mute : group->solo.load() ? theme::solo : theme::textDim);
+                g.setFont (theme::font (10.0f));
+                g.drawText (group->name + (group->mute.load() ? " (muted)" : group->solo.load() ? " (solo)" : ""),
+                            getLocalBounds().withTrimmedTop (8).withHeight (12).reduced (5, 0), Justification::centredRight, true);
+            }
         }
         if (cue != nullptr)
         {
@@ -379,85 +381,112 @@ public:
         }
     }
 
+    /** Which sections show; the mixer picks one plan for every strip so their rows line up. */
+    void setPlan (const striplayout::Plan& p)
+    {
+        plan = p;
+        resized();
+    }
+
     void resized() override
     {
+        namespace sl = striplayout;
         sectionLabels.clear();
-        auto r = getLocalBounds().reduced (5, 0).withTrimmedTop (6).withTrimmedBottom (6);
+        auto r = getLocalBounds().reduced (5, 0).withTrimmedTop (sl::pad).withTrimmedBottom (sl::pad);
 
-        r.removeFromTop (10);   // room for a group tag; kept on every strip so rows line up
+        if (! plan.compact)
+            r.removeFromTop (10);   // room for a group tag; kept on every strip so rows line up
         name.setBounds (r.removeFromTop (20));
-        r.removeFromTop (4);
-
-        auto rowFor = [&] (Component& c, const String& label)
-        {
-            if (label.isNotEmpty())
-                sectionLabels.push_back ({ label, r.removeFromTop (13) });
-            c.setBounds (r.removeFromTop (20));
-            r.removeFromTop (3);
-        };
-
-        // Fixed-height sections so strips line up side by side.
-        const int ioHeight = 3 * (13 + 23) + 23;
-        auto io = r.removeFromTop (ioHeight);
-        std::swap (r, io);
-        if (track->holdsClips())
-            rowFor (input, "In");
-        else
-            r.removeFromTop (13 + 23);
-        if (track->isMidi())
-            rowFor (midiOut, "MIDI to");
-        else
-            r.removeFromTop (13 + 23);
-        rowFor (output, "Out");
-        if (track->holdsClips())
-        {
-            auto m = r.removeFromTop (20);
-            const int w = m.getWidth() / 3;
-            monAuto.setBounds (m.removeFromLeft (w));
-            monIn.setBounds (m.removeFromLeft (w));
-            monOff.setBounds (m);
-        }
-        std::swap (r, io);
+        r.removeFromTop (plan.compact ? 2 : 4);
 
         const bool cueMaster = cue != nullptr && track->isMaster();
-        r.removeFromTop (6);
-        if (cueMaster) r.removeFromTop (13);
-        else           sectionLabels.push_back ({ "Inserts", r.removeFromTop (13) });
-        auto insertArea = r.removeFromTop (kInsertRows * 19 + 20);
-        for (int i = 0; i < inserts.size(); ++i)
-        {
-            inserts[i]->setVisible (i < kInsertRows && ! cueMaster);
-            if (i < kInsertRows)
-                inserts[i]->setBounds (insertArea.removeFromTop (18).withTrimmedBottom (0));
-            if (i < kInsertRows)
-                insertArea.removeFromTop (1);
-        }
-        addInsert.setBounds (insertArea.removeFromTop (18));
 
-        r.removeFromTop (4);
-        if (cueMaster) r.removeFromTop (13);
-        else           sectionLabels.push_back ({ "EQ", r.removeFromTop (13) });
-        eqThumb.setBounds (r.removeFromTop (26));
-
-        const int numBuses = track->holdsClips() ? (int) ctx.edit.buses.size() : 0;
-        const int sendRows = (numBuses + 2) / 3;
-        if (numBuses > 0)
+        // Routing: a fixed-height block, so strips line up side by side.
+        for (auto* c : std::initializer_list<Component*> { &input, &midiOut, &output, &monAuto, &monIn, &monOff })
+            c->setVisible (false);
+        if (plan.io)
         {
-            r.removeFromTop (4);
-            sectionLabels.push_back ({ "Sends", r.removeFromTop (13) });
-            auto sendArea = r.removeFromTop (sendRows * 42);
-            for (int i = 0; i < sends.size(); ++i)
+            auto io = r.removeFromTop (sl::ioHeight);
+            auto rowFor = [&] (Component& c, const String& label, bool shown)
             {
-                const int row = i / 3, col = i % 3;
-                const int w = sendArea.getWidth() / 3;
-                auto cell = Rectangle<int> (sendArea.getX() + col * w, sendArea.getY() + row * 42, w, 42);
-                sendLabels[i]->setBounds (cell.removeFromBottom (12));
-                sends[i]->setBounds (cell.withSizeKeepingCentre (30, 30));
+                auto label_ = io.removeFromTop (sl::labelH);
+                auto row = io.removeFromTop (20);
+                io.removeFromTop (3);
+                if (! shown)
+                    return;
+                sectionLabels.push_back ({ label, label_ });
+                c.setBounds (row);
+                c.setVisible (true);
+            };
+            rowFor (input, "In", track->holdsClips());
+            rowFor (midiOut, "MIDI to", track->isMidi());
+            rowFor (output, "Out", true);
+            if (track->holdsClips())
+            {
+                auto m = io.removeFromTop (20);
+                const int w = m.getWidth() / 3;
+                monAuto.setBounds (m.removeFromLeft (w));
+                monIn.setBounds (m.removeFromLeft (w));
+                monOff.setBounds (m);
+                for (auto* b : { &monAuto, &monIn, &monOff })
+                    b->setVisible (true);
             }
         }
 
-        r.removeFromTop (4);
-        pan.setBounds (r.removeFromTop (34).withSizeKeepingCentre (34, 34));
+        for (auto* s : inserts)
+            s->setVisible (false);
+        addInsert.setVisible (plan.inserts && ! cueMaster);
+        if (plan.inserts)
+        {
+            auto area = r.removeFromTop (sl::insertsHeight).withTrimmedTop (6);
+            auto label = area.removeFromTop (sl::labelH);
+            if (! cueMaster)
+            {
+                sectionLabels.push_back ({ "Inserts", label });
+                for (int i = 0; i < inserts.size() && i < sl::insertRows; ++i)
+                {
+                    inserts[i]->setBounds (area.removeFromTop (18));
+                    inserts[i]->setVisible (true);
+                    area.removeFromTop (1);
+                }
+                addInsert.setBounds (area.removeFromTop (18));
+            }
+        }
+
+        eqThumb.setVisible (plan.eq && ! cueMaster);
+        if (plan.eq)
+        {
+            auto area = r.removeFromTop (sl::eqHeight).withTrimmedTop (4);
+            auto label = area.removeFromTop (sl::labelH);
+            if (! cueMaster)
+                sectionLabels.push_back ({ "EQ", label });
+            eqThumb.setBounds (area);
+        }
+
+        const bool showSends = plan.sends && ! sends.isEmpty();
+        for (auto* k : sends)      k->setVisible (showSends);
+        for (auto* l : sendLabels) l->setVisible (showSends);
+        if (showSends)
+        {
+            const int rows = sl::sendRowsFor (sends.size());
+            auto area = r.removeFromTop (sl::sendsHeight (rows)).withTrimmedTop (4);
+            sectionLabels.push_back ({ "Sends", area.removeFromTop (sl::labelH) });
+            const int w = area.getWidth() / sl::sendsPerRow;
+            const int knob = jmin (30, w - 2, sl::sendRowH - 12);
+            for (int i = 0; i < sends.size(); ++i)
+            {
+                const int row = i / sl::sendsPerRow, col = i % sl::sendsPerRow;
+                auto cell = Rectangle<int> (area.getX() + col * w, area.getY() + row * sl::sendRowH, w, sl::sendRowH);
+                sendLabels[i]->setBounds (cell.removeFromBottom (12));
+                sends[i]->setBounds (cell.withSizeKeepingCentre (knob, knob));
+            }
+        }
+
+        if (! plan.compact)
+        {
+            r.removeFromTop (4);
+            pan.setBounds (r.removeFromTop (34).withSizeKeepingCentre (34, 34));
+        }
 
         auto buttons = r.removeFromBottom (22);
         if (track->holdsClips())
@@ -479,14 +508,16 @@ public:
 
         r.removeFromBottom (3);
         dbLabel.setBounds (r.removeFromBottom (16));
-        auto faderArea = r.reduced (0, 4);
+        auto faderArea = r.reduced (0, sl::faderInset);
+        if (plan.compact)   // short mixer: the pan knob sits beside the fader
+            pan.setBounds (faderArea.removeFromLeft (sl::panBesideWidth).removeFromTop (sl::panBesideWidth));
         meter.setBounds (faderArea.removeFromRight (12).withTrimmedRight (4));
         fader.setBounds (faderArea);
     }
 
     void mouseDown (const MouseEvent& e) override
     {
-        if (eqThumb.getBounds().contains (e.getPosition()) && ! e.mods.isPopupMenu())
+        if (eqThumb.isVisible() && eqThumb.getBounds().contains (e.getPosition()) && ! e.mods.isPopupMenu())
         {
             ctx.selectTrack (track->id);
             if (ctx.showDevices)
@@ -548,6 +579,7 @@ private:
     TextButton arm, solo, mute;
     EqEditor eqThumb;
     std::vector<std::pair<String, Rectangle<int>>> sectionLabels;
+    striplayout::Plan plan;
     String routingKey, insertKey, sendsKey;
 };
 
@@ -795,9 +827,24 @@ private:
 MixerView::MixerView (AppContext& c) : ctx (c)
 {
     viewport.setViewedComponent (&content, false);
-    viewport.setScrollBarsShown (false, true);
+    // Vertical only when the mixer is too short for the strips' faders and buttons.
+    viewport.setScrollBarsShown (true, true);
     viewport.setScrollBarThickness (10);
     addAndMakeVisible (viewport);
+
+    // The master scrolls up and down with the other strips (the wheel works on either).
+    masterViewport.setScrollBarsShown (false, false, true, false);
+    addAndMakeVisible (masterViewport);
+    viewport.onScroll = [this]
+    {
+        if (masterViewport.getViewPositionY() != viewport.getViewPositionY())
+            masterViewport.setViewPosition (0, viewport.getViewPositionY());
+    };
+    masterViewport.onScroll = [this]
+    {
+        if (masterViewport.getViewPositionY() != viewport.getViewPositionY())
+            viewport.setViewPosition (viewport.getViewPositionX(), masterViewport.getViewPositionY());
+    };
 
     addReturnButton.setTooltip ("Add a return track for shared effects (reverb, delay)");
     addReturnButton.onClick = [this] { ctx.edit.addTrack (TrackKind::bus); };
@@ -835,8 +882,9 @@ void MixerView::refresh()
         strips.clear();
         for (auto& t : ctx.edit.tracks) content.addAndMakeVisible (strips.add (new ChannelStrip (ctx, t)));
         for (auto& t : ctx.edit.buses)  content.addAndMakeVisible (strips.add (new ChannelStrip (ctx, t)));
+        masterViewport.setViewedComponent (nullptr, false);
         masterStrip = std::make_unique<ChannelStrip> (ctx, ctx.edit.master);
-        addAndMakeVisible (*masterStrip);
+        masterViewport.setViewedComponent (masterStrip.get(), false);
         resized();
     }
 
@@ -866,25 +914,35 @@ void MixerView::resized()
     if (mixBar != nullptr)
         mixBar->setBounds (r.removeFromTop (30));
     r.removeFromTop (4);
+
+    // One plan for every strip, so their rows line up; it says which sections fit.
+    const int available = jmax (0, r.getHeight() - 10);   // 10: the horizontal scroll bar
+    const auto plan = striplayout::plan (available, (int) ctx.edit.buses.size());
+    const int h = plan.height;
+
     if (masterStrip != nullptr)
     {
-        auto m = r.removeFromRight (theme::stripWidth + 12);
-        masterStrip->setBounds (m.withTrimmedLeft (12).withTrimmedBottom (10));
+        auto m = r.removeFromRight (theme::stripWidth + 12).withTrimmedLeft (12).withTrimmedBottom (10);
+        masterViewport.setBounds (m);
+        masterStrip->setPlan (plan);
+        masterStrip->setBounds (0, 0, m.getWidth(), h);
     }
 
     viewport.setBounds (r);
-    const int h = r.getHeight() - 10;
     int x = 0;
     const int numTracks = (int) ctx.edit.tracks.size();
     for (int i = 0; i < strips.size(); ++i)
     {
         if (i == numTracks)
             x += 8;   // gap between tracks and returns
+        strips[i]->setPlan (plan);
         strips[i]->setBounds (x, 0, theme::stripWidth, h);
         x += theme::stripWidth;
     }
 
     addReturnButton.setBounds (x + 10, 10, 80, 24);
     content.setSize (jmax (r.getWidth(), x + 100), h);
+    if (viewport.onScroll)
+        viewport.onScroll();
 }
 } // namespace lathe

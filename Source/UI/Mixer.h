@@ -19,10 +19,17 @@ public:
     void paint (Graphics&) override;
 
 private:
+    /** A viewport that says when it scrolls, so the master strip can follow the others up and down. */
+    struct FollowingViewport : public Viewport
+    {
+        std::function<void()> onScroll;
+        void visibleAreaChanged (const Rectangle<int>&) override   { if (onScroll) onScroll(); }
+    };
+
     String structureSignature() const;
 
     AppContext& ctx;
-    Viewport viewport;
+    FollowingViewport viewport, masterViewport;
     Component content;
     OwnedArray<ChannelStrip> strips;
     std::unique_ptr<ChannelStrip> masterStrip;

@@ -28,6 +28,7 @@
 #include "UI/CloudLinks.h"
 #include "UI/UndoHistory.h"
 #include "UI/PlayAlong.h"
+#include "UI/StripLayout.h"
 #include "UI/GlobalKeys.h"
 #include "Model/StemFolder.h"
 #include "Model/AudioToMidi.h"
@@ -6650,6 +6651,56 @@ int main (int argc, char** argv)
         auto ret = e.addTrack (TrackKind::bus, "Verb");
         res = change (R"({"action":"set_keys","track":"Verb","keys":[{"bar":1,"key":"C"}]})");
         check ((bool) res["isError"] && ret->keys.empty(), "a return can't have keys of its own");
+    }
+
+    std::cout << "\nMixer strip layout" << std::endl;
+    {
+        namespace sl = striplayout;
+        // Tall: everything shows, and the fader gets the rest.
+        const auto tall = sl::plan (900, 2);
+        check (tall.io && tall.inserts && tall.eq && tall.sends && tall.sendRows == 1 && tall.height == 900
+               && tall.faderHeight() >= sl::faderComfortable, "a tall mixer shows every section");
+
+        // The order sections give way in as the mixer gets shorter.
+        bool ordered = true, keepsEssentials = true, noGaps = true, notTooSoon = true;
+        for (int returns : { 0, 1, 3, 4, 7 })
+            for (int h = 0; h <= 1200; ++h)
+            {
+                const auto p = sl::plan (h, returns);
+                const int dropped = ! p.inserts + ! p.eq + ! p.io + ! p.sends;
+                ordered = ordered && (p.eq || ! p.inserts) && (p.io || ! p.eq) && (p.sends || ! p.io);
+                // The fader, its readout and the buttons always fit; past the minimum, the mixer scrolls.
+                keepsEssentials = keepsEssentials && p.faderHeight() >= sl::faderMinimum && p.height >= h
+                                  && p.height == sl::essentials (p.faderHeight(), p.compact) + p.sectionsHeight();
+                // A strip only gets taller than the mixer once there's nothing left to give way.
+                noGaps = noGaps && (! p.scrolls (h) || (dropped == 4 && p.compact && p.faderHeight() == sl::faderMinimum));
+                ordered = ordered && (! p.compact || ! p.sends);
+                // A section goes only when it doesn't fit beside a comfortable fader.
+                if (dropped > 0)
+                {
+                    const int lastGone = p.compact ? 0 : ! p.sends ? sl::sendsHeight (p.sendRows) : ! p.io ? sl::ioHeight
+                                       : ! p.eq ? sl::eqHeight : sl::insertsHeight;
+                    notTooSoon = notTooSoon && sl::essentials (sl::faderComfortable) + p.sectionsHeight() + lastGone > h;
+                }
+            }
+        check (ordered, "inserts give way first, then the EQ, then the routing, then the sends, then the strip goes compact");
+        check (notTooSoon, "a section goes only when it doesn't fit beside a comfortable fader");
+        check (keepsEssentials, "the fader (at least its minimum), dB readout and buttons always fit");
+        check (noGaps, "the mixer scrolls only once every other section has gone and the fader is at its minimum");
+
+        // The reported case: the plug-in tray dragged to its tallest leaves the strips ~140-150 px.
+        for (int h : { 140, 150, 200 })
+        {
+            const auto shortMixer = sl::plan (h, 1);
+            check (! shortMixer.inserts && ! shortMixer.eq && ! shortMixer.io && ! shortMixer.scrolls (h)
+                   && shortMixer.faderHeight() >= sl::faderMinimum,
+                   "a " + String (h) + " px mixer keeps the fader, readout and buttons without scrolling: "
+                       + String (shortMixer.faderHeight()) + " px fader" + (shortMixer.compact ? ", pan beside it" : ""));
+        }
+        const auto midMixer = sl::plan (420, 1);
+        check (midMixer.sends && midMixer.faderHeight() >= sl::faderComfortable && ! midMixer.scrolls (420),
+               "a mid-height mixer drops sections to keep a comfortable fader, without scrolling");
+        check (sl::sendRowsFor (0) == 0 && sl::sendRowsFor (3) == 1 && sl::sendRowsFor (4) == 2, "send knobs wrap three to a row");
     }
 
     engine.setEdit (nullptr);
