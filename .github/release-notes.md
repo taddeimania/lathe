@@ -3,6 +3,12 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.14.3
+
+- **The mixer fits a short space.** With the plug-in tray dragged tall (or a small window), the mixer's strips
+  keep their faders, levels and record, solo and mute buttons. The inserts, EQ, routing and sends step aside
+  in turn, then the pan knob moves beside the fader; only past that does the mixer scroll.
+
 ## New in 0.14.2
 
 - **Clearer tool descriptions for AI apps.** The AI assistant's tools now say outright that they can remove tracks,
