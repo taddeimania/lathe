@@ -3,6 +3,18 @@ a template, and records. It hosts VST3 plug-ins, has a mixer with return
 tracks and sends, routes audio and MIDI to and from your interface, and exports
 a mix and stems. It doesn't try to do everything else.
 
+## New in 0.15.0
+
+- **A chord sheet in Play Along.** Turn on **Chords** to see the chords of the key at the playhead, step by
+  step (I, ii, iii, IV, V, vi, vii° in major; i, ii°, bIII, iv, v, bVI, bVII in minor; the modes, harmonic
+  minor, pentatonics and blues too), with their 7ths, sus and power chords. Pick one and a voicing: open
+  chords, barre shapes up the neck, or triads on the top strings, drawn as chord diagrams and outlined on the
+  guitar. It follows key changes, keeping your place in the key, and shows what each chord becomes in the
+  next key as it nears.
+- **Play Along is easier to read.** One instrument at a time, a clearer panel for the key now and the next
+  change (with how many bars or beats away it is), and notes spelled as the key is written (C# in D
+  harmonic minor). The window scrolls when it's short.
+
 ## New in 0.14.3
 
 - **The mixer fits a short space.** With the plug-in tray dragged tall (or a small window), the mixer's strips
