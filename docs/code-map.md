@@ -4,6 +4,7 @@
 Source/
   Model/Edit.*          project model, clip split/trim/clear, undo (with step labels and who), JSON, monitor (cue) mixes
   Model/Keys.*          the key lane: scales, key names (read and spelled), the key at a beat; where notes sit on a guitar, bass, ukulele and keyboard
+  Model/Chords.*        a key's chords by degree (numerals, 7ths, sus, power; letter spelling) and their guitar voicings (open, barre shapes, triads up the neck)
   Model/ChannelEq.*     the built-in channel EQ: settings, biquads, response curve
   Model/MidiImport.*    reads .mid files into parts and places them as MIDI clips (drag and drop, import_midi)
   Model/MidiExport.*    writes MIDI clips as a .mid file (File menu, clip menu, dragging out, export_midi)
@@ -37,7 +38,7 @@ Source/
 ThirdParty/mutable/     the vendored MIT DSP behind those four (see its README for source and changes)
   Engine/AudioPool.*    memory-mapped WAV playback, thumbnails, import/convert, copying with progress
   UI/CloudLinks.*       invite links and listening links (pages on getlathe.app), Cloud menu
-  UI/PlayAlong.*        View > Play Along: the key at the playhead on guitar, bass, ukulele and keyboard, the next key fading in
+  UI/PlayAlong.*        View > Play Along: the key at the playhead on guitar, bass, ukulele and keyboard, the next key fading in; the chord sheet
   UI/UndoHistory.*      Edit > Undo History: every undo step, who made it (you or the assistant), click to go back
   Compare/Compare.*     View > Compare: renders Before/Now, reads a reference, measures them, plays them in step
   UI/CompareWindow.*    its window

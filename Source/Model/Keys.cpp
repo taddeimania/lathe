@@ -70,6 +70,38 @@ String noteName (int pitchClass, bool flats)
     return (flats ? flatNames : sharps)[pc (pitchClass)];
 }
 
+String letterName (int pitchClass, int letter, bool flats)
+{
+    static const char* letters[] { "C", "D", "E", "F", "G", "A", "B" };
+    static const int naturals[] { 0, 2, 4, 5, 7, 9, 11 };
+    letter = ((letter % 7) + 7) % 7;
+    int diff = pc (pitchClass - naturals[letter]);
+    if (diff > 6)
+        diff -= 12;
+    if (diff == 0)   return letters[letter];
+    if (diff == 1)   return String (letters[letter]) + "#";
+    if (diff == -1)  return String (letters[letter]) + "b";
+    return noteName (pitchClass, flats);
+}
+
+String spell (int root, Scale s, int pitch)
+{
+    const bool flats = usesFlats (root, s);
+    const auto& steps = intervals (s);
+    if (steps.size() == 7)
+    {
+        const int step = pc (pitch - root);
+        for (int d = 0; d < 7; ++d)
+            if (steps[(size_t) d] == step)
+            {
+                static const String order ("CDEFGAB");
+                const int rootLetter = jmax (0, order.indexOfChar (noteName (root, flats)[0]));
+                return letterName (pitch, rootLetter + d, flats);
+            }
+    }
+    return noteName (pitch, flats);
+}
+
 String keyName (int root, Scale s)    { return noteName (root, usesFlats (root, s)) + " " + scaleName (s); }
 String shortName (int root, Scale s)  { return noteName (root, usesFlats (root, s)) + info (s).shortName; }
 

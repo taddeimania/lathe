@@ -43,6 +43,12 @@ namespace keys
     bool usesFlats (int root, Scale);
     /** A pitch class's name as the key spells it: "Bb" in F major, "A#" in B major. */
     String noteName (int pitchClass, bool flats);
+    /** A pitch class named after a letter (0 = C ... 6 = B), with one sharp or flat: (1, C) is
+        "C#", (1, D) is "Db". Falls back to noteName where that would need a double sharp or flat. */
+    String letterName (int pitchClass, int letter, bool flats);
+    /** A note's name in a key: by its letter in a seven-note scale, so each letter comes once
+        (C# in D harmonic minor, not Db); otherwise, and for notes outside the key, noteName. */
+    String spell (int root, Scale, int pitch);
     /** "A minor pentatonic" */
     String keyName (int root, Scale);
     inline String keyName (const KeyChange& k)   { return keyName (k.root, k.scale); }

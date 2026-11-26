@@ -34,21 +34,42 @@ The AI assistant can set the keys for you. Ask it something like "work out the k
 
 **View > Play Along** opens a window you can keep beside Lathe.
 
-![Play Along half a bar before the song changes to C major: the guitar shows A minor pentatonic with F and B fading in as rings, and the bass follows the Bass track's own key, A dorian.](https://getlathe.app/img/daw/daw-play-along.jpg)
+![Play Along half a bar before the song changes to C major: the guitar shows A minor pentatonic with F and B fading in as rings, and the C major card is outlined in its colour, two beats away.](https://getlathe.app/img/daw/daw-play-along.jpg)
 
-It shows:
+At the top:
 
-- **The key now**, with the bar it started at, and the next key change, if there is one.
-- **Each instrument you pick** (Guitar, Bass, Ukulele, Keyboard), stacked. Click the buttons at the top right to turn them on and off. Lathe remembers your choice and where the window was.
-- **Whose key each instrument shows**, once any track has a key of its own. The menu beside each instrument says: **Automatic** follows a track named after the instrument ("Bass" or "Bass DI" for Bass; "Guitar", "Gtr 2" for Guitar; "Uke"; "Keys" or "Piano" for Keyboard) if it has a key of its own, and the song's key otherwise. You can also pick **Song's key**, or any track with a key of its own. When an instrument follows a track, its key is shown beside the menu.
+- **Where you are:** the bar at the playhead while the song plays, or at the start marker while it's stopped.
+- **The key now**, with the bar it started at and its notes (the root in the key's colour).
+- **What's next:** the next key change and its bar, and how far off it is ("in 3 bars", "in 2 beats"). In the last bar before it, the card is outlined in the new key's colour and a bar fills as the change nears.
+- **The buttons at the top right:** pick one instrument (**Guitar**, **Bass**, **Ukulele** or **Keyboard**; click it again to hide it), and turn **Chords** on or off beside it. Lathe remembers your choice and where the window was. If what's on doesn't fit, the window scrolls.
 
-On each instrument, every note in the key is marked and named. The root is filled with the key's colour; the other notes are light dots ringed in it.
+The instrument is drawn with its tuning above it. Every note in the key is marked and named. The root is filled with the key's colour; the other notes are light dots ringed in it.
 
 - **Guitar** is in standard tuning (E A D G B E), frets 0 to 15, with the low E string at the bottom, as in tab. Open strings are drawn left of the nut.
 - **Bass** is a 4-string in standard tuning (E A D G), frets 0 to 15.
 - **Ukulele** is in standard GCEA tuning, frets 0 to 12, with the G string at the bottom, as in ukulele tab.
 - **Keyboard** shows two octaves from C3.
 
+In a seven-note key, each letter comes once, as the key is written: C# in D harmonic minor, not Db.
+
+**Whose key the instrument and the chords show**, once any track has a key of its own: the menu beside each says. **Automatic** follows a track named after the instrument ("Bass" or "Bass DI" for Bass; "Guitar", "Gtr 2" for Guitar; "Uke"; "Keys" or "Piano" for Keyboard; a guitar track for Chords) if it has a key of its own, and the song's key otherwise. You can also pick **Song's key**, or any track with a key of its own. When one follows a track, its key is shown beside the menu.
+
 While the song plays, the window follows the playhead; when it's stopped, it follows the start marker. Click along the ruler to look at any part of the song.
 
 In the last bar before a key change, the next key's new notes fade in as rings, and the notes that are leaving dim. That way the change doesn't catch you out on the downbeat.
+
+## The chord sheet
+
+Turn on **Chords** to see the chords that belong to the key, and ways to play them on a guitar.
+
+![The chord sheet in A minor pentatonic, with Am7 picked: its open voicing is outlined on the guitar, and each chord shows what it becomes in C major, the key coming up.](https://getlathe.app/img/daw/daw-play-along-chords.jpg)
+
+- **The key's chords**, one for each step of the scale, each in its root's colour, with its numeral: I, ii, iii, IV, V, vi and vii° in a major key; i, ii°, bIII, iv, v, bVI and bVII in a minor one. The numerals are counted from the major scale, so a flat means the step is a semitone lower than in major. The modes and harmonic minor get their own chords: D dorian has a major IV (G), E mixolydian a bVII (D), harmonic minor a major V and a vii°7.
+- **Pentatonic keys** use the chords of their parent scale, major or minor. **Blues** uses the minor chords and adds the dominant 7ths a blues is played on (I7, IV7 and V7).
+- **Click a chord** to pick it. The row below it has its variants: the triad, the 7th, sus2 and sus4 (when their notes are in the key) and the power chord (5). Picking a variant changes every chord in the row, so you can read the key's 7ths at a glance. On the right are the chord's notes and what each is in the chord (R, b3, 5, b7...).
+- **Voicings** are chord diagrams: strings upright with the low E on the left, a cross over a string you leave out, a ring over one you play open, and the fret number beside the first fret shown. Each dot names its note in the chord, and a bar across the strings is a barre. **Open and barre** has the open chord and the barre shapes up the neck (the E, A, C and D shapes and their minor and 7th versions); **Up the neck** has triads on three strings in each inversion, or four-note shapes for 7ths. Scroll sideways for more, and click one to pick it.
+- **On the guitar** (when it's the instrument shown), the voicing you picked is outlined, with crosses on the strings it leaves out, and the rest of the key steps back.
+
+When the key changes, the sheet keeps what you picked by its place in the key: if you're playing the V7, you get the new key's V7, in the voicing nearest where your hand is. In the last bar before a key change, each chord shows the one it becomes in the next key ("Am7 → Cmaj7").
+
+The chord sheet follows the song's key, or a guitar track's own key: pick another in its menu.

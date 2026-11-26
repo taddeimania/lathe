@@ -4,8 +4,9 @@
 namespace lathe
 {
 /** View > Play Along: where the notes of the song's key are on a guitar, bass, ukulele and
-    keyboard, so you can jam along. It follows the playhead (the start marker while stopped) and
-    the key lane: when a key change is a bar away, the next key's notes fade in. */
+    keyboard, so you can jam along, and a chord sheet of the key's chords with guitar voicings
+    (Model/Chords). It follows the playhead (the start marker while stopped) and the key lane:
+    when a key change is a bar away, the next key's notes fade in. */
 class PlayAlongWindow : public DocumentWindow
 {
 public:

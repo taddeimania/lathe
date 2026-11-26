@@ -21,6 +21,7 @@
 #include "Assistant/AssistantService.h"
 #include "Assistant/Notation.h"
 #include "Model/MidiImport.h"
+#include "Model/Chords.h"
 #include "Model/MidiExport.h"
 #include "Bench/Benchmark.h"
 #include "UI/CloudUI.h"
@@ -6651,6 +6652,148 @@ int main (int argc, char** argv)
         auto ret = e.addTrack (TrackKind::bus, "Verb");
         res = change (R"({"action":"set_keys","track":"Verb","keys":[{"bar":1,"key":"C"}]})");
         check ((bool) res["isError"] && ret->keys.empty(), "a return can't have keys of its own");
+    }
+
+    std::cout << "\nPlay Along: the chord sheet" << std::endl;
+    {
+        auto names = [] (int root, Scale sc, int variantIndex = 0)
+        {
+            StringArray out;
+            for (auto& d : chords::diatonic (root, sc))
+                out.add (variantIndex < (int) d.chords.size() ? d.chords[(size_t) variantIndex].name : String ("-"));
+            return out.joinIntoString (" ");
+        };
+        auto numerals = [] (int root, Scale sc)
+        {
+            StringArray out;
+            for (auto& d : chords::diatonic (root, sc))
+                out.add (d.numeral);
+            return out.joinIntoString (" ");
+        };
+        auto find = [] (int root, Scale sc, const String& name) -> std::optional<chords::Chord>
+        {
+            for (auto& d : chords::diatonic (root, sc))
+                for (auto& c : d.chords)
+                    if (c.name == name)
+                        return c;
+            return {};
+        };
+        const auto deg = String::fromUTF8 ("\xc2\xb0");
+        check (names (0, Scale::major) == "C Dm Em F G Am Bdim" && names (0, Scale::major, 1) == "Cmaj7 Dm7 Em7 Fmaj7 G7 Am7 Bm7b5"
+               && numerals (0, Scale::major) == "I ii iii IV V vi vii" + deg,
+               "C major: C Dm Em F G Am Bdim, and their 7ths: " + names (0, Scale::major) + " / " + names (0, Scale::major, 1));
+        check (names (9, Scale::minor) == "Am Bdim C Dm Em F G" && numerals (9, Scale::minor) == "i ii" + deg + " bIII iv v bVI bVII",
+               "A minor: i ii-dim bIII iv v bVI bVII: " + numerals (9, Scale::minor));
+        check (names (2, Scale::dorian) == "Dm Em F G Am Bdim C" && numerals (2, Scale::dorian).startsWith ("i ii bIII IV v vi")
+               && names (4, Scale::mixolydian) == "E F#m G#dim A Bm C#m D" && numerals (4, Scale::mixolydian).endsWith ("bVII"),
+               "the modes: D dorian has a major IV (G), E mixolydian a major bVII (D)");
+        check (names (9, Scale::harmonicMinor) == "Am Bdim Caug Dm E F G#dim"
+               && names (9, Scale::harmonicMinor, 1) == "Am(maj7) Bm7b5 Cmaj7#5 Dm7 E7 Fmaj7 G#dim7"
+               && names (2, Scale::harmonicMinor).endsWith ("C#dim") && names (5, Scale::major).contains ("Bb")
+               && names (3, Scale::major) == "Eb Fm Gm Ab Bb Cm Ddim",
+               "harmonic minor has a major V and a diminished 7th on vii, and notes are spelled by letter (C#dim in D harmonic minor, Bb in F)");
+        check (names (9, Scale::minorPentatonic) == names (9, Scale::minor) && names (7, Scale::majorPentatonic) == names (7, Scale::major)
+               && find (9, Scale::blues, "A7") && find (9, Scale::blues, "D7") && find (9, Scale::blues, "E7") && ! find (9, Scale::minor, "A7"),
+               "pentatonics use their parent's chords; the blues adds I7, IV7 and V7");
+        const auto g = find (7, Scale::major, "Gsus4"), e5 = find (4, Scale::minor, "E5"), fsus4 = find (0, Scale::major, "Fsus4");
+        check (g && e5 && ! fsus4 && find (0, Scale::major, "Fsus2") && ! find (0, Scale::major, "Bsus4") && ! find (0, Scale::major, "B5"),
+               "sus and power chords only where their notes are in the key (no Fsus4 or B5 in C major)");
+
+        // Every voicing of every chord in every key plays only the chord's notes, all of them,
+        // with the root in the bass (triads up the neck come in each inversion), and fits a hand.
+        int total = 0, chordsChecked = 0;
+        String bad;
+        for (int root = 0; root < 12; ++root)
+            for (auto sc : keys::allScales())
+                for (auto& d : chords::diatonic (root, sc))
+                    for (auto& c : d.chords)
+                    {
+                        ++chordsChecked;
+                        const auto tones = chords::tones (c);
+                        const auto vs = chords::voicings (c);
+                        if (vs.size() < 3 && bad.isEmpty())
+                            bad = c.name + ": only " + String ((int) vs.size()) + " voicings";
+                        for (auto& v : vs)
+                        {
+                            ++total;
+                            std::set<int> heard;
+                            for (auto p : v.pitches())
+                                heard.insert (((p % 12) + 12) % 12);
+                            const bool onlyTones = std::all_of (heard.begin(), heard.end(), [&] (int p)
+                                                                { return std::find (tones.begin(), tones.end(), p) != tones.end(); });
+                            // A 7th may leave out its 5th (the open C7 does).
+                            const bool noFifth = tones.size() == 4 && chords::intervals (c.quality)[2] == 7
+                                                 && heard.count (tones[2]) == 0 && heard.size() == 3;
+                            const bool allTones = noFifth || heard.size() == std::set<int> (tones.begin(), tones.end()).size();
+                            const auto ps = v.pitches();
+                            const bool rootBass = ! ps.empty() && ps.front() % 12 == c.root;
+                            int fretted = 0, barred = 0;
+                            for (int s = 0; s < 6; ++s)
+                            {
+                                const int f = v.frets[(size_t) s];
+                                if (f < -1 || f > chords::guitarFrets) fretted = 99;
+                                if (f > 0) ++fretted;
+                                if (v.barreFret > 0 && f == v.barreFret && s >= v.barreFrom && s <= v.barreTo) ++barred;
+                            }
+                            const int fingers = fretted - barred + (v.barreFret > 0 ? 1 : 0);
+                            const bool span = v.lowestFret() == 0 || v.highestFret() - v.lowestFret() <= 4;
+                            if (bad.length() < 200 && (! onlyTones || ! allTones || (v.group == chords::Voicing::shape && ! rootBass)
+                                                  || fingers > 4 || ! span || ps.size() < 2))
+                                bad << c.name << " " << v.name << " " << v.detail << "; ";
+                        }
+                    }
+        check (bad.isEmpty() && chordsChecked > 500 && total > chordsChecked * 4,
+               "every voicing plays the chord's notes and only those, root in the bass, playable: " + bad
+               + " (" + String (total) + " voicings of " + String (chordsChecked) + " chords)");
+
+        // The open chords players know, and barres where they belong.
+        auto voicingsOf = [&] (int root, Scale sc, const String& name) { auto c = find (root, sc, name); return c ? chords::voicings (*c) : std::vector<chords::Voicing>(); };
+        auto has = [] (const std::vector<chords::Voicing>& vs, std::array<int, 6> frets) -> const chords::Voicing*
+        {
+            for (auto& v : vs)
+                if (v.frets == frets)
+                    return &v;
+            return nullptr;
+        };
+        const auto c = voicingsOf (0, Scale::major, "C"), gm = voicingsOf (0, Scale::major, "G"), am = voicingsOf (0, Scale::major, "Am");
+        const auto f = voicingsOf (0, Scale::major, "F"), bb = voicingsOf (5, Scale::major, "Bb"), g7 = voicingsOf (0, Scale::major, "G7");
+        const auto* fBarre = has (f, { 1, 3, 3, 2, 1, 1 });
+        const auto* bbBarre = has (bb, { -1, 1, 3, 3, 3, 1 });
+        check (! c.empty() && c.front().name == "Open" && c.front().frets == std::array<int, 6> { -1, 3, 2, 0, 1, 0 } && c.front().barreFret == 0
+               && has (gm, { 3, 2, 0, 0, 0, 3 }) && has (am, { -1, 0, 2, 2, 1, 0 }) && has (g7, { 3, 2, 0, 0, 0, 1 }),
+               "open C, G, Am and G7 are there, open chords first");
+        check (fBarre != nullptr && fBarre->barreFret == 1 && fBarre->barreFrom == 0 && fBarre->barreTo == 5 && fBarre->name == "E shape"
+               && bbBarre != nullptr && bbBarre->barreFret == 1 && bbBarre->barreFrom == 1 && bbBarre->barreTo == 5
+               && has (f, { -1, 8, 10, 10, 10, 8 }),
+               "F is an E-shape barre at fret 1 (and an A shape at 8); Bb an A shape barred at fret 1");
+        const auto* top = has (c, { -1, -1, -1, 5, 5, 3 });
+        int triads = 0;
+        for (auto& v : c)
+            if (v.group == chords::Voicing::upTheNeck)
+            {
+                ++triads;
+                int played = 0;
+                for (auto fr : v.frets) played += fr >= 0 ? 1 : 0;
+                if (played != 3 || v.lowestFret() < 2) triads = -100;
+            }
+        check (top != nullptr && top->detail.startsWith ("Root position") && triads == 6,
+               "C has triads up the neck: three inversions on the top strings and three on the middle ones");
+        int fourNote = 0;
+        for (auto& v : g7)
+            if (v.group == chords::Voicing::upTheNeck)
+                fourNote += (int) v.pitches().size() == 4 ? 1 : 0;
+        check (fourNote >= 6, "7ths get four-note shapes on the top strings: " + String (fourNote));
+        auto joined = [] (const std::vector<String>& v) { StringArray a; for (auto& x : v) a.add (x); return a.joinIntoString (" "); };
+        check (keys::spell (2, Scale::harmonicMinor, 61) == "C#" && keys::spell (6, Scale::major, 65) == "E#"
+               && keys::spell (5, Scale::major, 70) == "Bb" && keys::spell (9, Scale::minorPentatonic, 60) == "C"
+               && keys::spell (2, Scale::minor, 61) == keys::noteName (61, true),
+               "a seven-note key spells each letter once (C# in D harmonic minor), other notes as before");
+        const auto a7 = find (2, Scale::harmonicMinor, "A7"), bdim7 = find (0, Scale::harmonicMinor, "Bdim7");
+        check (a7 && bdim7 && joined (chords::toneNames (*a7, true)) == "A C# E G" && joined (chords::toneNames (*bdim7, true)) == "B D F Ab",
+               "a chord's tones are spelled from its root: A7 is A C# E G, Bdim7 B D F Ab");
+        check (chords::toneLabel (chords::Quality::minor7, 3) == "b3" && chords::toneLabel (chords::Quality::diminished7, 9) == "bb7"
+               && chords::toneLabel (chords::Quality::major, 0) == "R" && chords::suffix (chords::Quality::halfDiminished7) == "m7b5",
+               "chord tones are named R, 3, b3, 5, b7...");
     }
 
     std::cout << "\nMixer strip layout" << std::endl;

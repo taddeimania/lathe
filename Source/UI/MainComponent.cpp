@@ -2611,7 +2611,7 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                         const double bar = self->edit.beatsPerBar();
                         self->edit.keys = { { 0.0, 9, Scale::minorPentatonic }, { 4.0 * bar, 0, Scale::major } };
                         self->edit.insertMarker = 3.5 * bar;
-                        self->settings.setValue ("playAlong.instruments", "Guitar,Bass");
+                        self->settings.setValue ("playAlong.instruments", "Guitar");
                         // The bass has a key of its own from bar 3: A dorian, which Play Along's Bass follows.
                         for (auto& t : self->edit.tracks)
                             if (t->name == "Bass")
@@ -2631,6 +2631,14 @@ void MainComponent::runDawShots (const File& outDir, const File& work, const Fil
                                 else if (dynamic_cast<PlayAlongWindow*> (w) != nullptr)
                                     shot (*dynamic_cast<DocumentWindow*> (w)->getContentComponent(), "daw-play-along.jpg");
                             }
+                            // Play Along again, with the chord sheet: Am7 picked, its open voicing on the guitar.
+                            PlayAlongWindow::closeIfOpen();
+                            self->settings.setValue ("playAlong.instruments", "Guitar,Chords");
+                            self->settings.setValue ("playAlong.chord", "0,1,0");
+                            PlayAlongWindow::show (self->ctx);
+                            for (int i = 0; i < TopLevelWindow::getNumTopLevelWindows(); ++i)
+                                if (auto* w = dynamic_cast<PlayAlongWindow*> (TopLevelWindow::getTopLevelWindow (i)))
+                                    shot (*w->getContentComponent(), "daw-play-along-chords.jpg");
                             if (saveShot (self->arrangement, run->outDir.getChildFile ("daw-key-lane.jpg"),
                                           { 0, 0, jmin (self->arrangement.getWidth(), 900), theme::rulerHeight + theme::keyLaneHeight + 140 }))
                                 run->written.add ("daw-key-lane.jpg");
