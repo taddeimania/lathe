@@ -52,7 +52,7 @@ The instrument is drawn with its tuning above it. Every note in the key is marke
 
 In a seven-note key, each letter comes once, as the key is written: C# in D harmonic minor, not Db.
 
-**Whose key the instrument and the chords show**, once any track has a key of its own: the menu beside each says. **Automatic** follows a track named after the instrument ("Bass" or "Bass DI" for Bass; "Guitar", "Gtr 2" for Guitar; "Uke"; "Keys" or "Piano" for Keyboard; a guitar track for Chords) if it has a key of its own, and the song's key otherwise. You can also pick **Song's key**, or any track with a key of its own. When one follows a track, its key is shown beside the menu.
+**Whose key the instrument and the chords show**, once any track has a key of its own: the menu beside each says. **Automatic** follows a track named after the instrument ("Bass" or "Bass DI" for Bass; "Guitar", "Gtr 2" for Guitar; "Uke"; "Keys" or "Piano" for Keyboard; for Chords, one named after the instrument shown) if it has a key of its own, and the song's key otherwise. You can also pick **Song's key**, or any track with a key of its own. When one follows a track, its key is shown beside the menu.
 
 While the song plays, the window follows the playhead; when it's stopped, it follows the start marker. Click along the ruler to look at any part of the song.
 
@@ -60,16 +60,20 @@ In the last bar before a key change, the next key's new notes fade in as rings, 
 
 ## The chord sheet
 
-Turn on **Chords** to see the chords that belong to the key, and ways to play them on a guitar.
+Turn on **Chords** to see the chords that belong to the key, and ways to play them on the instrument you've picked (on a guitar if none is picked).
 
 ![The chord sheet in A minor pentatonic, with Am7 picked: its open voicing is outlined on the guitar, and each chord shows what it becomes in C major, the key coming up.](https://getlathe.app/img/daw/daw-play-along-chords.jpg)
 
 - **The key's chords**, one for each step of the scale, each in its root's colour, with its numeral: I, ii, iii, IV, V, vi and vii° in a major key; i, ii°, bIII, iv, v, bVI and bVII in a minor one. The numerals are counted from the major scale, so a flat means the step is a semitone lower than in major. The modes and harmonic minor get their own chords: D dorian has a major IV (G), E mixolydian a bVII (D), harmonic minor a major V and a vii°7.
 - **Pentatonic keys** use the chords of their parent scale, major or minor. **Blues** uses the minor chords and adds the dominant 7ths a blues is played on (I7, IV7 and V7).
 - **Click a chord** to pick it. The row below it has its variants: the triad, the 7th, sus2 and sus4 (when their notes are in the key) and the power chord (5). Picking a variant changes every chord in the row, so you can read the key's 7ths at a glance. On the right are the chord's notes and what each is in the chord (R, b3, 5, b7...).
-- **Voicings** are chord diagrams: strings upright with the low E on the left, a cross over a string you leave out, a ring over one you play open, and the fret number beside the first fret shown. Each dot names its note in the chord, and a bar across the strings is a barre. **Open and barre** has the open chord and the barre shapes up the neck (the E, A, C and D shapes and their minor and 7th versions); **Up the neck** has triads on three strings in each inversion, or four-note shapes for 7ths. Scroll sideways for more, and click one to pick it.
-- **On the guitar** (when it's the instrument shown), the voicing you picked is outlined, with crosses on the strings it leaves out, and the rest of the key steps back.
+- **Voicings** are drawn for the instrument shown. On guitar, bass and ukulele they're chord diagrams: strings upright (the guitar's low E on the left, the ukulele's G, as chord charts draw them), a cross over a string you leave out, a ring over one you play open, and the fret number beside the first fret shown. Each dot names its note in the chord, and a bar across the strings is a barre. Scroll sideways for more, and click one to pick it.
+  - **Guitar:** **Open and barre** has the open chord and the barre shapes up the neck (the E, A, C and D shapes and their minor and 7th versions); **Up the neck** has triads on three strings in each inversion, or four-note shapes for 7ths.
+  - **Ukulele:** shapes on all four strings (a power chord can leave some out): open chords first, then up the neck.
+  - **Bass:** the root on the lowest string you play, with the 3rd (and the 7th, for 7ths) above it, open and up the neck.
+  - **Keyboard:** the chord close together in each inversion, then **Spread**, with the root an octave below the rest, all within the two octaves Play Along draws. Each is drawn as keys, with its notes underneath ("G3 B3 D4 F4").
+- **On the instrument**, the voicing you picked is outlined (with crosses on the strings it leaves out), and the rest of the key steps back.
 
 When the key changes, the sheet keeps what you picked by its place in the key: if you're playing the V7, you get the new key's V7, in the voicing nearest where your hand is. In the last bar before a key change, each chord shows the one it becomes in the next key ("Am7 → Cmaj7").
 
-The chord sheet follows the song's key, or a guitar track's own key: pick another in its menu.
+The chord sheet follows the song's key, or the own key of a track named after the instrument shown: pick another in its menu.

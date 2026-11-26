@@ -64,14 +64,20 @@ namespace chords
     std::vector<String> toneNames (const Chord&, bool flats);
 
     //==========================================================================
-    /** One way to play a chord on a guitar in standard tuning. */
+    /** The instruments a chord can be shown on, in the order fretboard::instruments() lists them. */
+    enum class Instrument { guitar, bass, ukulele, keyboard };
+
+    /** One way to play a chord on an instrument. */
     struct Voicing
     {
-        std::array<int, 6> frets {};     // per string, low E first: -1 not played, 0 open
-        enum Group { shape, upTheNeck };
+        Instrument instrument = Instrument::guitar;
+        std::vector<int> frets;          // per string, as fretboard::instruments() lists them (guitar low E
+                                         // first, ukulele G first): -1 not played, 0 open. Empty on a keyboard.
+        std::vector<int> keys;           // on a keyboard: the MIDI notes, low to high
+        enum Group { shape, upTheNeck }; // keyboard: close voicings, then spread ones
         Group group = shape;
-        String name;                     // "Open", "E shape", "Triad, top strings"
-        String detail;                   // "Fret 5", "Root position, fret 8"
+        String name;                     // "Open", "E shape", "Triad on G B E", "1st inversion"
+        String detail;                   // "Fret 5", "Root position, fret 8", "C4 E4 G4"
         int barreFret = 0;               // 0: no barre; else the fret the index finger lays across
         int barreFrom = -1, barreTo = -1; // the strings the barre covers
 
@@ -79,14 +85,18 @@ namespace chords
         int highestFret() const;
         int bassString() const;          // the lowest string played
         bool usesOpenStrings() const;
-        /** The MIDI pitches, low string first. */
+        /** The MIDI pitches, low string first (or the keys). */
         std::vector<int> pitches() const;
     };
 
-    /** Ways to play a chord, open chords first, then barre shapes by position, then triads
-        (or four-note shapes for 7ths) on the top strings, higher up the neck. Every voicing
-        has the chord's root in the bass, except the triads, which come in each inversion. */
-    std::vector<Voicing> voicings (const Chord&);
+    /** Ways to play a chord, easiest first.
+        Guitar: open chords, barre shapes by position (root in the bass), then triads (or
+        four-note shapes for 7ths) on the top strings in each inversion, higher up the neck.
+        Ukulele: all four strings, open chords first, then shapes up the neck.
+        Bass: the root on the lowest string played, with the 3rd (and 7th) above it.
+        Keyboard: close voicings in each inversion, then spread ones with the root an octave
+        or more below, all within the two octaves Play Along draws. */
+    std::vector<Voicing> voicings (const Chord&, Instrument = Instrument::guitar);
 
     constexpr int guitarFrets = 15;
 } // namespace chords

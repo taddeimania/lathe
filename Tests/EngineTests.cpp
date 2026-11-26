@@ -6748,7 +6748,7 @@ int main (int argc, char** argv)
 
         // The open chords players know, and barres where they belong.
         auto voicingsOf = [&] (int root, Scale sc, const String& name) { auto c = find (root, sc, name); return c ? chords::voicings (*c) : std::vector<chords::Voicing>(); };
-        auto has = [] (const std::vector<chords::Voicing>& vs, std::array<int, 6> frets) -> const chords::Voicing*
+        auto has = [] (const std::vector<chords::Voicing>& vs, std::vector<int> frets) -> const chords::Voicing*
         {
             for (auto& v : vs)
                 if (v.frets == frets)
@@ -6759,7 +6759,7 @@ int main (int argc, char** argv)
         const auto f = voicingsOf (0, Scale::major, "F"), bb = voicingsOf (5, Scale::major, "Bb"), g7 = voicingsOf (0, Scale::major, "G7");
         const auto* fBarre = has (f, { 1, 3, 3, 2, 1, 1 });
         const auto* bbBarre = has (bb, { -1, 1, 3, 3, 3, 1 });
-        check (! c.empty() && c.front().name == "Open" && c.front().frets == std::array<int, 6> { -1, 3, 2, 0, 1, 0 } && c.front().barreFret == 0
+        check (! c.empty() && c.front().name == "Open" && c.front().frets == std::vector<int> { -1, 3, 2, 0, 1, 0 } && c.front().barreFret == 0
                && has (gm, { 3, 2, 0, 0, 0, 3 }) && has (am, { -1, 0, 2, 2, 1, 0 }) && has (g7, { 3, 2, 0, 0, 0, 1 }),
                "open C, G, Am and G7 are there, open chords first");
         check (fBarre != nullptr && fBarre->barreFret == 1 && fBarre->barreFrom == 0 && fBarre->barreTo == 5 && fBarre->name == "E shape"
@@ -6783,6 +6783,74 @@ int main (int argc, char** argv)
             if (v.group == chords::Voicing::upTheNeck)
                 fourNote += (int) v.pitches().size() == 4 ? 1 : 0;
         check (fourNote >= 6, "7ths get four-note shapes on the top strings: " + String (fourNote));
+        // Ukulele (G C E A, the G tuned up): all four strings, the chord's notes and only those.
+        auto voicingsOn = [&] (int root, Scale sc, const String& name, chords::Instrument inst)
+        {
+            auto ch = find (root, sc, name);
+            return ch ? chords::voicings (*ch, inst) : std::vector<chords::Voicing>();
+        };
+        const auto ukeC = voicingsOn (0, Scale::major, "C", chords::Instrument::ukulele);
+        const auto ukeG = voicingsOn (0, Scale::major, "G", chords::Instrument::ukulele);
+        const auto ukeF = voicingsOn (0, Scale::major, "F", chords::Instrument::ukulele);
+        const auto ukeAm = voicingsOn (0, Scale::major, "Am", chords::Instrument::ukulele);
+        check (! ukeC.empty() && ukeC.front().frets == std::vector<int> { 0, 0, 0, 3 } && has (ukeG, { 0, 2, 3, 2 })
+               && has (ukeF, { 2, 0, 1, 0 }) && has (ukeAm, { 2, 0, 0, 0 }),
+               "ukulele: the open C (0003), G (0232), F (2010) and Am (2000) are there, open C first");
+        String ukeBad, bassBad, keysBad;
+        int ukeCount = 0, bassCount = 0, keysCount = 0;
+        for (int root = 0; root < 12; ++root)
+            for (auto sc : keys::allScales())
+                for (auto& d : chords::diatonic (root, sc))
+                    for (auto& ch : d.chords)
+                    {
+                        const auto tones = chords::tones (ch);
+                        auto onlyTones = [&] (const std::vector<int>& ps)
+                        {
+                            return std::all_of (ps.begin(), ps.end(), [&] (int p)
+                                                { return std::find (tones.begin(), tones.end(), ((p % 12) + 12) % 12) != tones.end(); });
+                        };
+                        const auto uke = chords::voicings (ch, chords::Instrument::ukulele);
+                        if (uke.empty() && ukeBad.length() < 200) ukeBad << ch.name << " has none; ";
+                        for (auto& v : uke)
+                        {
+                            ++ukeCount;
+                            if ((v.frets.size() != 4 || (v.pitches().size() != 4 && tones.size() > 2) || ! onlyTones (v.pitches())
+                                 || (v.lowestFret() > 0 && v.highestFret() - v.lowestFret() > 3)) && ukeBad.length() < 200)
+                                ukeBad << ch.name << " " << v.name << "; ";
+                        }
+                        const auto bass = chords::voicings (ch, chords::Instrument::bass);
+                        if (bass.empty() && bassBad.length() < 200) bassBad << ch.name << " has none; ";
+                        for (auto& v : bass)
+                        {
+                            ++bassCount;
+                            const auto ps = v.pitches();
+                            if ((v.frets.size() != 4 || ps.size() < 2 || ps.front() % 12 != ch.root || ! onlyTones (ps)) && bassBad.length() < 200)
+                                bassBad << ch.name << " " << v.name << "; ";
+                        }
+                        const auto kb = chords::voicings (ch, chords::Instrument::keyboard);
+                        for (auto& v : kb)
+                        {
+                            ++keysCount;
+                            std::set<int> heard;
+                            for (auto k : v.keys) heard.insert (k % 12);
+                            if ((! v.frets.empty() || v.keys.front() < fretboard::keyboardLow || v.keys.back() > fretboard::keyboardHigh
+                                 || ! onlyTones (v.keys) || heard.size() != std::set<int> (tones.begin(), tones.end()).size()
+                                 || ! std::is_sorted (v.keys.begin(), v.keys.end())) && keysBad.length() < 200)
+                                keysBad << ch.name << " " << v.name << " " << v.detail << "; ";
+                        }
+                        if ((int) kb.size() < (int) tones.size() && keysBad.length() < 200)
+                            keysBad << ch.name << ": " << String ((int) kb.size()) << " voicings; ";
+                    }
+        check (ukeBad.isEmpty() && ukeCount > 2000, "every chord has ukulele shapes on all four strings, its notes only: " + ukeBad);
+        check (bassBad.isEmpty() && bassCount > 2000, "every chord has bass shapes with the root lowest, its notes only: " + bassBad);
+        check (keysBad.isEmpty() && keysCount > 2000, "every chord has keyboard voicings in each inversion, within C3 to B4: " + keysBad);
+        const auto kbC = voicingsOn (0, Scale::major, "C", chords::Instrument::keyboard);
+        const auto kbG7 = voicingsOn (0, Scale::major, "G7", chords::Instrument::keyboard);
+        check (kbC.size() == 4 && kbC[0].keys == std::vector<int> { 60, 64, 67 } && kbC[1].name == "1st inversion"
+               && kbC[1].keys == std::vector<int> { 52, 55, 60 }
+               && kbC[3].name == "Spread" && kbC[3].keys.front() == 48 && kbG7.size() >= 4 && kbC[0].detail == "C4 E4 G4",
+               "keyboard: C in root position is C4 E4 G4, then its inversions and a spread voicing with C3 below");
+
         auto joined = [] (const std::vector<String>& v) { StringArray a; for (auto& x : v) a.add (x); return a.joinIntoString (" "); };
         check (keys::spell (2, Scale::harmonicMinor, 61) == "C#" && keys::spell (6, Scale::major, 65) == "E#"
                && keys::spell (5, Scale::major, 70) == "Bb" && keys::spell (9, Scale::minorPentatonic, 60) == "C"

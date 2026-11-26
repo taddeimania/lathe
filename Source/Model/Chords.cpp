@@ -188,7 +188,7 @@ namespace
             return;
         const int low = v.lowestFret();
         int from = -1, to = -1, count = 0;
-        for (int s = 0; s < 6; ++s)
+        for (int s = 0; s < (int) v.frets.size(); ++s)
             if (v.frets[(size_t) s] == low)
             {
                 if (from < 0) from = s;
@@ -208,7 +208,7 @@ namespace
     int fingersFor (const Voicing& v)
     {
         int n = 0;
-        for (int s = 0; s < 6; ++s)
+        for (int s = 0; s < (int) v.frets.size(); ++s)
         {
             const int f = v.frets[(size_t) s];
             if (f > 0 && ! (v.barreFret > 0 && f == v.barreFret && s >= v.barreFrom && s <= v.barreTo))
@@ -416,7 +416,7 @@ int Voicing::highestFret() const
 
 int Voicing::bassString() const
 {
-    for (int s = 0; s < 6; ++s)
+    for (int s = 0; s < (int) frets.size(); ++s)
         if (frets[(size_t) s] >= 0)
             return s;
     return -1;
@@ -429,17 +429,221 @@ bool Voicing::usesOpenStrings() const
 
 std::vector<int> Voicing::pitches() const
 {
+    if (instrument == Instrument::keyboard)
+        return keys;
+    const auto& strings = fretboard::instruments()[(size_t) instrument].strings;
     std::vector<int> out;
-    for (int s = 0; s < 6; ++s)
-        if (frets[(size_t) s] >= 0)
-            out.push_back (tuning()[(size_t) s] + frets[(size_t) s]);
+    for (size_t s = 0; s < frets.size() && s < strings.size(); ++s)
+        if (frets[s] >= 0)
+            out.push_back (strings[s] + frets[s]);
     return out;
 }
 
-std::vector<Voicing> voicings (const Chord& chord)
+namespace
 {
+    /** Shapes on a four-string instrument, found by trying every fret within reach: the
+        ukulele plays all four strings (its G is tuned up, so any note can be lowest); the bass
+        has the root on its lowest string played, and leaves out what it doesn't need. */
+    std::vector<Voicing> searchFretted (const Chord& chord, Instrument instrument)
+    {
+        const auto& inst = fretboard::instruments()[(size_t) instrument];
+        const int n = (int) inst.strings.size();
+        const bool uke = instrument == Instrument::ukulele;
+        const auto& steps = intervals (chord.quality);
+        // A power chord has only two notes: on a ukulele, strings may be left out for it too.
+        const bool allStrings = uke && steps.size() > 2;
+        const auto chordTones = tones (chord);
+        // What must sound: every note (a 7th may leave out its 5th); on bass, the root, 3rd and 7th.
+        std::vector<int> needed;
+        for (auto i : steps)
+        {
+            if (steps.size() == 4 && i == 7)
+                continue;
+            if (! uke && i == 7 && steps.size() == 3 && (steps[1] == 3 || steps[1] == 4))
+                continue;
+            needed.push_back (pc (chord.root + i));
+        }
+        struct Candidate { Voicing v; float score; };
+        std::vector<Candidate> found;
+        std::vector<int> f ((size_t) n, -1);
+        std::function<void (int)> search = [&] (int s)
+        {
+            if (s == n)
+            {
+                Voicing v;
+                v.instrument = instrument;
+                v.frets = f;
+                const auto ps = v.pitches();
+                if ((int) ps.size() < (allStrings ? n : 2))
+                    return;
+                int lo = 99, hi = 0, played = 0, gaps = 0;
+                bool started = false;
+                for (auto fr : f)
+                {
+                    if (fr < 0) { gaps += started ? 1 : 0; continue; }
+                    started = true;
+                    ++played;
+                    if (fr > 0) { lo = jmin (lo, fr); hi = jmax (hi, fr); }
+                }
+                if (hi > 0 && hi - lo > 3)
+                    return;
+                for (auto t : needed)
+                    if (std::none_of (ps.begin(), ps.end(), [t] (int p) { return pc (p) == t; }))
+                        return;
+                if (! uke && pc (ps.front()) != chord.root)
+                    return;
+                findBarre (v);
+                if (fingersFor (v) > 4)
+                    return;
+                // Fewer fingers and a smaller stretch read easier; on bass, fewer notes ring clearer.
+                const float score = (float) fingersFor (v) + 0.5f * (float) (hi > 0 ? hi - lo : 0)
+                                  + (uke ? 0.0f : 0.6f * (float) played + 1.5f * (float) gaps);
+                found.push_back ({ v, score });
+                return;
+            }
+            if (! allStrings)
+            {
+                f[(size_t) s] = -1;
+                search (s + 1);
+            }
+            for (int fret = 0; fret <= inst.frets; ++fret)
+            {
+                const int p = pc (inst.strings[(size_t) s] + fret);
+                if (std::find (chordTones.begin(), chordTones.end(), p) == chordTones.end())
+                    continue;
+                // Keep the hand within four frets of the lowest fretted note so far.
+                bool reach = true;
+                for (int k = 0; k < s; ++k)
+                    if (f[(size_t) k] > 0 && fret > 0 && std::abs (f[(size_t) k] - fret) > 3)
+                        reach = false;
+                if (! reach)
+                    continue;
+                f[(size_t) s] = fret;
+                search (s + 1);
+            }
+            f[(size_t) s] = -1;
+        };
+        search (0);
+
+        // The best for each place on the neck: open shapes first, then by fret, a couple of
+        // frets apart so each one is somewhere new.
+        std::stable_sort (found.begin(), found.end(), [] (const Candidate& a, const Candidate& b)
+        {
+            const bool ao = a.v.usesOpenStrings() && a.v.highestFret() <= 4, bo = b.v.usesOpenStrings() && b.v.highestFret() <= 4;
+            if (ao != bo) return ao;
+            if (ao) return a.score < b.score;
+            if (a.v.lowestFret() != b.v.lowestFret()) return a.v.lowestFret() < b.v.lowestFret();
+            return a.score < b.score;
+        });
+        static const StringArray bassNames { "E", "A", "D", "G" };
+        std::vector<Voicing> out;
+        int opens = 0, lastFret = -10;
+        for (auto& c : found)
+        {
+            auto v = c.v;
+            const bool open = v.usesOpenStrings() && v.highestFret() <= 4;
+            if (open)
+            {
+                if (opens >= (uke ? 2 : 2))
+                    continue;
+                ++opens;
+                v.group = Voicing::shape;
+                v.name = "Open";
+            }
+            else
+            {
+                if (v.usesOpenStrings() || v.lowestFret() < lastFret + 2 || out.size() >= 7)
+                    continue;
+                lastFret = v.lowestFret();
+                v.group = Voicing::upTheNeck;
+                v.name = "Fret " + String (v.lowestFret());
+            }
+            if (uke)
+                v.detail = v.barreFret > 0 ? "Barre at fret " + String (v.barreFret) : (open ? "Open position" : "Fret " + String (v.lowestFret()));
+            else
+                v.detail = "Root on the " + bassNames[v.bassString()] + " string";
+            out.push_back (v);
+        }
+        return out;
+    }
+
+    /** Keyboard voicings, within C3 to B4: the chord close together in each inversion, around
+        middle C, then spread: the root low, the rest close together an octave or more above. */
+    std::vector<Voicing> keyboardVoicings (const Chord& chord)
+    {
+        const auto& steps = intervals (chord.quality);
+        const int n = (int) steps.size();
+        const auto names = toneNames (chord, true);
+        static const char* inversions[] { "Root position", "1st inversion", "2nd inversion", "3rd inversion" };
+        // "C4 E4 G4", each note spelled as the chord spells it.
+        auto describe = [&] (const std::vector<int>& keys)
+        {
+            String d;
+            for (auto k : keys)
+                for (int i = 0; i < n; ++i)
+                    if (pc (chord.root + steps[(size_t) i]) == pc (k))
+                    {
+                        d << (d.isEmpty() ? "" : " ") << names[(size_t) i] << (k / 12 - 1);
+                        break;
+                    }
+            return d;
+        };
+        // The tones from index `from` on, stacked upward from `bass`.
+        auto stack = [&] (int bass, int from, int count)
+        {
+            std::vector<int> keys;
+            int p = bass;
+            for (int k = 0; k < count; ++k)
+            {
+                const int want = pc (chord.root + steps[(size_t) ((from + k) % n)]);
+                while (pc (p) != want) ++p;
+                keys.push_back (p);
+                ++p;
+            }
+            return keys;
+        };
+
+        std::vector<Voicing> out;
+        for (int inv = 0; inv < n; ++inv)
+        {
+            Voicing v;
+            v.instrument = Instrument::keyboard;
+            v.keys = stack (55, inv, n);   // from G3 up, so they sit around middle C
+            if (v.keys.back() > fretboard::keyboardHigh)
+                for (auto& k : v.keys) k -= 12;
+            v.group = Voicing::shape;
+            v.name = n == 2 ? (inv == 0 ? "Root and 5th" : "5th and root") : inversions[inv];
+            v.detail = describe (v.keys);
+            out.push_back (v);
+        }
+        if (n >= 3)
+        {
+            Voicing v;
+            v.instrument = Instrument::keyboard;
+            const int low = fretboard::keyboardLow + pc (chord.root - fretboard::keyboardLow);
+            v.keys = stack (low + 12, 1, n - 1);
+            v.keys.insert (v.keys.begin(), low);
+            if (v.keys.back() <= fretboard::keyboardHigh)
+            {
+                v.group = Voicing::upTheNeck;
+                v.name = "Spread";
+                v.detail = describe (v.keys);
+                out.push_back (v);
+            }
+        }
+        return out;
+    }
+}
+
+std::vector<Voicing> voicings (const Chord& chord, Instrument instrument)
+{
+    if (instrument == Instrument::keyboard)
+        return keyboardVoicings (chord);
+    if (instrument != Instrument::guitar)
+        return searchFretted (chord, instrument);
+
     std::vector<Voicing> shapes, neck;
-    auto seen = [&] (const std::array<int, 6>& f)
+    auto seen = [&] (const std::vector<int>& f)
     {
         for (auto* list : { &shapes, &neck })
             for (auto& v : *list)
@@ -464,6 +668,7 @@ std::vector<Voicing> voicings (const Chord& chord)
             if (pos >= 12 && added > 0 && pos != 12)
                 continue;
             Voicing v;
+            v.frets.assign (6, -1);
             bool ok = true;
             for (int s = 0; s < 6; ++s)
             {
@@ -546,7 +751,7 @@ std::vector<Voicing> voicings (const Chord& chord)
                     if (it != best.end() && it->second.lowestFret() <= lo)
                         return;
                     Voicing v;
-                    v.frets.fill (-1);
+                    v.frets.assign (6, -1);
                     for (int k = 0; k < n; ++k)
                         v.frets[(size_t) set[(size_t) k]] = f[(size_t) k];
                     v.group = Voicing::upTheNeck;

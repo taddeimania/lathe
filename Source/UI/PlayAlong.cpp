@@ -215,10 +215,14 @@ namespace
                 g.fillRoundedRectangle (r, 2.0f);
             }
             const float radius = jmin (w * 0.36f, 11.0f);
+            auto inChord = [chord] (int p)
+            {
+                return chord != nullptr && std::find (chord->keys.begin(), chord->keys.end(), p) != chord->keys.end();
+            };
             for (auto& [p, r] : whites)
-                drawNote ({ r.getCentreX(), r.getBottom() - radius - 7.0f }, radius, p, false);
+                drawNote ({ r.getCentreX(), r.getBottom() - radius - 7.0f }, radius, p, inChord (p));
             for (auto& [p, r] : blacks)
-                drawNote ({ r.getCentreX(), r.getBottom() - radius - 4.0f }, jmin (radius, r.getWidth() * 0.46f), p, false);
+                drawNote ({ r.getCentreX(), r.getBottom() - radius - 4.0f }, jmin (radius, r.getWidth() * 0.46f), p, inChord (p));
             return;
         }
 
@@ -285,7 +289,7 @@ namespace
         }
 
         const float radius = jmin (gap * 0.42f, fretW * 0.38f, 11.0f);
-        const bool showChord = chord != nullptr && strings == 6;
+        const bool showChord = chord != nullptr && (int) chord->frets.size() == strings;
         for (auto& spot : fretboard::spots (inst, key != nullptr ? key->root : 0, key != nullptr ? key->scale : Scale::major))
         {
             const float x = spot.fret == 0 ? area.getX() + openW * 0.5f - 2.0f : fretX (spot.fret) - fretW * 0.5f;
@@ -307,15 +311,74 @@ namespace
                 }
     }
 
-    /** A chord diagram: strings upright (low E on the left), the nut at the top, the chord's
-        tones named in the dots, crosses over strings left out and rings over open ones. */
+    /** A keyboard voicing: the keys around it, a white key either side, each of its keys marked
+        with what it is in the chord. */
+    void drawKeyboardDiagram (Graphics& g, Rectangle<float> area, const chords::Voicing& v, const chords::Chord& chord, Colour colour)
+    {
+        static const bool black[] { false, true, false, true, false, false, true, false, true, false, true, false };
+        int low = v.keys.front() - 1, high = v.keys.back() + 1;
+        while (black[low % 12]) --low;
+        while (black[high % 12]) ++high;
+        int whiteCount = 0;
+        for (int p = low; p <= high; ++p)
+            whiteCount += black[p % 12] ? 0 : 1;
+        auto keysArea = area.reduced (2.0f, 10.0f);
+        const float w = keysArea.getWidth() / (float) whiteCount;
+        keysArea = keysArea.withHeight (jmin (keysArea.getHeight(), w * 5.0f)).withCentre (area.getCentre());
+        const float h = keysArea.getHeight();
+        std::vector<std::pair<int, Rectangle<float>>> whites, blacks;
+        int white = 0;
+        for (int p = low; p <= high; ++p)
+        {
+            if (! black[p % 12])
+                whites.push_back ({ p, { keysArea.getX() + (float) white++ * w, keysArea.getY(), w, h } });
+            else
+                blacks.push_back ({ p, { keysArea.getX() + (float) white * w - w * 0.32f, keysArea.getY(), w * 0.64f, h * 0.6f } });
+        }
+        for (auto& [p, r] : whites)
+        {
+            g.setColour (noteFill);
+            g.fillRect (r.reduced (0.5f, 0.0f));
+            g.setColour (theme::border);
+            g.drawRect (r, 1.0f);
+        }
+        for (auto& [p, r] : blacks)
+        {
+            g.setColour (Colour (0xff1a1a1a));
+            g.fillRoundedRectangle (r, 1.5f);
+        }
+        const float radius = jmin (w * 0.42f, 7.5f);
+        auto mark = [&] (int p, Rectangle<float> r, float lift)
+        {
+            if (std::find (v.keys.begin(), v.keys.end(), p) == v.keys.end())
+                return;
+            const int interval = ((p - chord.root) % 12 + 12) % 12;
+            const bool root = interval == 0;
+            drawDot (g, { r.getCentreX(), r.getBottom() - radius - lift }, radius, chords::toneLabel (chord.quality, interval),
+                     root ? colour : noteFill, colour, root ? 0.0f : 1.5f, root ? theme::textOn (colour) : theme::textDark, 1.0f, 0.95f);
+        };
+        for (auto& [p, r] : whites) mark (p, r, 4.0f);
+        for (auto& [p, r] : blacks) mark (p, r, 3.0f);
+    }
+
+    /** A chord diagram: strings upright (the lowest-tuned on the left, the ukulele's G first, as
+        chord charts draw them), the nut at the top, the chord's tones named in the dots, crosses
+        over strings left out and rings over open ones. A keyboard voicing is drawn as keys. */
     void drawChordDiagram (Graphics& g, Rectangle<float> area, const chords::Voicing& v, const chords::Chord& chord, Colour colour)
     {
-        static const int open[] { 40, 45, 50, 55, 59, 64 };
+        if (v.instrument == chords::Instrument::keyboard)
+        {
+            drawKeyboardDiagram (g, area, v, chord, colour);
+            return;
+        }
+        const auto& open = fretboard::instruments()[(size_t) v.instrument].strings;
+        const int n = (int) v.frets.size();
         auto grid = area.withTrimmedTop (14.0f).withTrimmedLeft (20.0f).withTrimmedRight (8.0f).withTrimmedBottom (4.0f);
+        // Strings as far apart as on a guitar chart, however many there are.
+        grid = grid.withSizeKeepingCentre (jmin (grid.getWidth(), grid.getWidth() / 5.0f * (float) (n - 1)), grid.getHeight());
         const int base = v.highestFret() <= 4 || v.usesOpenStrings() ? 1 : v.lowestFret();
         const int rows = 5;
-        const float sx = grid.getWidth() / 5.0f, fy = grid.getHeight() / (float) rows;
+        const float sx = grid.getWidth() / (float) (n - 1), fy = grid.getHeight() / (float) rows;
         auto xOf = [&] (int s) { return grid.getX() + sx * (float) s; };
         auto yOf = [&] (int fret) { return grid.getY() + fy * ((float) (fret - base) + 0.5f); };
 
@@ -325,32 +388,31 @@ namespace
             if (r == 0 && base == 1)
             {
                 g.setColour (nut);
-                g.fillRect (xOf (0) - 1.0f, y - 2.0f, xOf (5) - xOf (0) + 2.0f, 4.0f);
+                g.fillRect (xOf (0) - 1.0f, y - 2.0f, xOf (n - 1) - xOf (0) + 2.0f, 4.0f);
             }
             else
             {
                 g.setColour (fretWire);
-                g.fillRect (xOf (0), y - 0.5f, xOf (5) - xOf (0), 1.0f);
+                g.fillRect (xOf (0), y - 0.5f, xOf (n - 1) - xOf (0), 1.0f);
             }
         }
-        for (int s = 0; s < 6; ++s)
+        for (int s = 0; s < n; ++s)
         {
             g.setColour (stringCol);
-            const float w = 1.0f + (float) (5 - s) * 0.15f;
+            const float w = 1.0f + (float) (n - 1 - s) * 0.15f;
             g.fillRect (xOf (s) - w * 0.5f, grid.getY(), w, grid.getHeight());
         }
+        const float radius = jmin (sx, fy) * 0.44f;
         if (base > 1)
         {
             g.setColour (theme::textDim);
             g.setFont (theme::font (11.0f));
-            const float labelRight = grid.getX() - jmin (sx, fy) * 0.44f - 3.0f;
-            g.drawText (String (base), Rectangle<float> (area.getX() - 6.0f, yOf (base) - 7.0f, labelRight - area.getX() + 6.0f, 14.0f),
-                        Justification::centredRight);
+            const float labelRight = grid.getX() - radius - 3.0f;
+            g.drawText (String (base), Rectangle<float> (labelRight - 24.0f, yOf (base) - 7.0f, 24.0f, 14.0f), Justification::centredRight);
         }
 
-        const float radius = jmin (sx, fy) * 0.44f;
         // Over each string: a cross (left out) or a ring (open).
-        for (int s = 0; s < 6; ++s)
+        for (int s = 0; s < n; ++s)
         {
             const int f = v.frets[(size_t) s];
             const auto c = Point<float> (xOf (s), area.getY() + 6.0f);
@@ -362,7 +424,7 @@ namespace
             }
             else if (f == 0)
             {
-                const bool root = open[s] % 12 == chord.root;
+                const bool root = open[(size_t) s] % 12 == chord.root;
                 g.setColour (root ? colour : theme::textDim);
                 g.drawEllipse (Rectangle<float> (8.0f, 8.0f).withCentre (c), root ? 2.0f : 1.4f);
             }
@@ -378,12 +440,12 @@ namespace
             g.drawRoundedRectangle (bar.reduced (0.75f), radius * 0.8f, 1.5f);
         }
 
-        for (int s = 0; s < 6; ++s)
+        for (int s = 0; s < n; ++s)
         {
             const int f = v.frets[(size_t) s];
             if (f <= 0)
                 continue;
-            const int interval = ((open[s] + f - chord.root) % 12 + 12) % 12;
+            const int interval = ((open[(size_t) s] + f - chord.root) % 12 + 12) % 12;
             const bool root = interval == 0;
             drawDot (g, { xOf (s), yOf (f) }, radius, chords::toneLabel (chord.quality, interval),
                      root ? colour : noteFill, colour, root ? 0.0f : 1.5f, root ? theme::textOn (colour) : theme::textDark, 1.0f, 0.95f);
@@ -434,6 +496,18 @@ public:
     }
 
     const std::optional<KeyChange>& shownKey() const   { return key; }
+
+    /** The instrument the voicings are for: the one Play Along shows (the guitar if none). */
+    void setInstrument (chords::Instrument i)
+    {
+        if (i == instrument)
+            return;
+        instrument = i;
+        rebuild (true);
+        voicingPick = 0;
+        layoutHits();
+        repaint();
+    }
     const chords::Chord* pickedChord() const            { return chord ? &*chord : nullptr; }
     const chords::Voicing* pickedVoicing() const
     {
@@ -470,14 +544,16 @@ public:
             x += 18.0f;
             drawKeyPill (g, { x, title.getCentreY() - 10.0f }, *key, 12.0f);
             x += pillWidth (name, 12.0f) + 12.0f;
-            if (key->scale == Scale::majorPentatonic || key->scale == Scale::minorPentatonic || key->scale == Scale::blues)
-            {
-                g.setColour (theme::textDim);
-                g.setFont (theme::font (11.5f));
-                const String parent = key->scale == Scale::majorPentatonic ? "from its major scale" : "from its minor scale";
-                g.drawText (key->scale == Scale::blues ? parent + ", with the blues 7ths" : parent,
-                            Rectangle<float> (x, title.getY(), 260.0f, title.getHeight()), Justification::centredLeft);
-            }
+            static const char* on[] { "on guitar", "on bass", "on ukulele", "on keyboard" };
+            String note = on[(int) instrument];
+            if (key->scale == Scale::majorPentatonic || key->scale == Scale::minorPentatonic)
+                note << ", from the key's " << (key->scale == Scale::majorPentatonic ? "major" : "minor") << " scale";
+            else if (key->scale == Scale::blues)
+                note << ", from the key's minor scale, with the blues 7ths";
+            g.setColour (theme::textDim);
+            g.setFont (theme::font (12.5f));
+            g.drawText (note, Rectangle<float> (x, title.getY(), jmax (0.0f, title.getRight() - 230.0f - x), title.getHeight()),
+                        Justification::centredLeft);
         }
         if (! key || degrees.empty())
         {
@@ -695,7 +771,7 @@ private:
         {
             degreePick = jlimit (0, (int) degrees.size() - 1, degreePick);
             chord = chordFor (degrees[(size_t) degreePick]);
-            voicings = chords::voicings (*chord);
+            voicings = chords::voicings (*chord, instrument);
             if (old && chord->name != oldName)
             {
                 int best = 0, bestScore = 1 << 20;
@@ -812,12 +888,14 @@ private:
                     x += groupGap;
                     f.dividers.push_back ({ x - groupGap * 0.5f - cellGap * 0.5f, y + 8.0f, 1.0f, cellH - 16.0f });
                 }
-                f.labels.push_back ({ group == chords::Voicing::shape ? "Open and barre" : "Up the neck",
+                static const char* shapes[] { "Open and barre", "Open", "Open", "Close together" };
+                static const char* higher[] { "Up the neck", "Up the neck", "Up the neck", "Spread" };
+                f.labels.push_back ({ group == chords::Voicing::shape ? shapes[(int) instrument] : higher[(int) instrument],
                                       Rectangle<float> (x + 4.0f, y - sectionH, 200.0f, sectionH - 2.0f) });
                 lastGroup = group;
             }
-            f.cells.push_back ({ Rectangle<float> (x, y, cellW, cellH), i });
-            x += cellW + cellGap;
+            f.cells.push_back ({ Rectangle<float> (x, y, cellWidth(), cellH), i });
+            x += cellWidth() + cellGap;
         }
         f.width = x - cellGap - r.getX();
         return f;
@@ -846,6 +924,8 @@ public:
 
 private:
     static constexpr float pad = 14.0f, titleH = 24.0f, chipH = 62.0f, variantH = 26.0f, sectionH = 18.0f;
+    /** Keyboard voicings are drawn as keys, so their cells are wider. */
+    float cellWidth() const   { return instrument == chords::Instrument::keyboard ? 150.0f : cellW; }
     static constexpr float cellW = 100.0f, cellH = 142.0f, cellGap = 8.0f, groupGap = 18.0f, barH = 12.0f;
 
     PropertiesFile& settings;
@@ -855,6 +935,7 @@ private:
     String when;
     std::vector<chords::Degree> degrees, nextDegrees;
     std::optional<chords::Chord> chord;
+    chords::Instrument instrument = chords::Instrument::guitar;
     std::vector<chords::Voicing> voicings;
     int degreePick = 0, voicingPick = 0;
     chords::Variant variantPick = chords::Variant::triad;
@@ -904,6 +985,10 @@ public:
                         if (k != i)
                             buttons[k]->setToggleState (false, dontSendNotification);
                 saveChoice();
+                // The chords follow the instrument shown: its voicings, and its track's key.
+                rebuildFollowMenus();
+                shownSig = {};
+                timerCallback();
                 if (onLayoutChanged) onLayoutChanged();
                 resized();
                 repaint();
@@ -914,7 +999,7 @@ public:
             auto* f = follows.add (new ComboBox());
             f->setTooltip (i == chordsSection
                                ? "Whose key the chords are in: the song's, or a track with a key of its own "
-                                 "(Track menu > Own Key). Automatic picks a guitar track."
+                                 "(Track menu > Own Key). Automatic picks a track named after the instrument shown."
                                : "Whose key this shows: the song's, or a track with a key of its own "
                                  "(Track menu > Own Key). Automatic picks a track named after the instrument.");
             f->onChange = [this, i] { followChosen (i); };
@@ -1041,7 +1126,7 @@ public:
             in.removeFromTop (8.0f);
             // The chord picked on the sheet, if the guitar shows the sheet's key.
             const chords::Voicing* chordHere = nullptr;
-            if (voicing != nullptr && inst.strings.size() == 6 && ds.key && sheet.shownKey()
+            if (voicing != nullptr && (int) voicing->instrument == i && ds.key && sheet.shownKey()
                 && ds.key->root == sheet.shownKey()->root && ds.key->scale == sheet.shownKey()->scale)
                 chordHere = voicing;
             drawInstrument (g, in.withTrimmedLeft (inst.strings.empty() ? 0.0f : 14.0f), inst,
@@ -1182,7 +1267,21 @@ private:
     }
 
     String followKey (int i) const   { return "playAlong.follow." + sectionNames()[i]; }
-    static String followsLike (int i)   { return i == chordsSection ? String ("Guitar") : sectionNames()[i]; }
+    /** The instrument shown (the first one on), or -1. */
+    int shownInstrument() const
+    {
+        for (int i = 0; i < chordsSection; ++i)
+            if (buttons[i]->getToggleState())
+                return i;
+        return -1;
+    }
+    /** What a section's Automatic follows: its instrument; the chords, the instrument shown. */
+    String followsLike (int i) const
+    {
+        if (i == chordsSection)
+            return sectionNames()[jmax (0, shownInstrument())];
+        return sectionNames()[i];
+    }
 
     /** The track section i follows, or null for the song's key. The setting is "auto", "song"
         or a track's tag; a tag whose track is gone (or has no keys now) means auto. The chord
@@ -1263,6 +1362,7 @@ private:
 
         // The chord sheet: the key of the track it follows.
         const auto sheetState = PlayAlongWindow::stateAt (ctx.edit, now, followedTrack (chordsSection).get());
+        sheet.setInstrument ((chords::Instrument) jmax (0, shownInstrument()));
         sheet.setKey (sheetState.key, sheetState.next, sheetState.nextFade, nextWhen (sheetState));
 
         // Repaint only when what's drawn would change: a key, the next one, the fade's step,
